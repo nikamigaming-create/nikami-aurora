@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Nikami.Aurora.Core/Nikami.Aurora.Core.csproj" />
+    <ProjectReference Include="../../src/Nikami.Aurora.Profiles.Kotor/Nikami.Aurora.Profiles.Kotor.csproj" />
+    <ProjectReference Include="../../src/Nikami.Aurora.Profiles.DragonAgeOrigins/Nikami.Aurora.Profiles.DragonAgeOrigins.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,25 @@
+name: source
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-acceptance:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+      - run: dotnet restore Nikami.Aurora.sln
+      - run: dotnet build Nikami.Aurora.sln --configuration Release --no-restore
+      - run: dotnet run --project tests/Nikami.Aurora.Acceptance --configuration Release --no-build

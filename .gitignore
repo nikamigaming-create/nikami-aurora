@@ -1,0 +1,41 @@
+# .NET and IDE output
+**/bin/
+**/obj/
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.pdb
+
+# Machine-local runtime state
+local/
+cache/
+artifacts/
+imports/
+captures/
+docs/evidence/*/raw/
+
+# Proprietary game content and generated derivatives
+*.bif
+*.key
+*.rim
+*.erf
+*.mod
+*.sav
+*.tlk
+*.tpc
+*.txi
+*.mdl
+*.mdx
+*.gff
+*.gda
+*.bik
+*.dds
+*.wav
+*.exe
+*.dll
+
+# OS noise
+.DS_Store
+Thumbs.db
