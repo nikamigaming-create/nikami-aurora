@@ -111,6 +111,10 @@ Confirmed in the new runtime:
 - profile-owned transactional experience, door, placeable, and validated-script
   state shared by desktop and XR interaction, including duplicate-tag placement
   isolation and synthetic `0→50→150` replay;
+- source-bound `footlker001.utp` contents and UTI metadata, with exact one-time
+  transfer of two Medpacs, Clothing, and a Short Sword into profile inventory;
+- desktop/OpenXR-shared world-space loot presentation and an XR haptic request
+  driven by the same item-transfer event;
 - OpenXR action map and tracked grip nodes for movement, sprint, interaction,
   recenter, and haptic output;
 - portable and Meta runtime-controller model providers with per-hand procedural
@@ -128,12 +132,13 @@ Not yet implemented:
 - general DLG gesture-ID execution outside this zero-gesture conversation;
 - area, effects, and music playback;
 - full character-creation UI and save-selected appearance/equipment;
-- physical-headset runtime-model selection, gameplay haptic events, and stereo/
-  input acceptance;
+- physical-headset runtime-model selection, haptic-delivery calibration, and
+  stereo/input acceptance;
 - general NCS VM execution and complete plot/party state;
 - retail door animation and complete `k_pend_door1xp` behavior beyond the
   validated XP branch;
-- combat, inventory, saves, and area transitions.
+- combat, selective inventory UI/item use/equipment, saves, and area
+  transitions.
 
 The current door-opening presentation remains a temporary Godot tween. Script
 targeting and XP effects are source-backed; the door animation and the script's

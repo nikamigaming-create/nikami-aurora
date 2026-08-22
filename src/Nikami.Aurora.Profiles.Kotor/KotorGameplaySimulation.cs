@@ -74,15 +74,86 @@ public sealed record KotorScriptContract(
 
 public sealed record KotorDoorDefinition(string InstanceId, string Tag, string? OnOpenScript);
 
+public sealed record KotorItemDefinition(
+    string Resref,
+    string DisplayName,
+    string Tag,
+    string SourceSha256,
+    string BaseItemsSourceSha256,
+    int BaseItem,
+    int Charges,
+    int StackSize,
+    int ModelVariation,
+    int BodyVariation,
+    int TextureVariation,
+    int EquipableSlots,
+    string ItemClass,
+    int ModelType,
+    string DefaultModel,
+    string DefaultIcon)
+{
+    public KotorItemDefinition Validate()
+    {
+        if (string.IsNullOrWhiteSpace(Resref))
+            throw new ArgumentException("Item resref cannot be empty", nameof(Resref));
+        if (string.IsNullOrWhiteSpace(DisplayName))
+            throw new ArgumentException("Item display name cannot be empty", nameof(DisplayName));
+        if (SourceSha256.Length != 64 || !SourceSha256.All(Uri.IsHexDigit))
+            throw new ArgumentException("Item source SHA-256 must contain 64 hexadecimal characters",
+                nameof(SourceSha256));
+        if (BaseItemsSourceSha256.Length != 64 || !BaseItemsSourceSha256.All(Uri.IsHexDigit))
+            throw new ArgumentException(
+                "Base-items source SHA-256 must contain 64 hexadecimal characters",
+                nameof(BaseItemsSourceSha256));
+        if (BaseItem < 0)
+            throw new ArgumentOutOfRangeException(nameof(BaseItem));
+        if (Charges < 0)
+            throw new ArgumentOutOfRangeException(nameof(Charges));
+        if (StackSize < 0)
+            throw new ArgumentOutOfRangeException(nameof(StackSize));
+        if (ModelVariation < 0)
+            throw new ArgumentOutOfRangeException(nameof(ModelVariation));
+        if (BodyVariation < 0)
+            throw new ArgumentOutOfRangeException(nameof(BodyVariation));
+        if (TextureVariation < 0)
+            throw new ArgumentOutOfRangeException(nameof(TextureVariation));
+        if (EquipableSlots < 0)
+            throw new ArgumentOutOfRangeException(nameof(EquipableSlots));
+        if (ModelType < 0)
+            throw new ArgumentOutOfRangeException(nameof(ModelType));
+        return this;
+    }
+}
+
+public sealed record KotorItemStack(
+    KotorItemDefinition Item,
+    int Quantity,
+    bool Droppable,
+    bool Infinite)
+{
+    public KotorItemStack Validate()
+    {
+        Item.Validate();
+        if (Quantity <= 0)
+            throw new ArgumentOutOfRangeException(nameof(Quantity));
+        if (Infinite)
+            throw new NotSupportedException(
+                $"Infinite container item stacks are not yet supported: {Item.Resref}");
+        return this;
+    }
+}
+
 public sealed record KotorPlaceableDefinition(
     string InstanceId,
     string Tag,
-    string? OnInventoryScript);
+    string? OnInventoryScript,
+    IReadOnlyList<KotorItemStack>? Inventory = null);
 
 public sealed record KotorGameplaySnapshot(
     int PlayerExperience,
     IReadOnlyDictionary<string, bool> DoorStates,
-    IReadOnlyDictionary<string, bool> PlaceableStates);
+    IReadOnlyDictionary<string, bool> PlaceableStates,
+    IReadOnlyDictionary<string, int> PlayerInventory);
 
 public abstract record KotorGameplayEvent;
 
@@ -95,6 +166,10 @@ public sealed record KotorPlaceableOpened(
 
 public sealed record KotorPlaceableAlreadyOpened(
     KotorPlaceableDefinition Placeable) : KotorGameplayEvent;
+
+public sealed record KotorItemsTransferred(
+    KotorPlaceableDefinition Placeable,
+    IReadOnlyList<KotorItemStack> Items) : KotorGameplayEvent;
 
 public sealed record KotorExperienceAwarded(
     KotorScriptContract Contract,
@@ -123,6 +198,8 @@ public sealed class KotorGameplaySimulation
     private readonly Dictionary<string, KotorPlaceableDefinition> placeables;
     private readonly Dictionary<string, bool> doorStates;
     private readonly Dictionary<string, bool> placeableStates;
+    private readonly Dictionary<string, int> playerInventory =
+        new(StringComparer.OrdinalIgnoreCase);
     private int playerExperience;
 
     public KotorGameplaySimulation(
@@ -138,7 +215,11 @@ public sealed class KotorGameplaySimulation
         doorOrder = doors.ToArray();
         this.doors = UniqueByKey(doorOrder,
             definition => RequireInstanceId(definition.InstanceId, "door"), "door instance");
-        this.placeables = UniqueByKey(placeables,
+        var validatedPlaceables = placeables.Select(definition => definition with
+        {
+            Inventory = (definition.Inventory ?? []).Select(stack => stack.Validate()).ToArray()
+        });
+        this.placeables = UniqueByKey(validatedPlaceables,
             definition => RequireInstanceId(definition.InstanceId, "placeable"),
             "placeable instance");
         doorStates = this.doors.Keys.ToDictionary(instanceId => instanceId, _ => false,
@@ -151,7 +232,8 @@ public sealed class KotorGameplaySimulation
     public KotorGameplaySnapshot CaptureSnapshot() => new(
         playerExperience,
         ReadOnlyCopy(doorStates),
-        ReadOnlyCopy(placeableStates));
+        ReadOnlyCopy(placeableStates),
+        ReadOnlyCopy(playerInventory));
 
     public bool IsDoorOpen(string instanceId) =>
         GetState(doorStates, instanceId, "door instance");
@@ -186,6 +268,16 @@ public sealed class KotorGameplaySimulation
 
         placeableStates[definition.InstanceId] = true;
         events.Add(new KotorPlaceableOpened(definition));
+        var contents = definition.Inventory ?? [];
+        if (contents.Count > 0)
+        {
+            foreach (var stack in contents)
+            {
+                playerInventory.TryGetValue(stack.Item.Resref, out var current);
+                playerInventory[stack.Item.Resref] = checked(current + stack.Quantity);
+            }
+            events.Add(new KotorItemsTransferred(definition, contents));
+        }
         ExecuteScriptCore(definition.OnInventoryScript, events,
             new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         return Complete(before, events);
@@ -311,12 +403,12 @@ public sealed class KotorGameplaySimulation
             ? value
             : throw new KeyNotFoundException($"Unknown KOTOR {kind}: {tag}");
 
-    private static IReadOnlyDictionary<string, bool> ReadOnlyCopy(
-        IReadOnlyDictionary<string, bool> source)
+    private static IReadOnlyDictionary<string, T> ReadOnlyCopy<T>(
+        IReadOnlyDictionary<string, T> source)
     {
-        var copy = new SortedDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var copy = new SortedDictionary<string, T>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in source)
             copy.Add(pair.Key, pair.Value);
-        return new ReadOnlyDictionary<string, bool>(copy);
+        return new ReadOnlyDictionary<string, T>(copy);
     }
 }

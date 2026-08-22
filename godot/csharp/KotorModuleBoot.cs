@@ -41,6 +41,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private MeshInstance3D xrRightFallback = null!;
     private Node3D? xrLeftVendorModel;
     private Node3D? xrRightVendorModel;
+    private XRController3D? activeInteractionController;
     private bool xrActive;
     private Node3D? playerModel;
     private AnimationPlayer? playerAnimationPlayer;
@@ -246,15 +247,15 @@ public sealed partial class KotorModuleBoot : Node3D
         }
         else if (inputEvent is InputEventKey interact && interact.Pressed && interact.Keycode == Key.E)
         {
-            HandleInteraction();
+            HandleInteraction(null);
         }
     }
 
-    private void OnXrButtonPressed(string name)
+    private void OnXrButtonPressed(XRController3D controller, string name)
     {
         if (name.EndsWith("ax_button", StringComparison.OrdinalIgnoreCase))
         {
-            HandleInteraction();
+            HandleInteraction(controller);
         }
         else if (name.EndsWith("recenter", StringComparison.OrdinalIgnoreCase))
         {
@@ -263,15 +264,23 @@ public sealed partial class KotorModuleBoot : Node3D
         }
     }
 
-    private void HandleInteraction()
+    private void HandleInteraction(XRController3D? controller)
     {
         if (dialoguePanel.Visible) return;
-        var placeable = NearestPlaceable(2.6f);
-        var door = NearestDoor(2.6f);
-        if (placeable is not null)
-            UsePlaceable(placeable);
-        else if (door is not null)
-            ToggleDoor(door);
+        activeInteractionController = controller;
+        try
+        {
+            var placeable = NearestPlaceable(2.6f);
+            var door = NearestDoor(2.6f);
+            if (placeable is not null)
+                UsePlaceable(placeable);
+            else if (door is not null)
+                ToggleDoor(door);
+        }
+        finally
+        {
+            activeInteractionController = null;
+        }
     }
 
     private async void LoadModuleAsync(string manifestPath)
@@ -453,7 +462,7 @@ public sealed partial class KotorModuleBoot : Node3D
             Tracker = "left_hand",
             Pose = "grip"
         };
-        xrLeftHand.ButtonPressed += action => OnXrButtonPressed(action.ToString());
+        xrLeftHand.ButtonPressed += action => OnXrButtonPressed(xrLeftHand, action.ToString());
         xrOrigin.AddChild(xrLeftHand);
         xrRightHand = new XRController3D
         {
@@ -461,7 +470,7 @@ public sealed partial class KotorModuleBoot : Node3D
             Tracker = "right_hand",
             Pose = "grip"
         };
-        xrRightHand.ButtonPressed += action => OnXrButtonPressed(action.ToString());
+        xrRightHand.ButtonPressed += action => OnXrButtonPressed(xrRightHand, action.ToString());
         xrOrigin.AddChild(xrRightHand);
         (xrLeftModelContainer, xrLeftFallback) =
             CreateControllerPresentation(xrLeftHand, true);
@@ -1397,6 +1406,9 @@ public sealed partial class KotorModuleBoot : Node3D
                              $"id={alreadyOpened.Placeable.InstanceId} " +
                              $"tag={alreadyOpened.Placeable.Tag}");
                     break;
+                case KotorItemsTransferred transferred:
+                    PresentItemsTransferred(transferred);
+                    break;
                 case KotorExperienceAwarded experience:
                     PresentExperienceAward(experience);
                     break;
@@ -1446,6 +1458,49 @@ public sealed partial class KotorModuleBoot : Node3D
                  $"tag={placeable.Source.Tag} " +
                  $"model={placeable.Source.Model} " +
                  $"nativeOnInventory={placeable.Source.OnInventory}");
+    }
+
+    private void PresentItemsTransferred(KotorItemsTransferred transferred)
+    {
+        var placeable = interactivePlaceables.FirstOrDefault(candidate =>
+            candidate.InstanceId.Equals(
+                transferred.Placeable.InstanceId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidDataException(
+                $"Gameplay state could not resolve loot source {transferred.Placeable.InstanceId}");
+        var summary = string.Join(", ", transferred.Items.Select(stack =>
+            $"{stack.Quantity}x {stack.Item.DisplayName}"));
+        GD.Print($"NIKAMI_AURORA_INVENTORY status=transferred " +
+                 $"source={placeable.InstanceId} items={summary}");
+
+        var label = new Label3D
+        {
+            Name = "LootAcquired",
+            Text = "LOOT ACQUIRED\n" + string.Join("\n", transferred.Items.Select(stack =>
+                $"{stack.Quantity}x  {stack.Item.DisplayName}")),
+            Billboard = BaseMaterial3D.BillboardModeEnum.Enabled,
+            DoubleSided = true,
+            NoDepthTest = true,
+            FixedSize = false,
+            PixelSize = 0.002f,
+            FontSize = 32,
+            OutlineSize = 6,
+            Modulate = new Color(0.45f, 0.88f, 1.0f),
+            OutlineModulate = new Color(0.01f, 0.02f, 0.04f, 0.95f)
+        };
+        AddChild(label);
+        var activeView = xrActive ? (Node3D)xrCamera : camera;
+        var viewForward = -activeView.GlobalTransform.Basis.Z.Normalized();
+        var viewRight = activeView.GlobalTransform.Basis.X.Normalized();
+        label.GlobalPosition = activeView.GlobalPosition + viewForward * 1.8f +
+                               viewRight * 0.48f + Vector3.Up * 0.1f;
+        var tween = CreateTween();
+        tween.TweenInterval(3.0);
+        tween.TweenProperty(label, "modulate:a", 0.0f, 0.8);
+        tween.TweenCallback(Callable.From(label.QueueFree));
+
+        if (xrActive)
+            (activeInteractionController ?? xrRightHand)
+                .TriggerHapticPulse("haptic", 0.0, 0.35, 0.08, 0.0);
     }
 
     private static void PresentExperienceAward(KotorExperienceAwarded experience)
@@ -1657,7 +1712,31 @@ public sealed partial class KotorModuleBoot : Node3D
             new KotorDoorDefinition(DoorInstanceId(index), door.Tag, door.OnOpen));
         var placeables = manifest.Placeables.Select((placeable, index) =>
             new KotorPlaceableDefinition(
-                PlaceableInstanceId(index), placeable.Tag, placeable.OnInventory));
+                PlaceableInstanceId(index),
+                placeable.Tag,
+                placeable.OnInventory,
+                (placeable.Inventory ?? []).Select(item => new KotorItemStack(
+                    new KotorItemDefinition(
+                        item.Resref,
+                        item.DisplayName,
+                        item.Tag,
+                        item.UtiSha256,
+                        placeable.BaseItemsSha256 ?? throw new InvalidDataException(
+                            $"Placeable {placeable.Template} inventory has no baseitems hash"),
+                        item.BaseItem,
+                        item.Charges,
+                        item.StackSize,
+                        item.ModelVariation,
+                        item.BodyVariation,
+                        item.TextureVariation,
+                        item.EquipableSlots,
+                        item.ItemClass,
+                        item.ModelType,
+                        item.DefaultModel,
+                        item.DefaultIcon),
+                    item.Quantity,
+                    item.Droppable,
+                    item.Infinite)).ToArray()));
         return new KotorGameplaySimulation(
             contracts, doors, placeables, initialPlayerExperience);
     }
@@ -1712,7 +1791,28 @@ public sealed partial class KotorModuleBoot : Node3D
         bool Locked, bool KeyRequired);
     private sealed record PlaceableRecord(string Template, string Tag,
         IReadOnlyList<float> Position, float Bearing, string? Glb, string? Model,
-        string? OnInventory, bool Locked, bool Useable, bool HasInventory, int AnimationState);
+        string? OnInventory, bool Locked, bool Useable, bool HasInventory, int AnimationState,
+        string? BaseItemsSha256,
+        IReadOnlyList<ItemStackRecord>? Inventory);
+    private sealed record ItemStackRecord(
+        string Resref,
+        string DisplayName,
+        string Tag,
+        int BaseItem,
+        int Charges,
+        int StackSize,
+        int ModelVariation,
+        int BodyVariation,
+        int TextureVariation,
+        int EquipableSlots,
+        string ItemClass,
+        int ModelType,
+        string DefaultModel,
+        string DefaultIcon,
+        string UtiSha256,
+        int Quantity,
+        bool Droppable,
+        bool Infinite);
     private sealed record DialogueReference(string Path, string SourceSha256, int StarterCount,
         int NodeCount, int OpeningStarter);
     private sealed record DialogueGraph(string Schema, int OpeningStarter,
