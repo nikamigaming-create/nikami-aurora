@@ -57,6 +57,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private Camera3D cinematicCamera = null!;
     private XROrigin3D xrOrigin = null!;
     private XRCamera3D xrCamera = null!;
+    private SubViewport? xrRenderViewport;
+    private Camera3D? xrSpectatorCamera;
     private XRController3D xrLeftHand = null!;
     private XRController3D xrRightHand = null!;
     private Node3D xrLeftModelContainer = null!;
@@ -69,6 +71,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private Node3D? xrRightVendorModel;
     private XRController3D? activeInteractionController;
     private bool xrActive;
+    private bool xrSpectatorActive;
+    private float xrSpectatorFieldOfView = DefaultGameplayFieldOfView;
     private Node3D? playerModel;
     private AnimationPlayer? playerAnimationPlayer;
     private PlayerEquipmentVariantRecord? openingEquipmentVariant;
@@ -110,6 +114,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private readonly HashSet<string> playedDialogueMedia = new(StringComparer.OrdinalIgnoreCase);
     private KotorGameplaySimulation? gameplaySimulation;
     private int capturedFrames;
+    private int captureMatchedFrames;
     private int captureTargetFrame = 60;
     private bool captureCompleted;
     private int readyFrames;
@@ -382,17 +387,28 @@ public sealed partial class KotorModuleBoot : Node3D
                 FrameChairCloseup();
         }
 
+        UpdateXrSpectatorCamera();
         var capturePath = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE");
+        var captureNodeMatches = string.IsNullOrWhiteSpace(captureDialogueNode) ||
+                                 currentDialogueNodeKey.Equals(
+                                     captureDialogueNode, StringComparison.OrdinalIgnoreCase);
+        captureMatchedFrames = captureNodeMatches ? captureMatchedFrames + 1 : 0;
         if (moduleReady && !captureCompleted && !string.IsNullOrWhiteSpace(capturePath) &&
             ++capturedFrames >= captureTargetFrame &&
-            (string.IsNullOrWhiteSpace(captureDialogueNode) ||
-             currentDialogueNodeKey.Equals(
-                 captureDialogueNode, StringComparison.OrdinalIgnoreCase)))
+            captureNodeMatches && (!xrSpectatorActive || captureMatchedFrames >= 2))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(capturePath))!);
-            var error = GetViewport().GetTexture().GetImage().SavePng(capturePath);
+            var captureImage = GetViewport().GetTexture().GetImage();
+            var error = xrSpectatorActive && !HasVisibleCapturePixels(captureImage)
+                ? Error.Failed
+                : captureImage.SavePng(capturePath);
             captureCompleted = true;
-            GD.Print($"NIKAMI_AURORA_CAPTURE status={error} path={capturePath}");
+            if (error != Error.Ok)
+                GD.PushError("NIKAMI_AURORA_CAPTURE status=fail " +
+                             "source=xr-spectator reason=near-black");
+            GD.Print($"NIKAMI_AURORA_CAPTURE status={error} " +
+                     $"source={(xrSpectatorActive ? "xr-spectator" : "root")} " +
+                     $"path={capturePath}");
             if (System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_EXIT") == "1")
                 GetTree().Quit(error == Error.Ok ? 0 : 1);
         }
@@ -1028,6 +1044,33 @@ public sealed partial class KotorModuleBoot : Node3D
         GD.Print($"NIKAMI_AURORA_MUSIC status=playing resref={resref}");
     }
 
+    private void UpdateXrSpectatorCamera()
+    {
+        if (!xrSpectatorActive || xrSpectatorCamera is null) return;
+        if (!dialogueCameraActive)
+        {
+            xrOrigin.TopLevel = true;
+            xrOrigin.GlobalTransform = playerBody.GlobalTransform;
+        }
+        xrSpectatorCamera.GlobalTransform = xrCamera.GlobalTransform;
+        xrSpectatorCamera.Fov = xrSpectatorFieldOfView;
+    }
+
+    private static bool HasVisibleCapturePixels(Godot.Image image)
+    {
+        if (image.IsEmpty()) return false;
+        var xStep = Math.Max(1, image.GetWidth() / 8);
+        var yStep = Math.Max(1, image.GetHeight() / 8);
+        for (var y = yStep / 2; y < image.GetHeight(); y += yStep)
+            for (var x = xStep / 2; x < image.GetWidth(); x += xStep)
+            {
+                var sample = image.GetPixel(x, y);
+                if (sample.R + sample.G + sample.B > 0.075f)
+                    return true;
+            }
+        return false;
+    }
+
     private void TryInitializeOpenXR()
     {
         if (System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_OPENXR") != "1")
@@ -1039,14 +1082,58 @@ public sealed partial class KotorModuleBoot : Node3D
         if (openXr is null || (!openXr.IsInitialized() && !openXr.Initialize()))
         {
             GD.PushWarning("NIKAMI_AURORA_OPENXR status=unavailable fallback=desktop");
+            if (System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_OPENXR_EXPECT_ACTIVE") == "1")
+            {
+                GD.PushError("NIKAMI_AURORA_OPENXR status=fail expected=active");
+                GetTree().Quit(2);
+            }
             return;
         }
         xrActive = true;
+        xrSpectatorActive = System.Environment.GetEnvironmentVariable(
+            "NIKAMI_AURORA_XR_SPECTATOR") == "1";
         xrOrigin.Current = true;
         xrOrigin.WorldScale = 1.0f;
-        camera.Current = false;
-        xrCamera.Current = true;
-        GetViewport().UseXR = true;
+        if (xrSpectatorActive)
+        {
+            var sourceViewport = GetViewport();
+            xrRenderViewport = new SubViewport
+            {
+                Name = "OpenXRRenderViewport",
+                Size = new Vector2I(1280, 720),
+                OwnWorld3D = false,
+                RenderTargetUpdateMode =
+                    SubViewport.UpdateMode.Always
+            };
+            AddChild(xrRenderViewport);
+            xrRenderViewport.World3D = sourceViewport.World3D;
+            xrOrigin.Reparent(xrRenderViewport, true);
+            xrCamera.Current = true;
+            xrRenderViewport.UseXR = true;
+            sourceViewport.UseXR = false;
+            camera.Current = false;
+            cinematicCamera.Current = false;
+            xrSpectatorFieldOfView = gameplayFieldOfView;
+            xrSpectatorCamera = new Camera3D
+            {
+                Name = "OpenXRSpectatorCamera",
+                Current = true,
+                Near = 0.05f,
+                Far = 1000.0f,
+                Fov = xrSpectatorFieldOfView
+            };
+            AddChild(xrSpectatorCamera);
+            UpdateXrSpectatorCamera();
+            GD.Print("NIKAMI_AURORA_XR_SPECTATOR status=ready " +
+                     "source=hmd world=shared output=root");
+        }
+        else
+        {
+            camera.Current = false;
+            xrCamera.Current = true;
+            GetViewport().UseXR = true;
+        }
         DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
         xrLeftModelManager = CreatePortableRenderModel(xrLeftModelContainer, true);
         xrRightModelManager = CreatePortableRenderModel(xrRightModelContainer, false);
@@ -1054,7 +1141,8 @@ public sealed partial class KotorModuleBoot : Node3D
         xrRightVendorModel = TryCreateMetaRenderModel(xrRightModelContainer, false);
         UpdateControllerModelFallbacks();
         GD.Print("NIKAMI_AURORA_OPENXR status=ready worldScale=1.000 " +
-                 "authority=hmd-relative-to-game-camera");
+                 "authority=hmd-relative-to-game-camera " +
+                 $"spectator={xrSpectatorActive}");
         GD.Print($"NIKAMI_AURORA_OPENXR_MODELS status=ready portable=true " +
                  $"metaFb={xrLeftVendorModel is not null && xrRightVendorModel is not null} " +
                  "fallback=procedural");
@@ -1276,8 +1364,18 @@ public sealed partial class KotorModuleBoot : Node3D
         if (xrActive)
         {
             xrOrigin.TopLevel = true;
-            xrOrigin.GlobalPosition = position;
-            xrOrigin.LookAt(target, up);
+            var desiredHeadTransform = new Transform3D(Basis.Identity, position)
+                .LookingAt(target, up);
+            xrOrigin.GlobalTransform = desiredHeadTransform *
+                                       xrCamera.Transform.AffineInverse();
+            xrSpectatorFieldOfView = fov;
+            var alignmentError = xrCamera.GlobalPosition.DistanceTo(position);
+            if (alignmentError > 0.002f)
+                throw new InvalidDataException(
+                    $"XR presentation camera alignment drifted by {alignmentError:F6} m");
+            GD.Print($"NIKAMI_AURORA_XR_CAMERA_BASE status=recentered " +
+                     $"desired={position} actual={xrCamera.GlobalPosition} " +
+                     $"error={alignmentError:F6}");
         }
         else
         {
@@ -1526,9 +1624,18 @@ public sealed partial class KotorModuleBoot : Node3D
         lastDynamicDialogueActor = "";
         if (xrActive)
         {
-            xrOrigin.TopLevel = false;
-            xrOrigin.Position = cameraPivot.Position;
-            xrOrigin.Rotation = Vector3.Zero;
+            if (xrSpectatorActive)
+            {
+                xrOrigin.TopLevel = true;
+                xrOrigin.GlobalTransform = playerBody.GlobalTransform;
+                xrSpectatorFieldOfView = gameplayFieldOfView;
+            }
+            else
+            {
+                xrOrigin.TopLevel = false;
+                xrOrigin.Position = Vector3.Zero;
+                xrOrigin.Rotation = Vector3.Zero;
+            }
         }
         else
         {
@@ -1932,7 +2039,7 @@ public sealed partial class KotorModuleBoot : Node3D
         cameraPivot.Position = source.CameraOffset is { Count: >= 3 }
             ? ToGodot(source.CameraOffset)
             : Vector3.Up * source.Height;
-        xrOrigin.Position = cameraPivot.Position;
+        xrOrigin.Position = Vector3.Zero;
         var cameraDistance = Math.Max(0.1f, cameraStyle.Distance);
         var cameraHeight = cameraStyle.Height;
         cameraArm.SpringLength = Mathf.Sqrt(
@@ -2392,7 +2499,7 @@ public sealed partial class KotorModuleBoot : Node3D
         if (variant.CameraOffset is { Count: >= 3 })
         {
             cameraPivot.Position = ToGodot(variant.CameraOffset);
-            xrOrigin.Position = cameraPivot.Position;
+            xrOrigin.Position = Vector3.Zero;
         }
         PlayPlayerAnimation(requestedAnimation);
         ShowWorldNotice("EQUIPPED", ["Clothing", "Short Sword"]);

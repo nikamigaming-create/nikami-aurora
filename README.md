@@ -81,6 +81,13 @@ only after OpenXR initializes, so normal desktop and no-HMD fallback boots do
 not depend on an XR extension lifecycle. Procedural controller meshes also stay
 hidden until XR is active, so they cannot leak into desktop character shots.
 
+For deterministic VR-path QA, the Meta XR Simulator can now be selected only
+for the launched process. A Vulkan XR subviewport renders the real tracked
+session while a shared-world spectator camera mirrors the HMD to the normal
+root viewport for non-black still and eventual Movie Maker capture. The harness
+does not change the system OpenXR registry, and it fails if XR silently falls
+back to desktop.
+
 ## Why a new runtime
 
 The existing [OpenKOTOR](https://github.com/nikamigaming-create/OpenKOTOR)
