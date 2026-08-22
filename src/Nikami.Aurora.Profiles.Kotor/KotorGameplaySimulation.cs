@@ -143,6 +143,21 @@ public sealed record KotorItemStack(
     }
 }
 
+public enum KotorEquipmentSlot
+{
+    Head = 0x00001,
+    Armor = 0x00002,
+    Gauntlet = 0x00008,
+    RightHand = 0x00010,
+    LeftHand = 0x00020,
+    RightArm = 0x00080,
+    LeftArm = 0x00100,
+    Implant = 0x00200,
+    Belt = 0x00400
+}
+
+public readonly record struct KotorEquipRequest(string Resref, KotorEquipmentSlot Slot);
+
 public sealed record KotorPlaceableDefinition(
     string InstanceId,
     string Tag,
@@ -153,7 +168,8 @@ public sealed record KotorGameplaySnapshot(
     int PlayerExperience,
     IReadOnlyDictionary<string, bool> DoorStates,
     IReadOnlyDictionary<string, bool> PlaceableStates,
-    IReadOnlyDictionary<string, int> PlayerInventory);
+    IReadOnlyDictionary<string, int> PlayerInventory,
+    IReadOnlyDictionary<KotorEquipmentSlot, string> Equipment);
 
 public abstract record KotorGameplayEvent;
 
@@ -170,6 +186,11 @@ public sealed record KotorPlaceableAlreadyOpened(
 public sealed record KotorItemsTransferred(
     KotorPlaceableDefinition Placeable,
     IReadOnlyList<KotorItemStack> Items) : KotorGameplayEvent;
+
+public sealed record KotorEquipmentChanged(
+    KotorEquipmentSlot Slot,
+    KotorItemDefinition Item,
+    string? PreviousResref) : KotorGameplayEvent;
 
 public sealed record KotorExperienceAwarded(
     KotorScriptContract Contract,
@@ -196,10 +217,13 @@ public sealed class KotorGameplaySimulation
     private readonly Dictionary<string, KotorDoorDefinition> doors;
     private readonly IReadOnlyList<KotorDoorDefinition> doorOrder;
     private readonly Dictionary<string, KotorPlaceableDefinition> placeables;
+    private readonly Dictionary<string, KotorItemDefinition> itemDefinitions =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> doorStates;
     private readonly Dictionary<string, bool> placeableStates;
     private readonly Dictionary<string, int> playerInventory =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<KotorEquipmentSlot, string> equipment = [];
     private int playerExperience;
 
     public KotorGameplaySimulation(
@@ -222,6 +246,17 @@ public sealed class KotorGameplaySimulation
         this.placeables = UniqueByKey(validatedPlaceables,
             definition => RequireInstanceId(definition.InstanceId, "placeable"),
             "placeable instance");
+        foreach (var definition in this.placeables.Values)
+        {
+            foreach (var stack in definition.Inventory ?? [])
+            {
+                if (itemDefinitions.TryGetValue(stack.Item.Resref, out var existing) &&
+                    existing != stack.Item)
+                    throw new ArgumentException(
+                        $"Conflicting KOTOR item definition: {stack.Item.Resref}");
+                itemDefinitions[stack.Item.Resref] = stack.Item;
+            }
+        }
         doorStates = this.doors.Keys.ToDictionary(instanceId => instanceId, _ => false,
             StringComparer.OrdinalIgnoreCase);
         placeableStates = this.placeables.Keys.ToDictionary(instanceId => instanceId, _ => false,
@@ -233,7 +268,9 @@ public sealed class KotorGameplaySimulation
         playerExperience,
         ReadOnlyCopy(doorStates),
         ReadOnlyCopy(placeableStates),
-        ReadOnlyCopy(playerInventory));
+        ReadOnlyCopy(playerInventory),
+        new ReadOnlyDictionary<KotorEquipmentSlot, string>(
+            new Dictionary<KotorEquipmentSlot, string>(equipment)));
 
     public bool IsDoorOpen(string instanceId) =>
         GetState(doorStates, instanceId, "door instance");
@@ -288,6 +325,57 @@ public sealed class KotorGameplaySimulation
         var before = CaptureSnapshot();
         var events = new List<KotorGameplayEvent>();
         ExecuteScriptCore(resref, events, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        return Complete(before, events);
+    }
+
+    public KotorGameplayTransition EquipItems(IEnumerable<KotorEquipRequest> requests)
+    {
+        var requested = requests.ToArray();
+        if (requested.GroupBy(request => request.Slot).Any(group => group.Count() > 1))
+            throw new ArgumentException("An equipment transaction cannot target one slot twice",
+                nameof(requests));
+        var before = CaptureSnapshot();
+        var nextInventory = new Dictionary<string, int>(
+            playerInventory, StringComparer.OrdinalIgnoreCase);
+        var nextEquipment = new Dictionary<KotorEquipmentSlot, string>(equipment);
+        var events = new List<KotorGameplayEvent>();
+
+        foreach (var request in requested)
+        {
+            if (!Enum.IsDefined(request.Slot))
+                throw new ArgumentOutOfRangeException(nameof(requests), request.Slot,
+                    "Unknown KOTOR equipment slot");
+            if (!itemDefinitions.TryGetValue(request.Resref, out var item))
+                throw new KeyNotFoundException($"Unknown KOTOR item: {request.Resref}");
+            if ((item.EquipableSlots & (int)request.Slot) == 0)
+                throw new InvalidOperationException(
+                    $"KOTOR item {item.Resref} cannot equip to {request.Slot}");
+            if (nextEquipment.TryGetValue(request.Slot, out var equippedResref) &&
+                equippedResref.Equals(item.Resref, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (equippedResref is not null)
+            {
+                nextInventory.TryGetValue(equippedResref, out var previousCount);
+                nextInventory[equippedResref] = checked(previousCount + 1);
+            }
+            if (!nextInventory.TryGetValue(item.Resref, out var available) || available <= 0)
+                throw new InvalidOperationException(
+                    $"KOTOR item {item.Resref} is not available to equip");
+            if (available == 1)
+                nextInventory.Remove(item.Resref);
+            else
+                nextInventory[item.Resref] = available - 1;
+            nextEquipment[request.Slot] = item.Resref;
+            events.Add(new KotorEquipmentChanged(request.Slot, item, equippedResref));
+        }
+
+        playerInventory.Clear();
+        foreach (var pair in nextInventory)
+            playerInventory.Add(pair.Key, pair.Value);
+        equipment.Clear();
+        foreach (var pair in nextEquipment)
+            equipment.Add(pair.Key, pair.Value);
         return Complete(before, events);
     }
 

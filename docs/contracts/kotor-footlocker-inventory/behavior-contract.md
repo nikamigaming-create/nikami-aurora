@@ -63,5 +63,6 @@ NIKAMI_AURORA_NCS status=executed script=k_pend_chest02 ... xp=0->50
 
 The transfer and desktop world-space presentation are `confirmed`. Physical-
 headset readability and haptic delivery remain hardware-gated. Selective
-container transfer, item use, equipment, icons, inventory menus, party
-inventories, and persistence are not claimed by this slice.
+container transfer, item use, general equipment menus/variants, icons, party
+inventories, and persistence are not claimed by this slice. The isolated
+opening Clothing/Short Sword equipment path is specified separately.

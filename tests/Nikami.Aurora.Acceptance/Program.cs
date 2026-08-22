@@ -263,6 +263,43 @@ internal static class Program
         Expect(repeatedLocker.After.PlayerInventory["g_i_medeqpmnt01"] == 2,
             "repeated locker interaction duplicated its inventory");
 
+        var invalidEquipRejected = false;
+        try
+        {
+            _ = simulation.EquipItems([
+                new KotorEquipRequest("g_i_medeqpmnt01", KotorEquipmentSlot.Armor)
+            ]);
+        }
+        catch (InvalidOperationException)
+        {
+            invalidEquipRejected = true;
+        }
+        Expect(invalidEquipRejected &&
+               simulation.CaptureSnapshot().PlayerInventory["g_i_medeqpmnt01"] == 2,
+            "invalid-slot equipment request mutated profile inventory");
+
+        var equipped = simulation.EquipItems([
+            new KotorEquipRequest("g_a_clothes01", KotorEquipmentSlot.Armor),
+            new KotorEquipRequest("g_w_shortswrd01", KotorEquipmentSlot.RightHand)
+        ]);
+        Expect(equipped.After.Equipment[KotorEquipmentSlot.Armor] == "g_a_clothes01" &&
+               equipped.After.Equipment[KotorEquipmentSlot.RightHand] == "g_w_shortswrd01",
+            "opening clothing and short sword did not enter their authored equipment slots");
+        Expect(!equipped.After.PlayerInventory.ContainsKey("g_a_clothes01") &&
+               !equipped.After.PlayerInventory.ContainsKey("g_w_shortswrd01") &&
+               equipped.After.PlayerInventory["g_i_medeqpmnt01"] == 2,
+            "equipped items were not separated from unequipped inventory");
+        Expect(equipped.Events.OfType<KotorEquipmentChanged>().Count() == 2,
+            "equipment transaction did not expose both presentation events");
+
+        var repeatedEquip = simulation.EquipItems([
+            new KotorEquipRequest("g_a_clothes01", KotorEquipmentSlot.Armor),
+            new KotorEquipRequest("g_w_shortswrd01", KotorEquipmentSlot.RightHand)
+        ]);
+        Expect(repeatedEquip.Events.Count == 0 &&
+               repeatedEquip.After.Equipment.Count == 2,
+            "repeated equipment transaction was not idempotent");
+
         var dialogue = simulation.ExecuteScript("k_pend_traskdl40");
         Expect(dialogue.Before.PlayerExperience == 50 && dialogue.After.PlayerExperience == 150,
             "profile-owned dialogue/door chain did not award 50->150 XP");

@@ -16,6 +16,7 @@ The versioned Godot action map exposes:
 - `primary_click`, `ax_button`, and `by_button` booleans;
 - analog `trigger` and `grip` values;
 - explicit `interact` semantics through `ax_button`;
+- opening-loadout equipment semantics through `by_button`;
 - `recenter`; and
 - per-hand `haptic` output.
 

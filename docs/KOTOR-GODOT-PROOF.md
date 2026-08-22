@@ -115,6 +115,9 @@ Confirmed in the new runtime:
   transfer of two Medpacs, Clothing, and a Short Sword into profile inventory;
 - desktop/OpenXR-shared world-space loot presentation and an XR haptic request
   driven by the same item-transfer event;
+- profile-owned atomic Armor/RightHand equipment and source-derived
+  `PMBBM01`/`PMHA01`/Short Sword player presentation, including exact right-hand
+  hierarchy attachment and preserved idle/walk/run clips;
 - OpenXR action map and tracked grip nodes for movement, sprint, interaction,
   recenter, and haptic output;
 - portable and Meta runtime-controller model providers with per-hand procedural
@@ -131,14 +134,14 @@ Not yet implemented:
 - dialogue-camera obstruction correction and nondeterministic shot variants;
 - general DLG gesture-ID execution outside this zero-gesture conversation;
 - area, effects, and music playback;
-- full character-creation UI and save-selected appearance/equipment;
+- full character-creation UI and saved arbitrary appearance/equipment;
 - physical-headset runtime-model selection, haptic-delivery calibration, and
   stereo/input acceptance;
 - general NCS VM execution and complete plot/party state;
 - retail door animation and complete `k_pend_door1xp` behavior beyond the
   validated XP branch;
-- combat, selective inventory UI/item use/equipment, saves, and area
-  transitions.
+- combat, selective inventory UI/item use and general equipment variants,
+  saves, and area transitions.
 
 The current door-opening presentation remains a temporary Godot tween. Script
 targeting and XP effects are source-backed; the door animation and the script's
