@@ -36,6 +36,7 @@ try:
     from pykotor.resource.generics.utd import read_utd
     from pykotor.resource.generics.uti import read_uti
     from pykotor.resource.generics.utp import read_utp
+    from pykotor.resource.generics.utt import read_utt
     from pykotor.resource.type import ResourceType
     from pykotor.tools import creature as creature_tools
     from pykotor.tools import door as door_tools
@@ -155,6 +156,9 @@ def camera_vectors(camera: Any) -> tuple[list[float], list[float]]:
         file_quaternion = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
     else:
         file_quaternion /= magnitude
+    # Static cameras compose the GFF WXYZ orientation with the authored X-axis
+    # pitch. The destination camera must remain independent from SpringArm
+    # updates for this basis to survive beyond the setup frame.
     rotation = (
         trimesh.transformations.quaternion_matrix(file_quaternion)
         @ trimesh.transformations.rotation_matrix(
@@ -542,16 +546,18 @@ def add_actor_model(
     }
 
 
-def export_trask_actor(
+def export_humanoid_actor(
     installation: Installation,
+    utc_resref: str,
     output_path: Path,
     textures: TextureCache,
     mdlops: Path,
     animation_cache: Path,
+    animation_names: tuple[str, ...],
 ) -> dict[str, Any]:
-    utc_resource = installation.resource("end_trask", ResourceType.UTC)
+    utc_resource = installation.resource(utc_resref, ResourceType.UTC)
     if utc_resource is None:
-        raise RuntimeError("end_trask.utc could not be resolved")
+        raise RuntimeError(f"{utc_resref}.utc could not be resolved")
     utc_bytes = resource_data(utc_resource)
     utc = read_utc(utc_bytes)
     order = [SearchLocation.OVERRIDE, SearchLocation.CHITIN]
@@ -572,7 +578,7 @@ def export_trask_actor(
     right_model, left_model = creature_tools.get_weapon_models(
         utc, installation, appearance=appearance, baseitems=baseitems)
     if not body_model:
-        raise RuntimeError("Trask body model could not be resolved")
+        raise RuntimeError(f"{utc_resref} body model could not be resolved")
 
     body, body_mdl, body_mdx = load_model_pair(installation, body_model)
     head = head_mdl = head_mdx = None
@@ -601,7 +607,7 @@ def export_trask_actor(
         weapon_model=right,
         weapon_name=right_model,
         animation_model=animation_model,
-        animation_names=("pause1", "tlknorm", "walk", "talk"),
+        animation_names=animation_names,
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
     )
     model_records = [{
@@ -626,6 +632,7 @@ def export_trask_actor(
         })
     return {
         "glb": f"actors/{output_path.name}",
+        "tag": str(utc.tag),
         "conversation": canonical_resref(utc.conversation),
         "utcSha256": sha256_bytes(utc_bytes),
         "models": model_records,
@@ -634,6 +641,42 @@ def export_trask_actor(
         "animation": animation_report,
         "talkOffset": talk_offset,
     }
+
+
+def export_trask_actor(
+    installation: Installation,
+    output_path: Path,
+    textures: TextureCache,
+    mdlops: Path,
+    animation_cache: Path,
+) -> dict[str, Any]:
+    return export_humanoid_actor(
+        installation,
+        "end_trask",
+        output_path,
+        textures,
+        mdlops,
+        animation_cache,
+        ("pause1", "tlknorm", "walk", "talk"),
+    )
+
+
+def export_carth_actor(
+    installation: Installation,
+    output_path: Path,
+    textures: TextureCache,
+    mdlops: Path,
+    animation_cache: Path,
+) -> dict[str, Any]:
+    return export_humanoid_actor(
+        installation,
+        "p_carth001",
+        output_path,
+        textures,
+        mdlops,
+        animation_cache,
+        ("pause1", "tlknorm", "walk", "talk"),
+    )
 
 
 def export_player_actor(
@@ -969,6 +1012,16 @@ def export_dialogue(
         record = link_record(link)
         record["index"] = index
         starters.append(record)
+    if dialogue_name.lower() == "end_trask01":
+        if len(starters) <= 8:
+            raise RuntimeError("end_trask01 no longer contains starter 8")
+        corridor_starter = starters[8]
+        corridor_node = nodes[corridor_starter["target"]]
+        if (corridor_starter["condition1"].lower() != "k_pend_traskdl14" or
+                corridor_node["speaker"].lower() != "carth" or
+                corridor_node["sound"].lower() != "nm01aatras02057_" or
+                int(corridor_node["cameraId"]) != 1):
+            raise RuntimeError("end_trask01 starter 8 no longer matches the corridor contract")
     graph = {
         "schema": "nikami-aurora-kotor-dialogue-v1",
         "resref": dialogue_name,
@@ -1152,6 +1205,27 @@ def export_static_placeable(
     }
 
 
+def export_triggers(installation: Installation, triggers: list[Any]) -> list[dict[str, Any]]:
+    records = []
+    for trigger in triggers:
+        template = canonical_resref(trigger.resref)
+        utt_resource = installation.resource(template, ResourceType.UTT)
+        if utt_resource is None:
+            raise RuntimeError(f"Trigger template could not be resolved: {template}.utt")
+        utt_bytes = resource_data(utt_resource)
+        utt = read_utt(utt_bytes)
+        records.append({
+            "template": template,
+            "tag": str(utt.tag),
+            "position": vector3(trigger.position),
+            "geometry": [vector3(point) for point in trigger.geometry],
+            "onEnter": canonical_resref(utt.on_enter),
+            "highlightHeight": float(utt.highlight_height),
+            "uttSha256": sha256_bytes(utt_bytes),
+        })
+    return records
+
+
 def ncs_signature(instruction: Any) -> tuple[str, tuple[Any, ...]]:
     return instruction.ins_type.name, tuple(instruction.args)
 
@@ -1220,6 +1294,65 @@ def export_opening_script_contracts(installation: Installation, plot_table: Any)
     ]:
         raise RuntimeError("k_pend_traskdl40 no longer matches the verified door sequence")
 
+    trigger_data, trigger_ncs = load_script("k_pend_trig02")
+    trigger_global_expected = [
+        ("CPTOPSP", (-4, 4)),
+        ("CONSTS", ("END_TRASK_DLG",)),
+        ("ACTION", (581, 2)),
+        ("MOVSP", (-4,)),
+        ("RETN", ()),
+    ]
+    trigger_signal_expected = [
+        ("CONSTF", (0.5,)),
+        ("ACTION", (759, 1)),
+        ("STORE_STATE", (760, 4)),
+        ("JMP", ()),
+        ("CONSTI", (50,)),
+        ("ACTION", (132, 1)),
+        ("CPTOPSP", (-8, 4)),
+        ("ACTION", (131, 2)),
+        ("RETN", ()),
+        ("CONSTF", (0.10000000149011612,)),
+        ("ACTION", (7, 2)),
+    ]
+    trigger_tag_expected = [
+        ("CONSTI", (0,)),
+        ("CPTOPBP", (-180, 4)),
+        ("ACTION", (200, 2)),
+    ]
+    if (find_instruction_sequence(trigger_ncs.instructions, trigger_global_expected) is None or
+            find_instruction_sequence(trigger_ncs.instructions, trigger_signal_expected) is None or
+            find_instruction_sequence(trigger_ncs.instructions, trigger_tag_expected) is None):
+        raise RuntimeError("k_pend_trig02 no longer matches the verified trigger contract")
+
+    actor_data, actor_ncs = load_script("k_pend_trask_d")
+    actor_actions = [
+        tuple(instruction.args)
+        for instruction in actor_ncs.instructions
+        if instruction.ins_type.name == "ACTION"
+    ]
+    if ((247, 0) not in actor_actions or (9, 0) not in actor_actions or
+            (548, 0) not in actor_actions or (204, 11) not in actor_actions or
+            not any(instruction.ins_type.name == "CONSTI" and instruction.args == [50]
+                    for instruction in actor_ncs.instructions)):
+        raise RuntimeError("k_pend_trask_d no longer matches the verified event-50 contract")
+
+    condition_data, condition_ncs = load_script("k_pend_traskdl14")
+    condition_global_expected = [
+        ("JSR", ()),
+        ("CPTOPBP", (-76, 4)),
+        ("EQUALII", ()),
+        ("CPDOWNSP", (-8, 4)),
+        ("MOVSP", (-4,)),
+    ]
+    condition_read_expected = [
+        ("CONSTS", ("END_TRASK_DLG",)),
+        ("ACTION", (580, 1)),
+    ]
+    if (find_instruction_sequence(condition_ncs.instructions, condition_global_expected) is None or
+            find_instruction_sequence(condition_ncs.instructions, condition_read_expected) is None):
+        raise RuntimeError("k_pend_traskdl14 no longer selects END_TRASK_DLG value 10")
+
     def xp_contract(resref: str, data: bytes, ncs: Any, required_xp: int,
                     percentage: int) -> dict[str, Any]:
         return {
@@ -1251,6 +1384,26 @@ def export_opening_script_contracts(installation: Installation, plot_table: Any)
             "moveRange": 1.0,
             "resumeConversation": True,
         },
+        {
+            "schema": "nikami-aurora-kotor-script-contract-v1",
+            "resref": "k_pend_trig02",
+            "kind": "trigger-dialogue",
+            "sourceSha256": sha256_bytes(trigger_data),
+            "instructionCount": len(trigger_ncs.instructions),
+            "triggerTemplate": "end_trig02",
+            "globalName": "END_TRASK_DLG",
+            "globalValue": 10,
+            "actorTag": "end_trask",
+            "userEvent": 50,
+            "inputLockSeconds": 0.5,
+            "delaySeconds": 0.1,
+            "conversation": "end_trask01",
+            "dialogueStarter": 8,
+            "actorScriptSourceSha256": sha256_bytes(actor_data),
+            "actorScriptInstructionCount": len(actor_ncs.instructions),
+            "conditionScriptSourceSha256": sha256_bytes(condition_data),
+            "conditionScriptInstructionCount": len(condition_ncs.instructions),
+        },
     ]
 
 
@@ -1280,6 +1433,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         raise RuntimeError("plot.2da could not be resolved")
     plot_table = read_2da(resource_data(plot_resource))
     script_contracts = export_opening_script_contracts(installation, plot_table)
+    triggers = export_triggers(installation, git.triggers)
     area_resref = canonical_resref(ifo.area_name)
     lyt_resource = installation.resource(area_resref, ResourceType.LYT)
     if lyt_resource is None:
@@ -1311,6 +1465,13 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         mdlops,
         output_root / "_cache" / "animations",
     )
+    carth_actor = export_carth_actor(
+        installation,
+        output_root / "actors" / "p_carth001.glb",
+        textures,
+        mdlops,
+        output_root / "_cache" / "animations",
+    )
     player_actor = export_player_actor(
         installation,
         output_root / "actors" / "player.glb",
@@ -1333,11 +1494,14 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
     for creature in git.creatures:
         record = {
             "template": canonical_resref(creature.resref),
+            "tag": str(getattr(creature, "tag", "")),
             "position": vector3(creature.position),
             "bearing": float(creature.bearing),
         }
         if record["template"].lower() == "end_trask":
             record.update(trask_actor)
+        elif record["template"].lower() == "p_carth001":
+            record.update(carth_actor)
         creatures.append(record)
     doors = []
     for door in git.doors:
@@ -1428,6 +1592,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         "creatures": creatures,
         "doors": doors,
         "placeables": placeables,
+        "triggers": triggers,
         "waypoints": waypoints,
         "cameras": cameras,
         "scriptContracts": script_contracts,

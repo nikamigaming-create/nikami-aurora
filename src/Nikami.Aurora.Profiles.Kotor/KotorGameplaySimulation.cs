@@ -1,11 +1,63 @@
 using System.Collections.ObjectModel;
+using System.Numerics;
 
 namespace Nikami.Aurora.Profiles.Kotor;
 
 public enum KotorScriptContractKind
 {
     PlotExperienceIfPlayerExperience,
-    DialogueOpenDoor
+    DialogueOpenDoor,
+    TriggerDialogue
+}
+
+public sealed record KotorTriggerDialogueBehavior(
+    string TriggerTemplate,
+    string GlobalName,
+    int GlobalValue,
+    string ActorTag,
+    int UserEvent,
+    float InputLockSeconds,
+    float DelaySeconds,
+    string Conversation,
+    int DialogueStarter,
+    string ActorScriptSourceSha256,
+    int ActorScriptInstructionCount,
+    string ConditionScriptSourceSha256,
+    int ConditionScriptInstructionCount)
+{
+    public KotorTriggerDialogueBehavior Validate()
+    {
+        if (string.IsNullOrWhiteSpace(TriggerTemplate))
+            throw new ArgumentException("Trigger template cannot be empty", nameof(TriggerTemplate));
+        if (string.IsNullOrWhiteSpace(GlobalName))
+            throw new ArgumentException("Global name cannot be empty", nameof(GlobalName));
+        if (string.IsNullOrWhiteSpace(ActorTag))
+            throw new ArgumentException("Dialogue actor tag cannot be empty", nameof(ActorTag));
+        if (UserEvent < 0)
+            throw new ArgumentOutOfRangeException(nameof(UserEvent));
+        if (!float.IsFinite(InputLockSeconds) || InputLockSeconds < 0)
+            throw new ArgumentOutOfRangeException(nameof(InputLockSeconds));
+        if (!float.IsFinite(DelaySeconds) || DelaySeconds < 0)
+            throw new ArgumentOutOfRangeException(nameof(DelaySeconds));
+        if (string.IsNullOrWhiteSpace(Conversation))
+            throw new ArgumentException("Conversation cannot be empty", nameof(Conversation));
+        if (DialogueStarter < 0)
+            throw new ArgumentOutOfRangeException(nameof(DialogueStarter));
+        ValidateSource(ActorScriptSourceSha256, ActorScriptInstructionCount, "actor script");
+        ValidateSource(ConditionScriptSourceSha256, ConditionScriptInstructionCount,
+            "dialogue condition");
+        return this;
+    }
+
+    private static void ValidateSource(string sha256, int instructionCount, string kind)
+    {
+        if (sha256.Length != 64 || !sha256.All(Uri.IsHexDigit))
+            throw new ArgumentException(
+                $"{kind} SHA-256 must contain 64 hexadecimal characters");
+        if (instructionCount <= 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(instructionCount), $"{kind} instruction count must be positive");
+    }
 }
 
 public sealed record KotorScriptContract(
@@ -23,12 +75,14 @@ public sealed record KotorScriptContract(
     string? MoveTargetTag = null,
     bool? MoveRun = null,
     float? MoveRange = null,
-    bool? ResumeConversation = null)
+    bool? ResumeConversation = null,
+    KotorTriggerDialogueBehavior? TriggerDialogue = null)
 {
     public string KindName => Kind switch
     {
         KotorScriptContractKind.PlotExperienceIfPlayerExperience => "plot-xp-if-player-xp",
         KotorScriptContractKind.DialogueOpenDoor => "dialogue-open-door",
+        KotorScriptContractKind.TriggerDialogue => "trigger-dialogue",
         _ => throw new InvalidOperationException($"Unsupported KOTOR script-contract kind: {Kind}")
     };
 
@@ -65,6 +119,12 @@ public sealed record KotorScriptContract(
                 if (MoveRange is { } range && (!float.IsFinite(range) || range < 0))
                     throw new ArgumentOutOfRangeException(nameof(MoveRange));
                 break;
+            case KotorScriptContractKind.TriggerDialogue:
+                if (TriggerDialogue is null)
+                    throw new ArgumentException(
+                        "Trigger-dialogue behavior cannot be empty", nameof(TriggerDialogue));
+                TriggerDialogue.Validate();
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(Kind));
         }
@@ -73,6 +133,12 @@ public sealed record KotorScriptContract(
 }
 
 public sealed record KotorDoorDefinition(string InstanceId, string Tag, string? OnOpenScript);
+
+public sealed record KotorTriggerDefinition(
+    string InstanceId,
+    string Template,
+    IReadOnlyList<Vector3> Polygon,
+    string? OnEnterScript);
 
 public sealed record KotorItemDefinition(
     string Resref,
@@ -169,7 +235,9 @@ public sealed record KotorGameplaySnapshot(
     IReadOnlyDictionary<string, bool> DoorStates,
     IReadOnlyDictionary<string, bool> PlaceableStates,
     IReadOnlyDictionary<string, int> PlayerInventory,
-    IReadOnlyDictionary<KotorEquipmentSlot, string> Equipment);
+    IReadOnlyDictionary<KotorEquipmentSlot, string> Equipment,
+    IReadOnlyDictionary<string, bool> TriggerStates,
+    IReadOnlyDictionary<string, int> GlobalNumbers);
 
 public abstract record KotorGameplayEvent;
 
@@ -191,6 +259,21 @@ public sealed record KotorEquipmentChanged(
     KotorEquipmentSlot Slot,
     KotorItemDefinition Item,
     string? PreviousResref) : KotorGameplayEvent;
+
+public sealed record KotorTriggerEntered(KotorTriggerDefinition Trigger) : KotorGameplayEvent;
+
+public sealed record KotorGlobalNumberChanged(
+    string Name,
+    int Before,
+    int After) : KotorGameplayEvent;
+
+public sealed record KotorDialogueRequested(
+    string ActorTag,
+    string Conversation,
+    int StarterIndex,
+    int UserEvent,
+    float InputLockSeconds,
+    float DelaySeconds) : KotorGameplayEvent;
 
 public sealed record KotorExperienceAwarded(
     KotorScriptContract Contract,
@@ -217,20 +300,25 @@ public sealed class KotorGameplaySimulation
     private readonly Dictionary<string, KotorDoorDefinition> doors;
     private readonly IReadOnlyList<KotorDoorDefinition> doorOrder;
     private readonly Dictionary<string, KotorPlaceableDefinition> placeables;
+    private readonly Dictionary<string, KotorTriggerDefinition> triggers;
     private readonly Dictionary<string, KotorItemDefinition> itemDefinitions =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> doorStates;
     private readonly Dictionary<string, bool> placeableStates;
+    private readonly Dictionary<string, bool> triggerStates;
     private readonly Dictionary<string, int> playerInventory =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<KotorEquipmentSlot, string> equipment = [];
+    private readonly Dictionary<string, int> globalNumbers =
+        new(StringComparer.OrdinalIgnoreCase);
     private int playerExperience;
 
     public KotorGameplaySimulation(
         IEnumerable<KotorScriptContract> scripts,
         IEnumerable<KotorDoorDefinition> doors,
         IEnumerable<KotorPlaceableDefinition> placeables,
-        int initialPlayerExperience = 0)
+        int initialPlayerExperience = 0,
+        IEnumerable<KotorTriggerDefinition>? triggers = null)
     {
         if (initialPlayerExperience < 0)
             throw new ArgumentOutOfRangeException(nameof(initialPlayerExperience));
@@ -246,6 +334,10 @@ public sealed class KotorGameplaySimulation
         this.placeables = UniqueByKey(validatedPlaceables,
             definition => RequireInstanceId(definition.InstanceId, "placeable"),
             "placeable instance");
+        var validatedTriggers = (triggers ?? []).Select(ValidateTrigger);
+        this.triggers = UniqueByKey(validatedTriggers,
+            definition => RequireInstanceId(definition.InstanceId, "trigger"),
+            "trigger instance");
         foreach (var definition in this.placeables.Values)
         {
             foreach (var stack in definition.Inventory ?? [])
@@ -261,6 +353,8 @@ public sealed class KotorGameplaySimulation
             StringComparer.OrdinalIgnoreCase);
         placeableStates = this.placeables.Keys.ToDictionary(instanceId => instanceId, _ => false,
             StringComparer.OrdinalIgnoreCase);
+        triggerStates = this.triggers.Keys.ToDictionary(instanceId => instanceId, _ => false,
+            StringComparer.OrdinalIgnoreCase);
         playerExperience = initialPlayerExperience;
     }
 
@@ -270,13 +364,41 @@ public sealed class KotorGameplaySimulation
         ReadOnlyCopy(placeableStates),
         ReadOnlyCopy(playerInventory),
         new ReadOnlyDictionary<KotorEquipmentSlot, string>(
-            new Dictionary<KotorEquipmentSlot, string>(equipment)));
+            new Dictionary<KotorEquipmentSlot, string>(equipment)),
+        ReadOnlyCopy(triggerStates),
+        ReadOnlyCopy(globalNumbers));
 
     public bool IsDoorOpen(string instanceId) =>
         GetState(doorStates, instanceId, "door instance");
 
     public bool IsPlaceableOpened(string instanceId) =>
         GetState(placeableStates, instanceId, "placeable instance");
+
+    public KotorGameplayTransition UpdateTriggers(Vector3 previous, Vector3 current)
+    {
+        if (!IsFinite(previous) || !IsFinite(current))
+            throw new ArgumentOutOfRangeException(nameof(current));
+        var before = CaptureSnapshot();
+        var events = new List<KotorGameplayEvent>();
+        foreach (var trigger in triggers.Values)
+        {
+            if (triggerStates[trigger.InstanceId] ||
+                !SegmentTouchesPolygon(previous, current, trigger.Polygon))
+                continue;
+            if (trigger.OnEnterScript is { Length: > 0 } resref &&
+                scripts.TryGetValue(resref, out var contract) &&
+                contract.TriggerDialogue is { } behavior &&
+                !behavior.TriggerTemplate.Equals(
+                    trigger.Template, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"Trigger {trigger.InstanceId} does not match script {resref}");
+            triggerStates[trigger.InstanceId] = true;
+            events.Add(new KotorTriggerEntered(trigger));
+            ExecuteScriptCore(trigger.OnEnterScript, events,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        }
+        return Complete(before, events);
+    }
 
     public KotorGameplayTransition ToggleDoor(string instanceId)
     {
@@ -403,6 +525,9 @@ public sealed class KotorGameplaySimulation
                 case KotorScriptContractKind.DialogueOpenDoor:
                     ExecuteDialogueDoor(contract, events, executionStack);
                     break;
+                case KotorScriptContractKind.TriggerDialogue:
+                    ExecuteTriggerDialogue(contract, events);
+                    break;
                 default:
                     throw new InvalidOperationException(
                         $"Unsupported script-contract kind {contract.Kind} for {contract.Resref}");
@@ -450,6 +575,27 @@ public sealed class KotorGameplaySimulation
         events.Add(new KotorScriptExecuted(contract));
     }
 
+    private void ExecuteTriggerDialogue(
+        KotorScriptContract contract,
+        List<KotorGameplayEvent> events)
+    {
+        var behavior = contract.TriggerDialogue
+            ?? throw new InvalidOperationException(
+                $"Trigger-dialogue contract is incomplete: {contract.Resref}");
+        globalNumbers.TryGetValue(behavior.GlobalName, out var before);
+        globalNumbers[behavior.GlobalName] = behavior.GlobalValue;
+        events.Add(new KotorGlobalNumberChanged(
+            behavior.GlobalName, before, behavior.GlobalValue));
+        events.Add(new KotorDialogueRequested(
+            behavior.ActorTag,
+            behavior.Conversation,
+            behavior.DialogueStarter,
+            behavior.UserEvent,
+            behavior.InputLockSeconds,
+            behavior.DelaySeconds));
+        events.Add(new KotorScriptExecuted(contract));
+    }
+
     private KotorGameplayTransition Complete(
         KotorGameplaySnapshot before,
         List<KotorGameplayEvent> events) =>
@@ -474,6 +620,74 @@ public sealed class KotorGameplaySimulation
         !string.IsNullOrWhiteSpace(instanceId)
             ? instanceId
             : throw new ArgumentException($"KOTOR {kind} ID cannot be empty");
+
+    private static KotorTriggerDefinition ValidateTrigger(KotorTriggerDefinition trigger)
+    {
+        RequireInstanceId(trigger.InstanceId, "trigger");
+        if (string.IsNullOrWhiteSpace(trigger.Template))
+            throw new ArgumentException("KOTOR trigger template cannot be empty");
+        if (trigger.Polygon.Count < 3 || trigger.Polygon.Any(point => !IsFinite(point)))
+            throw new ArgumentException(
+                $"KOTOR trigger polygon is invalid: {trigger.InstanceId}");
+        return trigger with { Polygon = trigger.Polygon.ToArray() };
+    }
+
+    private static bool IsFinite(Vector3 value) =>
+        float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
+
+    private static bool SegmentTouchesPolygon(
+        Vector3 previous,
+        Vector3 current,
+        IReadOnlyList<Vector3> polygon)
+    {
+        var start = new Vector2(previous.X, previous.Y);
+        var end = new Vector2(current.X, current.Y);
+        if (PointInPolygon(start, polygon) || PointInPolygon(end, polygon))
+            return true;
+        for (var index = 0; index < polygon.Count; index++)
+        {
+            var a3 = polygon[index];
+            var b3 = polygon[(index + 1) % polygon.Count];
+            if (SegmentsIntersect(start, end, new Vector2(a3.X, a3.Y), new Vector2(b3.X, b3.Y)))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool PointInPolygon(Vector2 point, IReadOnlyList<Vector3> polygon)
+    {
+        var inside = false;
+        for (int current = 0, previous = polygon.Count - 1;
+             current < polygon.Count;
+             previous = current++)
+        {
+            var a = polygon[current];
+            var b = polygon[previous];
+            if ((a.Y > point.Y) == (b.Y > point.Y)) continue;
+            var crossing = (b.X - a.X) * (point.Y - a.Y) / (b.Y - a.Y) + a.X;
+            if (point.X < crossing)
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    private static bool SegmentsIntersect(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
+    {
+        const float epsilon = 0.00001f;
+        var ab = b - a;
+        var cd = d - c;
+        var denominator = Cross(ab, cd);
+        if (MathF.Abs(denominator) <= epsilon)
+            return false;
+        var offset = c - a;
+        var first = Cross(offset, cd) / denominator;
+        var second = Cross(offset, ab) / denominator;
+        return first >= -epsilon && first <= 1 + epsilon &&
+               second >= -epsilon && second <= 1 + epsilon;
+    }
+
+    private static float Cross(Vector2 left, Vector2 right) =>
+        left.X * right.Y - left.Y * right.X;
 
     private static T GetDefinition<T>(
         IReadOnlyDictionary<string, T> definitions,

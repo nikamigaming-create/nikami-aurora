@@ -403,7 +403,7 @@ def export_actor(
     if head_model is not None and head_name:
         head_parent = builder.nodes_by_name.get("headhook", "actor_basis")
         skin_count_before_head = len(builder.skin_specs)
-        builder.register_model(
+        head_nodes = builder.register_model(
             # Heads are hook-attached models with their own skin bind space.
             # Keep that hierarchy intact. Shared supermodel names remain mapped
             # to the body, while head-only neck/face names still receive their
@@ -411,6 +411,19 @@ def export_actor(
             head_model, head_name, attach_parent=head_parent, prefix="head::",
             merge_by_name=False,
             override_texture=head_texture)
+
+        # Unique heads can repeat the body's generic neck/head dummy names.
+        # Animation channels below Hturn_g must target the hook-bound head
+        # hierarchy, while torso/supermodel channels must stay on the body.
+        def prefer_head_animation_nodes(node: Any, in_head: bool = False) -> None:
+            key = str(node.name).lower()
+            in_head = in_head or key == "hturn_g"
+            if in_head:
+                builder.nodes_by_name[key] = head_nodes[id(node)]
+            for child in node.children:
+                prefer_head_animation_nodes(child, in_head)
+
+        prefer_head_animation_nodes(head_model.root)
         head_skin_count = len(builder.skin_specs) - skin_count_before_head
         if head_skin_count <= 0:
             raise RuntimeError(f"Hook-bound head has no skin: {head_name}")

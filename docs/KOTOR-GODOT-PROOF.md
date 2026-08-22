@@ -122,6 +122,11 @@ Confirmed in the new runtime:
   `PLC_Chair2` model while remaining excluded from interaction targeting;
 - source-opaque lightmapped and base room materials audited into opaque
   depth-writing paths, eliminating floor bleed through opening-room furniture;
+- native polygon crossing for `end_trig02`, profile global
+  `END_TRASK_DLG 0→10`, Trask event 50, and `end_trask01` starter 8 selection;
+- source-assembled standing Carth with independent head skin, inherited
+  `tlknorm`, installed voice/LIP, and retail-matched static camera 1 framing;
+- desktop cinematic-camera ownership separated from the gameplay SpringArm;
 - OpenXR action map and tracked grip nodes for movement, sprint, interaction,
   recenter, and haptic output;
 - portable and Meta runtime-controller model providers with per-hand procedural
