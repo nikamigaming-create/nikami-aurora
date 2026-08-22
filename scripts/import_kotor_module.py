@@ -1240,6 +1240,50 @@ def export_dialogue(
                     f"end_trask01 automatic continuation drifted: {entry_key}")
         if [link["target"] for link in nodes["entry:35"]["links"]] != ["reply:50", "reply:46"]:
             raise RuntimeError("end_trask01 journal choices no longer match the corridor contract")
+        showcase_sounds = {
+            "entry:55": "nm01aatras02000_",
+            "entry:57": "nm01aatras02002_",
+            "entry:58": "nm01aatras02003_",
+            "entry:61": "nm01aatras02005_",
+            "entry:62": "nm01aatras02007_",
+            "entry:69": "nm01aatras02233_",
+            "entry:70": "nm01aatras02234_",
+            "entry:71": "nm01aatras02008_",
+            "entry:73": "nm01aatras02010_",
+        }
+        if (starters[0]["target"] != "entry:54" or
+                nodes["entry:54"]["script1"].lower() != "k_pend_traskdl40" or
+                any(nodes[key]["sound"].lower() != sound
+                    for key, sound in showcase_sounds.items())):
+            raise RuntimeError("end_trask01 showcase opening path drifted")
+        showcase_choices = {
+            "entry:55": ("reply:74", "reply:72"),
+            "entry:58": ("reply:79", "reply:76"),
+            "entry:71": ("reply:90", "reply:88"),
+            "entry:73": ("reply:92", "reply:91"),
+            "entry:35": ("reply:50", "reply:46"),
+        }
+        for key, expected_links in showcase_choices.items():
+            if tuple(link["target"] for link in nodes[key]["links"]) != expected_links:
+                raise RuntimeError(f"end_trask01 showcase choice drifted: {key}")
+        showcase_automatic = [
+            ("entry:54", "reply:71", "entry:55"),
+            ("entry:57", "reply:75", "entry:58"),
+            ("entry:61", "reply:80", "entry:62"),
+            ("entry:69", "reply:86", "entry:70"),
+            ("entry:70", "reply:87", "entry:71"),
+        ]
+        for entry_key, reply_key, next_key in showcase_automatic:
+            entry = nodes[entry_key]
+            reply = nodes[reply_key]
+            if (len(entry["links"]) != 1 or entry["links"][0]["target"] != reply_key or
+                    reply["text"].strip() or not reply["links"] or
+                    reply["links"][0]["target"] != next_key):
+                raise RuntimeError(
+                    f"end_trask01 showcase automatic path drifted: {entry_key}")
+        if ([link["target"] for link in nodes["reply:81"]["links"]][0] != "entry:69" or
+                nodes["reply:92"]["links"] or nodes["reply:50"]["links"]):
+            raise RuntimeError("end_trask01 showcase terminal path drifted")
     if dialogue_name.lower() == "end_room3":
         expected_controls = {
             "entry:0": (26, "k_pend_camera", ["c3d4", "c3d4", "c3d4"]),

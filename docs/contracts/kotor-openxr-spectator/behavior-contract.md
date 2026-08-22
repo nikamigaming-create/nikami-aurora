@@ -59,8 +59,19 @@ black XR swapchain texture.
 
 ## Camera base and height contract
 
-Gameplay places `XROrigin3D` at the player body's floor transform. The HMD pose
-supplies eye height. The source avatar camera offset is not added again.
+Gameplay calibrates the current tracked head pose `H0` to the avatar's authored
+local eye transform `E`, then carries that origin offset with the player body:
+
+```text
+GameplayOriginOffset = E × inverse(H0)
+XROriginWorld = PlayerWorld × GameplayOriginOffset
+XRCameraWorld = XROriginWorld × H(current)
+```
+
+At recenter time, the tracked eye is exactly at the authored avatar eye. Later
+head translation and rotation remain relative to that calibration. This uses
+the source eye height once; it does not add the source height on top of the HMD
+height.
 
 For an authored cinematic camera with desired world transform `D` and the
 current tracked head-local transform `H`, the runtime sets:
@@ -70,12 +81,12 @@ XROriginWorld = D × inverse(H)
 XRCameraWorld = XROriginWorld × H = D
 ```
 
-This exactly recenters the current head pose on the authored source camera while
+The cinematic formula exactly recenters the current head pose on the authored source camera while
 preserving subsequent head-relative motion. The active encounter observation
-reported 0.000000 m positional error for cameras 26, 19, 20, and both dynamic
-Trask dialogue bases. The previous implementation added approximately 1.6 m of
-tracked head height on top of the source camera and placed the mirror in the
-ceiling.
+reported 0.000000 m positional error and forward-dot 1.000000 for gameplay,
+cameras 26, 19, 20, and both dynamic Trask dialogue bases. The previous
+implementation added approximately 1.6 m of tracked head height on top of the
+source camera and placed the mirror in the ceiling.
 
 ## Capture assertions
 

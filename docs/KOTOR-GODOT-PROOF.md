@@ -103,6 +103,19 @@ combat-ready frame:
   -CaptureAndExit
 ```
 
+Run the complete startup-to-action route and capture only its final asserted
+gameplay frame:
+
+```powershell
+./scripts/Start-KotorGodot.ps1 `
+  -ShowcaseRoute `
+  -CapturePath 'artifacts/kotor-showcase-desktop-complete.png' `
+  -CaptureDialogueNode 'showcase:complete' `
+  -CaptureFrame 1 `
+  -CleanCapture `
+  -CaptureAndExit
+```
+
 ## Honest boundary
 
 Confirmed in the new runtime:
@@ -136,7 +149,7 @@ Confirmed in the new runtime:
 - per-process Meta XR Simulator selection with a Vulkan XR subviewport and
   non-black HMD-following spectator capture, without registry or UI mutation;
 - tracked-head-relative cinematic recentering with asserted zero positional
-  error and a floor-based gameplay origin that does not double-count eye height;
+  and forward error, plus calibrated gameplay eye height without double-counting;
 - profile-owned native-coordinate movement simulation shared by desktop and XR
   intent, with synthetic speed/facing/dead-zone/door-blocker acceptance;
 - profile-owned transactional experience, door, placeable, and validated-script
@@ -183,6 +196,10 @@ Confirmed in the new runtime:
   hash-validated decoding of IMA ADPCM and KOTOR-wrapped MP3 payloads;
 - source-sized `w_laserfire_r` and `v_muzflash_01` projectile/muzzle textures,
   four launch/muzzle assertions, and at least three completed impact assertions;
+- one asserted boot→opening dialogue→gear→corridor transmission→first encounter
+  →gameplay route with 15 completed voices and seven authored selections;
+- separate proof and dialogue Canvas layers, allowing clean capture to retain
+  subtitles/choices while hiding developer status and control text;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
 - walkmesh-constrained player movement;

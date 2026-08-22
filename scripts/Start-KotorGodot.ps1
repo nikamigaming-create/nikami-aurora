@@ -16,6 +16,8 @@ param(
     [switch]$TestFirstCorridorTrigger,
     [switch]$TestFirstCorridorTransmission,
     [switch]$TestFirstEncounter,
+    [switch]$ShowcaseRoute,
+    [switch]$ExitOnShowcaseComplete,
     [switch]$SkipOpeningDialogue,
     [switch]$OpenXR,
     [switch]$OpenXRSimulator,
@@ -93,6 +95,15 @@ if ($TestFirstEncounter) {
     $env:NIKAMI_AURORA_TEST_FIRST_ENCOUNTER = "1"
     $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
 }
+if ($ShowcaseRoute) {
+    $env:NIKAMI_AURORA_SHOWCASE_ROUTE = "1"
+}
+if ($ExitOnShowcaseComplete) {
+    if (-not $ShowcaseRoute) {
+        throw "-ExitOnShowcaseComplete requires -ShowcaseRoute."
+    }
+    $env:NIKAMI_AURORA_SHOWCASE_EXIT_ON_COMPLETE = "1"
+}
 if (-not [string]::IsNullOrWhiteSpace($TestPlayerAnimation)) {
     $env:NIKAMI_AURORA_TEST_PLAYER_ANIMATION = $TestPlayerAnimation
 }
@@ -169,6 +180,8 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRIGGER -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRANSMISSION -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_ENCOUNTER -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_SHOWCASE_ROUTE -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_SHOWCASE_EXIT_ON_COMPLETE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_OPENXR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_OPENXR_EXPECT_ACTIVE -ErrorAction SilentlyContinue
