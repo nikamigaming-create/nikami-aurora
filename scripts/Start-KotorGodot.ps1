@@ -46,9 +46,9 @@ if (-not (Test-Path -LiteralPath $Manifest -PathType Leaf)) {
     throw "Module manifest not found: $Manifest. Run scripts/Import-KotorModule.ps1 first."
 }
 if ([string]::IsNullOrWhiteSpace($Godot)) {
-    $command = Get-Command "Godot_v4.6.3-stable_mono_win64.exe" -ErrorAction SilentlyContinue
+    $command = Get-Command "Godot_v4.7.1-stable_mono_win64.exe" -ErrorAction SilentlyContinue
     if (-not $command) {
-        throw "Godot 4.6.3 .NET was not found on PATH. Pass -Godot explicitly."
+        throw "Godot 4.7.1 .NET was not found on PATH. Pass -Godot explicitly."
     }
     $Godot = $command.Source
 }

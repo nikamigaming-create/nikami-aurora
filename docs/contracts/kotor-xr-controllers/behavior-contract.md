@@ -52,7 +52,7 @@ therefore cannot enter the render-model extension lifecycle.
 
 - Target executable SHA-256:
   `34E6D971C034222A417995D8E1E8FDD9F8781795C9C289BD86C499A439F34C88`.
-- Godot 4.6.3 loads the expanded action map without parse or binding errors.
+- Godot 4.7.1 loads the expanded action map without parse or binding errors.
 - OpenXR creates an instance against Oculus runtime 1.207.0.
 - With no connected HMD, initialization fails with
   `XR_ERROR_FORM_FACTOR_UNAVAILABLE` and desktop play remains functional.

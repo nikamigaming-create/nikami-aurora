@@ -167,6 +167,9 @@ public sealed partial class KotorModuleBoot : Node3D
     private int encounterProjectileCount;
     private int encounterMuzzleFlashCount;
     private int encounterImpactCount;
+    private int roomSmokeEmitterCount;
+    private int roomSparkEmitterCount;
+    private bool damagedEndSmokeReady;
     private string currentMusicResref = "";
     private string captureDialogueNode = "";
     private ulong inputLockedUntilMsec;
@@ -352,6 +355,8 @@ public sealed partial class KotorModuleBoot : Node3D
                     encounterProjectileCount < 4 ||
                     encounterMuzzleFlashCount < 4 ||
                     encounterImpactCount < 3 ||
+                    roomSmokeEmitterCount != 9 || roomSparkEmitterCount != 3 ||
+                    !damagedEndSmokeReady ||
                     firstEncounter is null ||
                     !IsFirstEncounterEnvironmentReady(firstEncounter) ||
                     !currentMusicResref.Equals(
@@ -368,6 +373,7 @@ public sealed partial class KotorModuleBoot : Node3D
                          $"voices=2 attacks={encounterAttackSoundCount} " +
                          $"projectiles={encounterProjectileCount} " +
                          $"muzzles={encounterMuzzleFlashCount} impacts={encounterImpactCount} " +
+                         $"roomFx=smoke:{roomSmokeEmitterCount},sparks:{roomSparkEmitterCount} " +
                          $"environment={firstEncounter.EnvironmentPlaceables.Count} " +
                          $"music={currentMusicResref}");
             }
@@ -578,6 +584,11 @@ public sealed partial class KotorModuleBoot : Node3D
             var lightmappedTransparentMaterials = 0;
             var baseTransparentMaterials = 0;
             var sourceAdditiveMaterials = 0;
+            roomSmokeEmitterCount = 0;
+            roomSparkEmitterCount = 0;
+            damagedEndSmokeReady = false;
+            var roomEmitterTextures = new Dictionary<string, Texture2D>(
+                StringComparer.OrdinalIgnoreCase);
             foreach (var room in manifest.Rooms)
             {
                 if (string.IsNullOrWhiteSpace(room.Glb)) continue;
@@ -598,6 +609,11 @@ public sealed partial class KotorModuleBoot : Node3D
                 baseTransparentMaterials += materialReport.BaseTransparent;
                 sourceAdditiveMaterials += materialReport.SourceAdditive;
                 AddChild(imported);
+                var emitterReport = LoadRoomEmitters(
+                    room, imported, manifestDirectory, roomEmitterTextures);
+                roomSmokeEmitterCount += emitterReport.Smoke;
+                roomSparkEmitterCount += emitterReport.Spark;
+                damagedEndSmokeReady |= emitterReport.DamagedEnd;
                 loadedRooms++;
                 details.Text = $"Rooms {loadedRooms}/{manifest.Rooms.Count}  •  {room.Model}";
                 await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
@@ -611,6 +627,15 @@ public sealed partial class KotorModuleBoot : Node3D
                       $"sourceTransparentBase={baseTransparentMaterials} " +
                       $"sourceAdditive={sourceAdditiveMaterials} " +
                       "opaqueAlphaWrites=0 opaqueDepthWrite=opaque");
+            if (roomSmokeEmitterCount + roomSparkEmitterCount !=
+                    manifest.Counts.AuthoredEmitters ||
+                roomSmokeEmitterCount != 9 || roomSparkEmitterCount != 3 ||
+                !damagedEndSmokeReady)
+                throw new InvalidDataException(
+                    "Endar Spire room-emitter presentation contract drifted");
+            GD.Print("NIKAMI_AURORA_ROOM_EMITTERS status=ready authored=12 " +
+                     "materialized=12 smoke=9 sparks=3 " +
+                     "damagedEnd=M01aa_03a/Object107/smoke044");
 
             var authoredLights = LoadAuthoredLights(manifest.Rooms, manifest.Lighting);
             var materializedPlayer = LoadPlayerModel(
@@ -889,6 +914,171 @@ public sealed partial class KotorModuleBoot : Node3D
                  $"size={image.GetWidth()}x{image.GetHeight()}");
         return texture;
     }
+
+    private static RoomEmitterReport LoadRoomEmitters(
+        RoomRecord room,
+        Node3D roomRoot,
+        string manifestDirectory,
+        IDictionary<string, Texture2D> textureCache)
+    {
+        var smoke = 0;
+        var spark = 0;
+        var damagedEnd = false;
+        foreach (var source in room.Emitters ?? [])
+        {
+            var isSmoke = source.Texture.Resref.Equals(
+                "fx_Smoke", StringComparison.OrdinalIgnoreCase);
+            var isSpark = source.Texture.Resref.Equals(
+                "fx_Spark", StringComparison.OrdinalIgnoreCase);
+            if (source.Schema != "nikami-aurora-kotor-room-emitter-v1" ||
+                (!isSmoke && !isSpark) ||
+                !source.Update.Equals("Fountain", StringComparison.OrdinalIgnoreCase) ||
+                source.BirthRate <= 0 || source.LifeExpectancy <= 0 ||
+                source.Direction.Count < 3 || source.Position.Count < 3 ||
+                source.ColorStart.Count < 3 || source.ColorMid.Count < 3 ||
+                source.ColorEnd.Count < 3 ||
+                source.PercentStart < 0 || source.PercentEnd > 1 ||
+                source.PercentStart > source.PercentMid ||
+                source.PercentMid > source.PercentEnd ||
+                (isSmoke && (source.XGrid != 4 || source.YGrid != 4 ||
+                             !source.Blend.Equals(
+                                 "Normal", StringComparison.OrdinalIgnoreCase) ||
+                             !source.Render.Equals(
+                                 "Normal", StringComparison.OrdinalIgnoreCase))) ||
+                (isSpark && (source.XGrid != 2 || source.YGrid != 2 ||
+                             !source.Blend.Equals(
+                                 "Lighten", StringComparison.OrdinalIgnoreCase) ||
+                             !source.Render.Equals(
+                                 "Motion_Blur", StringComparison.OrdinalIgnoreCase))))
+                throw new InvalidDataException(
+                    $"Unsupported room emitter: {room.Model}/{source.NodePath}");
+
+            if (!textureCache.TryGetValue(source.Texture.PayloadSha256, out var texture))
+            {
+                texture = LoadOwnedEffectTexture(source.Texture, manifestDirectory);
+                textureCache[source.Texture.PayloadSha256] = texture;
+            }
+
+            var colorMidOffset = Mathf.Clamp(
+                source.PercentMid,
+                source.PercentStart + 0.0001f,
+                source.PercentEnd - 0.0001f);
+            var gradient = new Gradient
+            {
+                Offsets = [source.PercentStart, colorMidOffset, source.PercentEnd],
+                Colors =
+                [
+                    ToEmitterColor(source.ColorStart, source.AlphaStart),
+                    ToEmitterColor(source.ColorMid, source.AlphaMid),
+                    ToEmitterColor(source.ColorEnd, source.AlphaEnd)
+                ]
+            };
+            var colorRamp = new GradientTexture1D { Gradient = gradient };
+            var scaleCurve = new Curve
+            {
+                MinValue = 0,
+                MaxValue = Math.Max(
+                    1.0f, Math.Max(source.SizeStart,
+                        Math.Max(source.SizeMid, source.SizeEnd)))
+            };
+            scaleCurve.AddPoint(new Vector2(source.PercentStart, source.SizeStart));
+            scaleCurve.AddPoint(new Vector2(colorMidOffset, source.SizeMid));
+            scaleCurve.AddPoint(new Vector2(source.PercentEnd, source.SizeEnd));
+            var frameCount = Math.Max(1, source.XGrid * source.YGrid);
+            var frameDivisor = Math.Max(1, frameCount - 1);
+            var frameStart = Mathf.Clamp(source.FrameStart / frameDivisor, 0, 1);
+            var frameEnd = Mathf.Clamp(source.FrameEnd / frameDivisor, 0, 1);
+            var animationCycles = source.Fps > 0
+                ? source.Fps * source.LifeExpectancy / frameCount
+                : 0.0f;
+            var processMaterial = new ParticleProcessMaterial
+            {
+                Direction = ToGodot(source.Direction).Normalized(),
+                Spread = Mathf.RadToDeg(source.SpreadRadians),
+                InitialVelocityMin = Math.Max(0, source.Velocity - source.RandomVelocity),
+                InitialVelocityMax = source.Velocity + source.RandomVelocity,
+                AngularVelocityMin = Mathf.RadToDeg(source.ParticleRotation),
+                AngularVelocityMax = Mathf.RadToDeg(source.ParticleRotation),
+                Gravity = Vector3.Up * -source.Mass,
+                ScaleMin = 1,
+                ScaleMax = 1,
+                ScaleCurve = new CurveTexture { Curve = scaleCurve },
+                ColorRamp = colorRamp,
+                AnimSpeedMin = animationCycles,
+                AnimSpeedMax = animationCycles,
+                AnimOffsetMin = source.Fps > 0 ? frameStart : Math.Min(frameStart, frameEnd),
+                AnimOffsetMax = source.Fps > 0 ? frameStart : Math.Max(frameStart, frameEnd)
+            };
+            var material = new StandardMaterial3D
+            {
+                AlbedoTexture = texture,
+                AlbedoColor = Colors.White,
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+                BlendMode = isSpark
+                    ? BaseMaterial3D.BlendModeEnum.Add
+                    : BaseMaterial3D.BlendModeEnum.Mix,
+                DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
+                VertexColorUseAsAlbedo = true,
+                BillboardMode = BaseMaterial3D.BillboardModeEnum.Particles,
+                ParticlesAnimHFrames = source.XGrid,
+                ParticlesAnimVFrames = source.YGrid,
+                ParticlesAnimLoop = true
+            };
+            if (isSpark)
+            {
+                material.EmissionEnabled = true;
+                material.Emission = Colors.White;
+                material.EmissionTexture = texture;
+                material.EmissionEnergyMultiplier = 2.0f;
+            }
+            var travel = source.Velocity * source.LifeExpectancy + source.SizeEnd * 2;
+            var boundsExtent = Math.Max(8.0f, Math.Min(64.0f, travel));
+            var particles = new GpuParticles3D
+            {
+                Name = "Emitter_" + source.NodePath.Replace('/', '_'),
+                Position = ToGodot(source.Position),
+                Amount = Math.Max(1, (int)Math.Ceiling(
+                    source.BirthRate * source.LifeExpectancy)),
+                Lifetime = source.LifeExpectancy,
+                Preprocess = Math.Min(source.LifeExpectancy, 6.0f),
+                Randomness = Mathf.Clamp(
+                    source.RandomBirthRate / Math.Max(1.0f, source.BirthRate), 0, 1),
+                FixedFps = 30,
+                Interpolate = true,
+                LocalCoords = false,
+                DrawOrder = GpuParticles3D.DrawOrderEnum.ViewDepth,
+                ProcessMaterial = processMaterial,
+                DrawPass1 = new QuadMesh
+                {
+                    Size = isSpark
+                        ? new Vector2(
+                            1.0f,
+                            Math.Max(1.0f, source.BlurLength /
+                                Math.Max(0.001f, source.SizeStart)))
+                        : Vector2.One,
+                    Material = material
+                },
+                VisibilityAabb = new Aabb(
+                    Vector3.One * -boundsExtent,
+                    Vector3.One * boundsExtent * 2),
+                Emitting = true
+            };
+            roomRoot.AddChild(particles);
+            smoke += isSmoke ? 1 : 0;
+            spark += isSpark ? 1 : 0;
+            damagedEnd |= room.Model.Equals(
+                              "M01aa_03a", StringComparison.OrdinalIgnoreCase) &&
+                          source.NodePath.EndsWith(
+                              "Object107/smoke044", StringComparison.OrdinalIgnoreCase) &&
+                          Math.Abs(source.BirthRate - 40.0f) < 0.0001f &&
+                          Math.Abs(source.LifeExpectancy - 6.0f) < 0.0001f;
+        }
+        return new RoomEmitterReport(smoke, spark, damagedEnd);
+    }
+
+    private static Color ToEmitterColor(IReadOnlyList<float> source, float alpha) =>
+        new(source[0], source[1], source[2], alpha);
 
     private static AudioStream LoadOwnedAudio(
         FirstEncounterAudioSource source,
@@ -3493,7 +3683,45 @@ public sealed partial class KotorModuleBoot : Node3D
         string BaseItemsSha256);
     private sealed record RoomRecord(string Model, string? Glb, IReadOnlyList<float> Position,
         IReadOnlyList<IReadOnlyList<IReadOnlyList<float>>>? WalkmeshTriangles,
-        IReadOnlyList<LightRecord>? Lights);
+        IReadOnlyList<LightRecord>? Lights,
+        IReadOnlyList<RoomEmitterRecord>? Emitters);
+    private sealed record RoomEmitterRecord(
+        string Schema,
+        string NodePath,
+        IReadOnlyList<float> AuthoredPosition,
+        IReadOnlyList<float> Position,
+        IReadOnlyList<float> Direction,
+        FirstEncounterEffectTexture Texture,
+        string Update,
+        string Render,
+        string Blend,
+        int Flags,
+        int XGrid,
+        int YGrid,
+        float BirthRate,
+        float RandomBirthRate,
+        float Velocity,
+        float RandomVelocity,
+        float Mass,
+        float ParticleRotation,
+        float SpreadRadians,
+        float LifeExpectancy,
+        IReadOnlyList<float> ColorStart,
+        IReadOnlyList<float> ColorMid,
+        IReadOnlyList<float> ColorEnd,
+        float PercentStart,
+        float PercentMid,
+        float PercentEnd,
+        float AlphaStart,
+        float AlphaMid,
+        float AlphaEnd,
+        float SizeStart,
+        float SizeMid,
+        float SizeEnd,
+        float FrameStart,
+        float FrameEnd,
+        float Fps,
+        float BlurLength);
     private sealed record LightRecord(string Name, IReadOnlyList<float> Position,
         IReadOnlyList<float> Color, float Radius, float Multiplier, bool AmbientOnly,
         int DynamicType, bool AffectDynamic, bool Shadow, int Priority);
@@ -3693,7 +3921,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record DialogueLink(string Target, string Condition1, bool Condition1Not,
         string Condition2, bool Condition2Not, int Logic);
     private sealed record CountRecord(int Rooms, int Creatures, int Doors, int Waypoints, int Cameras,
-        int Placeables, int Triggers, int WalkmeshTriangles, int AuthoredLights);
+        int Placeables, int Triggers, int WalkmeshTriangles, int AuthoredLights,
+        int AuthoredEmitters);
     private readonly record struct NavigationTriangle(Vector3 A, Vector3 B, Vector3 C);
     private readonly record struct StaticMaterialReport(
         int LightmappedOpaque,
@@ -3701,6 +3930,7 @@ public sealed partial class KotorModuleBoot : Node3D
         int LightmappedTransparent,
         int BaseTransparent,
         int SourceAdditive);
+    private readonly record struct RoomEmitterReport(int Smoke, int Spark, bool DamagedEnd);
     private sealed class InteractiveDoor(
         string instanceId,
         DoorRecord source,

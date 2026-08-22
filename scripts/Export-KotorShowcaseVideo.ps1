@@ -127,6 +127,8 @@ try {
     $requiredTelemetry = @(
         'NIKAMI_AURORA_OPENXR status=ready',
         'spectator=True',
+        ('NIKAMI_AURORA_ROOM_EMITTERS status=ready authored=12 ' +
+         'materialized=12 smoke=9 sparks=3'),
         'NIKAMI_AURORA_SHOWCASE_TRANSMISSION status=pass',
         'NIKAMI_AURORA_FIRST_ENCOUNTER status=pass',
         ('NIKAMI_AURORA_XR_LOCAL_AVATAR status=gameplay-head-hidden ' +

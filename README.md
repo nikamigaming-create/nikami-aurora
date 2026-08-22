@@ -77,9 +77,11 @@ Sith firefight through cameras 26, 19, and 20. It materializes the two Sith,
 the Republic target, existing corpse/debris/power-conductor props, source
 cutscene attack/death clips, both Trask voice/LIP lines, blaster shot/impact
 audio, battle music, and source-sized additive projectile/muzzle textures. The
-deterministic combat-ready gate verifies every launch, impact, voice, script
-global, environment placement, and music transition; general combat AI remains
-a later milestone.
+runtime now also transfers all 12 installed room emitters: nine `fx_Smoke`
+systems and three `fx_Spark` systems, including the dense authored smoke at the
+damaged room-3 corridor end. The deterministic combat-ready gate verifies every
+launch, impact, room effect, voice, script global, environment placement, and
+music transition; general combat AI remains a later milestone.
 
 Those slices now run as one deterministic startup-to-action route. It begins at
 the installed opening dialogue, waits through every selected voice, takes the
