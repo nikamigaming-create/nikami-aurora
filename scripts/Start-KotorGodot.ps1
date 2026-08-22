@@ -17,6 +17,7 @@ param(
     [switch]$CleanCapture,
     [switch]$LipSyncCloseup,
     [switch]$EquipmentCloseup,
+    [switch]$ChairCloseup,
     [switch]$CaptureAndExit
 )
 
@@ -86,6 +87,9 @@ if ($LipSyncCloseup) {
 if ($EquipmentCloseup) {
     $env:NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP = "1"
 }
+if ($ChairCloseup) {
+    $env:NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP = "1"
+}
 
 try {
     & dotnet build (Join-Path $repo "godot\Nikami.Aurora.Godot.csproj") --configuration Debug
@@ -119,4 +123,5 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CLEAN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP -ErrorAction SilentlyContinue
 }

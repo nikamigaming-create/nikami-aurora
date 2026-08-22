@@ -118,6 +118,8 @@ Confirmed in the new runtime:
 - profile-owned atomic Armor/RightHand equipment and source-derived
   `PMBBM01`/`PMHA01`/Short Sword player presentation, including exact right-hand
   hierarchy attachment and preserved idle/walk/run clips;
+- all three source `plc_chair2` opening-room placements materialized from one
+  `PLC_Chair2` model while remaining excluded from interaction targeting;
 - OpenXR action map and tracked grip nodes for movement, sprint, interaction,
   recenter, and haptic output;
 - portable and Meta runtime-controller model providers with per-hand procedural

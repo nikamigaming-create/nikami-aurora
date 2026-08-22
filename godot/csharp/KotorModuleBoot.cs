@@ -69,7 +69,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private readonly List<Button> activeChoiceButtons = [];
     private readonly List<NavigationTriangle> navigationTriangles = [];
     private readonly List<InteractiveDoor> interactiveDoors = [];
-    private readonly List<InteractivePlaceable> interactivePlaceables = [];
+    private readonly List<MaterializedPlaceable> materializedPlaceables = [];
     private readonly Dictionary<string, AnimationPlayer> actorAnimations =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Node3D> actorModels =
@@ -176,17 +176,17 @@ public sealed partial class KotorModuleBoot : Node3D
             }
             if (!automatedLockerApplied && readyFrames >= 30 &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_OPEN_LOCKER") == "1" &&
-                interactivePlaceables.Count > 0)
+                materializedPlaceables.Count > 0)
             {
                 automatedLockerApplied = true;
-                UsePlaceable(interactivePlaceables[0]);
+                UsePlaceable(materializedPlaceables[0]);
             }
             if (!automatedTutorialXpChain && readyFrames >= 30 &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN") == "1" &&
-                interactivePlaceables.Count > 0)
+                materializedPlaceables.Count > 0)
             {
                 automatedTutorialXpChain = true;
-                UsePlaceable(interactivePlaceables[0]);
+                UsePlaceable(materializedPlaceables[0]);
                 ExecuteScript("k_pend_door1xp");
                 var finalExperience = RequireGameplaySimulation().CaptureSnapshot().PlayerExperience;
                 if (finalExperience != 150)
@@ -231,6 +231,10 @@ public sealed partial class KotorModuleBoot : Node3D
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP") == "1")
                 FramePlayerEquipmentCloseup();
+            if (readyFrames == 60 &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP") == "1")
+                FrameChairCloseup();
         }
 
         var capturePath = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE");
@@ -998,6 +1002,39 @@ public sealed partial class KotorModuleBoot : Node3D
                  $"fov=45.000 position={eye} xr={xrActive}");
     }
 
+    private void FrameChairCloseup()
+    {
+        var chairs = materializedPlaceables.Where(placeable =>
+                placeable.Source.Template.Equals(
+                    "plc_chair2", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (chairs.Length != 3) return;
+        if (worldNotice is not null && GodotObject.IsInstanceValid(worldNotice))
+        {
+            worldNotice.QueueFree();
+            worldNotice = null;
+        }
+        var target = chairs.Aggregate(Vector3.Zero,
+            (sum, chair) => sum + chair.Model.GlobalPosition) / chairs.Length +
+                     Vector3.Up * 0.42f;
+        var eye = target + Vector3.Back * 5.5f + Vector3.Up * 1.8f;
+        camera.Current = false;
+        var inspectionCamera = new Camera3D
+        {
+            Name = "ChairInspectionCamera",
+            Current = true,
+            Near = 0.05f,
+            Far = 1000.0f,
+            Fov = 55.0f
+        };
+        AddChild(inspectionCamera);
+        inspectionCamera.GlobalPosition = eye;
+        inspectionCamera.LookAt(target, Vector3.Up);
+        GD.Print($"NIKAMI_AURORA_PLACEABLE_CAMERA status=active mode=chair-closeup " +
+                 $"count={chairs.Length} template=plc_chair2 " +
+                 $"fov=55.000 position={eye}");
+    }
+
     private static T? FindDescendant<T>(Node node) where T : Node
     {
         if (node is T match) return match;
@@ -1384,7 +1421,8 @@ public sealed partial class KotorModuleBoot : Node3D
         IReadOnlyList<PlaceableRecord> placeables,
         string manifestDirectory)
     {
-        interactivePlaceables.Clear();
+        materializedPlaceables.Clear();
+        var loaded = 0;
         for (var index = 0; index < placeables.Count; index++)
         {
             var placeable = placeables[index];
@@ -1397,16 +1435,19 @@ public sealed partial class KotorModuleBoot : Node3D
                 document.GenerateScene(state) is not Node3D model)
                 throw new InvalidDataException(
                     $"Godot could not import placeable {placeable.Tag}: {path}");
-            model.Name = $"Placeable_{placeable.Tag}";
+            var instanceId = PlaceableInstanceId(index);
+            model.Name = $"Placeable_{instanceId}_{placeable.Template}";
             model.Position = ToGodot(placeable.Position);
             model.Rotation = new Vector3(0, placeable.Bearing, 0);
             AddChild(model);
-            var instanceId = PlaceableInstanceId(index);
-            interactivePlaceables.Add(new InteractivePlaceable(instanceId, placeable, model));
+            materializedPlaceables.Add(new MaterializedPlaceable(instanceId, placeable, model));
+            loaded++;
             GD.Print($"NIKAMI_AURORA_PLACEABLE status=ready id={instanceId} tag={placeable.Tag} " +
-                     $"model={placeable.Model} nativeOnInventory={placeable.OnInventory}");
+                     $"template={placeable.Template} model={placeable.Model} " +
+                     $"static={placeable.Static} useable={placeable.Useable} " +
+                     $"nativeOnInventory={placeable.OnInventory}");
         }
-        return interactivePlaceables.Count;
+        return loaded;
     }
 
     private void UpdateInteractionPrompt()
@@ -1433,12 +1474,13 @@ public sealed partial class KotorModuleBoot : Node3D
                 : "E  OPEN LOCKDOWN DOOR";
     }
 
-    private InteractivePlaceable? NearestPlaceable(float maximumDistance)
+    private MaterializedPlaceable? NearestPlaceable(float maximumDistance)
     {
-        InteractivePlaceable? nearest = null;
+        MaterializedPlaceable? nearest = null;
         var best = maximumDistance;
-        foreach (var placeable in interactivePlaceables)
+        foreach (var placeable in materializedPlaceables)
         {
+            if (!placeable.Source.Useable) continue;
             var delta = placeable.Model.Position - playerBody.GlobalPosition;
             delta.Y = 0;
             var distance = delta.Length();
@@ -1449,7 +1491,7 @@ public sealed partial class KotorModuleBoot : Node3D
         return nearest;
     }
 
-    private void UsePlaceable(InteractivePlaceable placeable)
+    private void UsePlaceable(MaterializedPlaceable placeable)
     {
         ApplyGameplayTransition(
             RequireGameplaySimulation().UsePlaceable(placeable.InstanceId));
@@ -1461,7 +1503,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool IsDoorOpen(InteractiveDoor door) =>
         gameplaySimulation?.IsDoorOpen(door.InstanceId) ?? false;
 
-    private bool IsPlaceableOpened(InteractivePlaceable placeable) =>
+    private bool IsPlaceableOpened(MaterializedPlaceable placeable) =>
         gameplaySimulation?.IsPlaceableOpened(placeable.InstanceId) ?? false;
 
     private InteractiveDoor? NearestDoor(float maximumDistance)
@@ -1562,7 +1604,7 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void PresentPlaceableOpened(KotorPlaceableDefinition state)
     {
-        var placeable = interactivePlaceables.FirstOrDefault(candidate =>
+        var placeable = materializedPlaceables.FirstOrDefault(candidate =>
             candidate.InstanceId.Equals(state.InstanceId, StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException(
                 $"Gameplay state could not resolve placeable instance {state.InstanceId}");
@@ -1574,7 +1616,7 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void PresentItemsTransferred(KotorItemsTransferred transferred)
     {
-        var placeable = interactivePlaceables.FirstOrDefault(candidate =>
+        var placeable = materializedPlaceables.FirstOrDefault(candidate =>
             candidate.InstanceId.Equals(
                 transferred.Placeable.InstanceId, StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException(
@@ -2031,7 +2073,8 @@ public sealed partial class KotorModuleBoot : Node3D
         bool Locked, bool KeyRequired);
     private sealed record PlaceableRecord(string Template, string Tag,
         IReadOnlyList<float> Position, float Bearing, string? Glb, string? Model,
-        string? OnInventory, bool Locked, bool Useable, bool HasInventory, int AnimationState,
+        string? OnInventory, bool Locked, bool Static, bool Useable, bool HasInventory,
+        int AnimationState,
         string? BaseItemsSha256,
         IReadOnlyList<ItemStackRecord>? Inventory);
     private sealed record ItemStackRecord(
@@ -2099,7 +2142,7 @@ public sealed partial class KotorModuleBoot : Node3D
         public Node3D Model { get; } = model;
         public Vector3 ClosedPosition { get; } = closedPosition;
     }
-    private sealed class InteractivePlaceable(
+    private sealed class MaterializedPlaceable(
         string instanceId,
         PlaceableRecord source,
         Node3D model)
