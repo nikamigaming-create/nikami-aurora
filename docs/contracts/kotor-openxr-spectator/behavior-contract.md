@@ -8,7 +8,7 @@ runtime path and does not authorize a showcase video by itself.
 
 Verified development stack:
 
-- Godot 4.6.3 .NET;
+- Godot 4.7.1 .NET;
 - Meta XR Simulator 205.0;
 - OpenXR loader 1.1.54 reported by Godot;
 - Windows Vulkan 1.4.329, Godot Forward Mobile; and
@@ -119,7 +119,7 @@ an explicit renderer delta, not visual-parity evidence.
   the practical AVI finalization limit; the one-output wrapper removed both the
   incomplete destination and its temporary directory. OGV is now the private
   intermediate, and no final showcase MP4 exists yet.
-- Godot 4.6.3 emits two known engine-exit diagnostics after the post-draw
+- Godot 4.7.1 emits two known engine-exit diagnostics after the post-draw
   shutdown request (interaction-profile RIDs and a spatial-entity disconnect).
   The final wrapper requires exactly those two post-route signatures and rejects
   every changed, additional, or pre-shutdown error.

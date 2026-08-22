@@ -233,7 +233,7 @@ def export_effect_texture(
     source, txi = installation.texture_resource_result(resref)
     image = textures.image(resref)
     if source is None or image is None:
-        raise RuntimeError(f"First-encounter effect texture is missing: {resref}")
+        raise RuntimeError(f"Effect texture is missing: {resref}")
     source_bytes = resource_data(source)
     encoded = io.BytesIO()
     image.save(encoded, format="PNG", optimize=False)
@@ -427,11 +427,73 @@ def export_room(
     diffuse_textures: set[str] = set()
     lightmaps: set[str] = set()
     lights: list[dict[str, Any]] = []
+    emitters: list[dict[str, Any]] = []
     walkmesh_triangles: list[list[list[float]]] = []
 
-    def visit(node: Any, parent_transform: np.ndarray) -> None:
+    def visit(node: Any, parent_transform: np.ndarray, parent_path: str) -> None:
         nonlocal mesh_count, vertex_count, triangle_count
         world_transform = parent_transform @ quaternion_matrix(node)
+        node_path = f"{parent_path}/{node.name}" if parent_path else str(node.name)
+        if node.emitter is not None:
+            emitter = node.emitter
+
+            def scalar(controller_type: MDLControllerType, fallback: float) -> float:
+                return controller_value(node, controller_type, [fallback])[0]
+
+            def emitter_color(controller_type: MDLControllerType) -> list[float]:
+                return controller_value(node, controller_type, [1.0, 1.0, 1.0])
+
+            texture_name = str(emitter.texture or "").strip()
+            if not texture_name or texture_name.lower() == "null":
+                raise RuntimeError(
+                    f"Room emitter {model_name}/{node_path} has no texture")
+            direction = world_transform @ np.asarray([0.0, 0.0, 1.0, 0.0])
+            direction_length = np.linalg.norm(direction[:3])
+            if direction_length <= 1e-12:
+                raise RuntimeError(
+                    f"Room emitter {model_name}/{node_path} has no direction")
+            direction /= direction_length
+            emitters.append({
+                "schema": "nikami-aurora-kotor-room-emitter-v1",
+                "nodePath": node_path,
+                "authoredPosition": vector3(node.position),
+                "position": [float(item) for item in world_transform[:3, 3]],
+                "direction": [float(item) for item in direction[:3]],
+                "texture": export_effect_texture(
+                    installation, textures, texture_name, output_path.parent.parent),
+                "update": str(emitter.update),
+                "render": str(emitter.render),
+                "blend": str(emitter.blend),
+                "flags": int(emitter.flags),
+                "xGrid": int(emitter.x_grid),
+                "yGrid": int(emitter.y_grid),
+                # Controller slot 88 is BIRTHRATE for emitter nodes (and RADIUS
+                # for light nodes); slot 140 is emitter RANDVEL/light MULTIPLIER.
+                "birthRate": scalar(MDLControllerType.BIRTHRATE, 0.0),
+                "randomBirthRate": scalar(MDLControllerType.RANDOMBIRTHRATE, 0.0),
+                "velocity": scalar(MDLControllerType.VELOCITY, 0.0),
+                "randomVelocity": scalar(MDLControllerType.RANDVEL, 0.0),
+                "mass": scalar(MDLControllerType.MASS, 0.0),
+                "particleRotation": scalar(MDLControllerType.PARTICLEROT, 0.0),
+                "spreadRadians": scalar(MDLControllerType.SPREAD, 0.0),
+                "lifeExpectancy": scalar(MDLControllerType.LIFEEXP, 1.0),
+                "colorStart": emitter_color(MDLControllerType.COLORSTART),
+                "colorMid": emitter_color(MDLControllerType.COLORMID),
+                "colorEnd": emitter_color(MDLControllerType.COLOREND),
+                "percentStart": scalar(MDLControllerType.PERCENTSTART, 0.0),
+                "percentMid": scalar(MDLControllerType.PERCENTMID, 0.5),
+                "percentEnd": scalar(MDLControllerType.PERCENTEND, 1.0),
+                "alphaStart": scalar(MDLControllerType.ALPHASTART, 1.0),
+                "alphaMid": scalar(MDLControllerType.ALPHAMID, 1.0),
+                "alphaEnd": scalar(MDLControllerType.ALPHAEND, 0.0),
+                "sizeStart": scalar(MDLControllerType.SIZESTART, 1.0),
+                "sizeMid": scalar(MDLControllerType.SIZEMID, 1.0),
+                "sizeEnd": scalar(MDLControllerType.SIZEEND, 1.0),
+                "frameStart": scalar(MDLControllerType.FRAMESTART, 0.0),
+                "frameEnd": scalar(MDLControllerType.FRAMEEND, 0.0),
+                "fps": scalar(MDLControllerType.FPS, 0.0),
+                "blurLength": scalar(MDLControllerType.BLURLENGTH, 0.0),
+            })
         if node.light is not None:
             color = controller_value(node, MDLControllerType.COLOR, color3(node.light.color))
             radius = controller_value(node, MDLControllerType.RADIUS, [float(node.light.radius)])[0]
@@ -527,9 +589,9 @@ def export_room(
                     transform=KOTOR_TO_GODOT @ world_transform,
                 )
         for child in node.children:
-            visit(child, world_transform)
+            visit(child, world_transform, node_path)
 
-    visit(model.root, np.identity(4, dtype=np.float64))
+    visit(model.root, np.identity(4, dtype=np.float64), "")
     record = {
         "model": model_name,
         "glb": None,
@@ -541,6 +603,7 @@ def export_room(
         "diffuseTextures": sorted(diffuse_textures, key=str.lower),
         "lightmaps": sorted(lightmaps, key=str.lower),
         "lights": lights,
+        "emitters": emitters,
         "walkmeshTriangles": walkmesh_triangles,
     }
     if mesh_count > 0:
@@ -1900,6 +1963,39 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         record["position"] = vector3(room.position)
         room_records.append(record)
 
+    if module == "end_m01aa":
+        room_emitters = [
+            (room["model"], emitter)
+            for room in room_records
+            for emitter in room["emitters"]
+        ]
+        smoke_emitters = [
+            item for item in room_emitters
+            if item[1]["texture"]["resref"].lower() == "fx_smoke"
+        ]
+        spark_emitters = [
+            item for item in room_emitters
+            if item[1]["texture"]["resref"].lower() == "fx_spark"
+        ]
+        damaged_end = [
+            emitter for room_model, emitter in room_emitters
+            if room_model.lower() == "m01aa_03a"
+            and emitter["nodePath"].lower().endswith("object107/smoke044")
+        ]
+        if len(room_emitters) != 12 or len(smoke_emitters) != 9 or len(spark_emitters) != 3:
+            raise RuntimeError("Endar Spire room-emitter topology drifted")
+        if (len(damaged_end) != 1 or
+                damaged_end[0]["authoredPosition"] != [
+                    -4.944839954376221, -16.427499771118164, 1.4598400592803955] or
+                any(abs(actual - expected) > 0.0001 for actual, expected in zip(
+                    damaged_end[0]["position"],
+                    [-0.1933298110961914, -26.34709930419922, 1.6498400568962097])) or
+                abs(damaged_end[0]["birthRate"] - 40.0) > 0.0001 or
+                abs(damaged_end[0]["lifeExpectancy"] - 6.0) > 0.0001 or
+                [damaged_end[0][key] for key in
+                 ("sizeStart", "sizeMid", "sizeEnd")] != [2.0, 4.0, 5.0]):
+            raise RuntimeError("Endar Spire damaged-end smoke contract drifted")
+
     opening_locker = export_opening_locker(
         installation, module, output_root / "placeables" / "end_locker01.glb", textures)
     opening_chair = export_static_placeable(
@@ -2315,6 +2411,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
             "triggers": len(git.triggers),
             "walkmeshTriangles": sum(len(room["walkmeshTriangles"]) for room in room_records),
             "authoredLights": sum(len(room["lights"]) for room in room_records),
+            "authoredEmitters": sum(len(room["emitters"]) for room in room_records),
         },
         "limitations": [
             "Only Trask, Carth, the player, and the opening door have assembled render models; other creature and door records remain placements.",
@@ -2327,7 +2424,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(
         f"Imported {module}: rooms={len(room_records)} creatures={len(creatures)} "
-        f"triangles={sum(room['triangleCount'] for room in room_records)}"
+        f"triangles={sum(room['triangleCount'] for room in room_records)} "
+        f"emitters={sum(len(room['emitters']) for room in room_records)}"
     )
     print(f"Manifest: {manifest_path}")
     return manifest_path

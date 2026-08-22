@@ -229,6 +229,10 @@ Confirmed in the new runtime:
   hash-validated decoding of IMA ADPCM and KOTOR-wrapped MP3 payloads;
 - source-sized `w_laserfire_r` and `v_muzflash_01` projectile/muzzle textures,
   four launch/muzzle assertions, and at least three completed impact assertions;
+- all 12 source room emitters from `M01aa_08b`, `M01aa_03a`, `M01aa_02a`, and
+  `M01aa_05a`, including nine `fx_Smoke` systems and three additive
+  motion-blurred `fx_Spark` systems; the room-3 damaged-end smoke replaces the
+  incorrect clear-color void seen from encounter camera 20;
 - one asserted boot→opening dialogue→gear→corridor transmission→first encounter
   →gameplay route with 15 completed voices and seven authored selections;
 - separate proof and dialogue Canvas layers, allowing clean capture to retain

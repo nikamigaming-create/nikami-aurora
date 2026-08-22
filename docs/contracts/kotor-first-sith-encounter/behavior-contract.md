@@ -110,6 +110,13 @@ play the shot at launch and impact at arrival, and use source-sized additive
 textures instead of an opaque procedural sphere. The verifier counts four
 launches, four muzzle effects, and at least three completed impacts.
 
+The corridor geometry also owns persistent MDL emitters; these are separate
+from weapon projectile models. Camera 20 must have all five `M01aa_03a`
+emitters, including `Object107/smoke044` at the damaged corridor end. The full
+module gate requires nine `fx_Smoke` and three `fx_Spark` systems before the
+encounter can pass. See the room-emitter contract for controller transfer and
+source hashes.
+
 ## Alpha, depth, and lighting transfer
 
 Solid room and furniture surfaces remain in the opaque depth-writing path.
@@ -134,15 +141,15 @@ The owned-runtime gate is launched with `-TestFirstEncounter`. At
 - both voice resrefs played to completion;
 - battle music active;
 - four shot/projectile/muzzle events and at least three impacts;
+- nine smoke and three spark room emitters, including the damaged-end binding;
 - the Republic soldier in `dead` and both Sith in active staging; and
 - all six source environment placements materialized.
 
 Desktop capture logs currently satisfy every assertion with no Godot error or
 exception. OpenXR without a runtime falls back through the same deterministic
 path. Meta XR Simulator 205.0 also completes the route through Godot's Vulkan
-mobile renderer with `OPENXR status=ready`; its swapchain is not yet copied to
-a desktop spectator viewport, so this proves XR execution but not VR video
-capture.
+mobile renderer with `OPENXR status=ready`; the shared-world spectator copies
+the tracked HMD camera for non-black still and final-movie validation.
 
 Known limits:
 
@@ -152,6 +159,5 @@ Known limits:
   this ammunition row does not identify a separate authored impact emitter;
 - retail camera, placement, lighting, animation, and sub-frame timing telemetry
   has not yet been captured, so visual parity is not claimed; and
-- no showcase video is authorized until the OpenXR swapchain has a verified
-  spectator/mirror output and the facial, opacity, audio, and complete-route
-  gates all pass.
+- the final showcase MP4 remains gated on a clean merged-main full route and
+  successful one-output movie finalization.
