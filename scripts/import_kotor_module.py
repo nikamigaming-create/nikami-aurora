@@ -34,6 +34,7 @@ try:
     from pykotor.resource.generics.ifo import read_ifo
     from pykotor.resource.generics.utc import read_utc
     from pykotor.resource.generics.utd import read_utd
+    from pykotor.resource.generics.uti import read_uti
     from pykotor.resource.generics.utp import read_utp
     from pykotor.resource.type import ResourceType
     from pykotor.tools import creature as creature_tools
@@ -941,6 +942,11 @@ def export_opening_locker(
     if placeables_resource is None:
         raise RuntimeError("placeables.2da could not be resolved")
     placeables = read_2da(resource_data(placeables_resource))
+    baseitems_resource = installation.resource("baseitems", ResourceType.TwoDA)
+    if baseitems_resource is None:
+        raise RuntimeError("baseitems.2da could not be resolved")
+    baseitems_bytes = resource_data(baseitems_resource)
+    baseitems = read_2da(baseitems_bytes)
     model_name = str(placeables.get_cell(int(utp.appearance_id), "modelname"))
     if not model_name:
         raise RuntimeError("Opening locker model could not be resolved")
@@ -949,6 +955,51 @@ def export_opening_locker(
         scene, installation, model_name, textures, np.identity(4))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(patch_glb_texture_channels(scene.export(file_type="glb")))
+
+    item_definitions: dict[str, dict[str, Any]] = {}
+    item_stacks: dict[tuple[str, bool, bool], dict[str, Any]] = {}
+    for inventory_item in utp.inventory:
+        resref = canonical_resref(inventory_item.resref)
+        key = (resref.lower(), bool(inventory_item.droppable), bool(inventory_item.infinite))
+        if resref.lower() not in item_definitions:
+            uti_resource = installation.resource(resref, ResourceType.UTI)
+            if uti_resource is None:
+                raise RuntimeError(f"Locker item {resref}.uti could not be resolved")
+            uti_bytes = resource_data(uti_resource)
+            uti = read_uti(uti_bytes)
+            base_item = int(uti.base_item)
+
+            def base_cell(column: str) -> str:
+                value = str(baseitems.get_cell(base_item, column)).strip()
+                return "" if value == "****" else value
+
+            slots_text = base_cell("equipableslots")
+            item_definitions[resref.lower()] = {
+                "resref": resref,
+                "displayName": installation.string(uti.name, resref),
+                "tag": str(uti.tag),
+                "baseItem": base_item,
+                "charges": int(uti.charges),
+                "stackSize": int(uti.stack_size),
+                "modelVariation": int(uti.model_variation),
+                "bodyVariation": int(uti.body_variation),
+                "textureVariation": int(uti.texture_variation),
+                "equipableSlots": int(slots_text, 0) if slots_text else 0,
+                "itemClass": base_cell("itemclass"),
+                "modelType": int(base_cell("modeltype") or "0"),
+                "defaultModel": base_cell("defaultmodel"),
+                "defaultIcon": base_cell("defaulticon"),
+                "utiSha256": sha256_bytes(uti_bytes),
+            }
+        if key not in item_stacks:
+            item_stacks[key] = {
+                **item_definitions[resref.lower()],
+                "quantity": 0,
+                "droppable": bool(inventory_item.droppable),
+                "infinite": bool(inventory_item.infinite),
+            }
+        item_stacks[key]["quantity"] += 1
+
     return {
         "glb": f"placeables/{output_path.name}",
         "model": model_name,
@@ -957,8 +1008,10 @@ def export_opening_locker(
         "locked": bool(utp.locked),
         "useable": bool(utp.useable),
         "hasInventory": bool(utp.has_inventory),
+        "inventory": list(item_stacks.values()),
         "animationState": int(utp.animation_state),
         "utpSha256": sha256_bytes(utp_bytes),
+        "baseItemsSha256": sha256_bytes(baseitems_bytes),
         "modelSource": model_record,
     }
 

@@ -209,6 +209,24 @@ internal static class Program
                 MoveRange: 1.0f,
                 ResumeConversation: true)
         };
+        const string baseItemsSha256 =
+            "E9D031FAF0A5D3D4E9CCF33AEE5233FDA8F781A58B30FA722E7CF12B78C85C95";
+        var medpac = new KotorItemDefinition(
+            "g_i_medeqpmnt01", "Medpac", "g_i_medeqpmnt01",
+            "A6449C3EA78042B3E0B09440EAFEAA209C5AA207DE0AFA0CFBCC9296583D9972",
+            baseItemsSha256,
+            55, 0, 1, 2, 0, 0, 0, "I_MedEqpmnt", 0, "I_Null", "ii_device");
+        var clothing = new KotorItemDefinition(
+            "g_a_clothes01", "Clothing", "G_A_CLOTHES01",
+            "FC8AB4485644BEC2FAE71C99BBD8853170C1A5D739953B62EB95266173443CF1",
+            baseItemsSha256,
+            85, 0, 1, 0, 2, 1, 0x00002, "a_cloths", 1, "I_Null", "ia_armor");
+        var shortSword = new KotorItemDefinition(
+            "g_w_shortswrd01", "Short Sword", "G_w_Shortswrd01",
+            "9EC88EBA45CB0ED430483362121672F48CDD9C541ADFE4CF7442F76C14BFD652",
+            baseItemsSha256,
+            4, 0, 1, 1, 0, 0, 0x00030, "w_Shortswrd", 0,
+            "w_Shortswrd_001", "iw_sword");
         var simulation = new KotorGameplaySimulation(
             contracts,
             [
@@ -216,7 +234,12 @@ internal static class Program
                 new KotorDoorDefinition("door:0001", "end_door01", null)
             ],
             [new KotorPlaceableDefinition(
-                "placeable:0000", "end_locker01", "k_pend_chest02")]);
+                "placeable:0000", "end_locker01", "k_pend_chest02",
+                [
+                    new KotorItemStack(medpac, 2, false, false),
+                    new KotorItemStack(clothing, 1, false, false),
+                    new KotorItemStack(shortSword, 1, false, false)
+                ])]);
 
         var locker = simulation.UsePlaceable("PLACEABLE:0000");
         Expect(locker.Before.PlayerExperience == 0 && locker.After.PlayerExperience == 50,
@@ -225,11 +248,20 @@ internal static class Program
             "profile-owned locker state was not persisted");
         Expect(locker.Events.OfType<KotorExperienceAwarded>().Single().Awarded == 50,
             "locker transition did not expose its XP presentation event");
+        Expect(locker.After.PlayerInventory["g_i_medeqpmnt01"] == 2 &&
+               locker.After.PlayerInventory["g_a_clothes01"] == 1 &&
+               locker.After.PlayerInventory["g_w_shortswrd01"] == 1,
+            "authored footlocker items were not transferred exactly once");
+        Expect(locker.Events.OfType<KotorItemsTransferred>().Single().Items
+                   .Sum(stack => stack.Quantity) == 4,
+            "footlocker transition did not expose its item presentation event");
 
         var repeatedLocker = simulation.UsePlaceable("placeable:0000");
         Expect(repeatedLocker.After.PlayerExperience == 50 &&
                repeatedLocker.Events.Single() is KotorPlaceableAlreadyOpened,
             "repeated locker interaction was not idempotent");
+        Expect(repeatedLocker.After.PlayerInventory["g_i_medeqpmnt01"] == 2,
+            "repeated locker interaction duplicated its inventory");
 
         var dialogue = simulation.ExecuteScript("k_pend_traskdl40");
         Expect(dialogue.Before.PlayerExperience == 50 && dialogue.After.PlayerExperience == 150,

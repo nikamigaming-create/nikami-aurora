@@ -58,7 +58,8 @@ and contains 985 instructions.
   reports XP `50→150`.
 - Contract import fails if any validated instruction/action sequence drifts.
 - `end_locker01` is materialized from `footlker001.utp` and `PLC_FootLker`;
-  opening it executes `OnInventory=k_pend_chest02` and reports XP `0→50`.
+  its take-all transaction transfers the four authored UTP entries, executes
+  `OnInventory=k_pend_chest02`, and reports XP `0→50`.
 - The deterministic runtime chain executes locker then door contracts and
   asserts the complete XP transition `0→50→150`.
 - Experience, door, and placeable-used values now live in profile-owned

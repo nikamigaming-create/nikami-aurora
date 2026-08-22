@@ -57,8 +57,8 @@ therefore cannot enter the render-model extension lifecycle.
 
 Physical six-degree tracking, runtime model selection, trigger/grip/button/stick
 animation calibration, focus-loss recovery, controller/hand switching, haptic
-delivery, and final Quest manifest permissions require a connected-device gate
-and are not claimed complete.
+delivery (including the inventory-transfer pulse), and final Quest manifest
+permissions require a connected-device gate and are not claimed complete.
 
 Methodology reference:
 [Brobert OpenXR controller-model guide](https://github.com/Brobert-in-aus/guides/blob/main/vr/openxr-runtime-controller-models.md).

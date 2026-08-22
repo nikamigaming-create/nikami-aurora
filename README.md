@@ -33,6 +33,11 @@ before/after snapshots and typed events consumed by either desktop or OpenXR
 presentation. Duplicate Odyssey object tags remain independent through stable
 placement IDs.
 
+The opening footlocker now resolves its installed UTP/UTI contents and transfers
+the exact two Medpacs, Clothing, and Short Sword into that profile snapshot once.
+A compact world-space loot readout is shared by desktop and OpenXR; an active XR
+controller receives the same event through the versioned haptic action.
+
 XR controller presentation follows a three-level provider chain: portable
 OpenXR runtime models, dynamically available Meta FB models, then tracked
 procedural fallbacks. The same primary-stick and face-button actions feed
