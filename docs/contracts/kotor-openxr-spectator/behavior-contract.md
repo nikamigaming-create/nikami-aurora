@@ -115,11 +115,13 @@ an explicit renderer delta, not visual-parity evidence.
 - Physical-HMD pose, controller, stereo comfort, and delivered haptics still
   require hardware acceptance.
 - The Vulkan/OpenGL tone difference remains uncalibrated against retail.
-- Godot Movie Maker has not been invoked yet. No draft or showcase video was
-  generated while developing this contract.
+- One authorized full-route AVI attempt reached every runtime gate but exceeded
+  the practical AVI finalization limit; the one-output wrapper removed both the
+  incomplete destination and its temporary directory. OGV is now the private
+  intermediate, and no final showcase MP4 exists yet.
 - Godot 4.6.3 emits two known engine-exit diagnostics after the post-draw
   shutdown request (interaction-profile RIDs and a spatial-entity disconnect).
   The final wrapper requires exactly those two post-route signatures and rejects
   every changed, additional, or pre-shutdown error.
-- A final MP4 remains blocked on the complete startup-to-action route and all
-  facial, opacity, audio, desktop, fallback, and active-XR gates.
+- A final MP4 remains blocked until the OGV pipeline and local-avatar gate are
+  merged and all final desktop, fallback, and active-XR preflight gates pass.

@@ -46,7 +46,7 @@ if (-not $temporaryDirectory.StartsWith(
 }
 
 New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
-$intermediate = Join-Path $temporaryDirectory 'godot-showcase.avi'
+$intermediate = Join-Path $temporaryDirectory 'godot-showcase.ogv'
 $encoded = Join-Path $temporaryDirectory 'nikami-aurora-kotor-showcase.mp4'
 $godotStdoutLog = Join-Path $temporaryDirectory 'godot-stdout.log'
 $godotStderrLog = Join-Path $temporaryDirectory 'godot-stderr.log'
@@ -129,6 +129,8 @@ try {
         'spectator=True',
         'NIKAMI_AURORA_SHOWCASE_TRANSMISSION status=pass',
         'NIKAMI_AURORA_FIRST_ENCOUNTER status=pass',
+        ('NIKAMI_AURORA_XR_LOCAL_AVATAR status=gameplay-head-hidden ' +
+         'headMeshes=8 bodyMeshes=3 hands=left,right weapon=present'),
         'NIKAMI_AURORA_SHOWCASE status=pass'
     )
     foreach ($required in $requiredTelemetry) {

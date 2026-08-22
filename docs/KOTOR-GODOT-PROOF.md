@@ -68,6 +68,23 @@ without changing the system OpenXR runtime:
   -CaptureAndExit
 ```
 
+Capture the local-avatar first-person look-down gate after equipping the owned
+opening Clothing and Short Sword:
+
+```powershell
+./scripts/Start-KotorGodot.ps1 `
+  -OpenXRSimulator `
+  -SkipOpeningDialogue `
+  -OpenFirstLocker `
+  -EquipOpeningGear `
+  -XrBodyLookDown `
+  -CapturePath 'artifacts/kotor-xr-local-body-hands.png' `
+  -CaptureDialogueNode 'xr:body-lookdown' `
+  -CaptureFrame 1 `
+  -CleanCapture `
+  -CaptureAndExit
+```
+
 Generate an ignored local proof capture and automatically choose the first
 response:
 
@@ -161,6 +178,9 @@ Confirmed in the new runtime:
   non-black HMD-following spectator capture, without registry or UI mutation;
 - tracked-head-relative cinematic recentering with asserted zero positional
   and forward error, plus calibrated gameplay eye height without double-counting;
+- first-person XR masking of exactly the eight local `PMHA01` head meshes while
+  retaining the three Clothing body meshes, both hand bones, and the attached
+  Short Sword; desktop and cinematic cameras retain the complete head;
 - profile-owned native-coordinate movement simulation shared by desktop and XR
   intent, with synthetic speed/facing/dead-zone/door-blocker acceptance;
 - profile-owned transactional experience, door, placeable, and validated-script
@@ -228,6 +248,8 @@ Not yet implemented:
 - full character-creation UI and saved arbitrary appearance/equipment;
 - physical-headset runtime-model selection, haptic-delivery calibration, and
   stereo/input acceptance;
+- tracked-controller-to-avatar hand/arm IK and physical-headset look-down comfort
+  acceptance (the current source `pause1` pose keeps its authored hand placement);
 - general NCS VM execution and complete plot/party state;
 - retail door animation and complete `k_pend_door1xp` behavior beyond the
   validated XP branch;

@@ -21,7 +21,10 @@ branches. Full combat and general script execution remain active milestones.
 The current player slice materializes a deterministic chargen player from the
 installed appearance/portrait tables, drives source idle/walk/run clips, and
 shares one player/cinematic camera authority between desktop SpringArm and
-OpenXR origin presentations.
+OpenXR origin presentations. Active first-person XR gameplay masks only the
+local player's eight head meshes, preventing inside-face artifacts while the
+source torso, arms, hand rig, and equipped weapon remain attached and visible.
+Dialogue/cinematic cameras and every desktop path restore the complete head.
 
 Desktop keys and OpenXR controller axes now map into one immutable movement
 intent. Native-coordinate speed, facing, walkmesh, and closed-door outcomes are
@@ -88,7 +91,7 @@ all first-encounter effects before exposing a capture/movie stage key.
 
 The final development recording path is equally fail-closed: one wrapper runs
 Godot Movie Maker against the active OpenXR spectator, validates route telemetry
-and 1280×720 audio/video streams, converts a checked temporary intermediate to
+and 1280×720 audio/video streams, converts a checked temporary OGV intermediate to
 H.264/AAC MP4, deletes the temporary directory, and refuses to overwrite an
 existing output. Generated movies remain ignored local artifacts.
 

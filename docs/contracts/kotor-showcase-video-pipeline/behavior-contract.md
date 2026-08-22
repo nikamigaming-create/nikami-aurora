@@ -19,11 +19,11 @@ The wrapper refuses to start unless:
 - the launch uses `-OpenXRSimulator`, `-ShowcaseRoute`, and clean spectator
   presentation.
 
-`Start-KotorGodot.ps1 -MoviePath` separately requires both the showcase route
-and OpenXR simulator. It accepts only Godot Movie Maker `.avi` or `.ogv`
-  intermediates. The real Godot executable is launched with a
-  `ProcessStartInfo.ArgumentList` and `WaitForExit()` so arguments remain
-  correctly bounded and recording cannot race a detached GUI process.
+`Start-KotorGodot.ps1 -MoviePath` requires the OpenXR simulator plus either the
+showcase route or the isolated first-encounter diagnostic. It accepts only Godot
+Movie Maker `.avi` or `.ogv` intermediates. The real Godot executable is launched
+with a `ProcessStartInfo.ArgumentList` and `WaitForExit()` so arguments remain
+correctly bounded and recording cannot race a detached GUI process.
 
 ## Recording flow
 
@@ -34,8 +34,8 @@ and OpenXR simulator. It accepts only Godot Movie Maker `.avi` or `.ogv`
 3. Exit only when `NIKAMI_AURORA_SHOWCASE status=pass` has been emitted.
 4. Require the intermediate to exist and exceed 1 MiB.
 5. Reject the runtime log unless it contains active OpenXR, spectator,
-   transmission, first-encounter, and complete-route pass telemetry, with no
-   `ERROR`, `status=fail`, or desktop fallback.
+   transmission, first-encounter, local-head-hidden, and complete-route pass
+   telemetry, with no non-allowlisted `ERROR`, `status=fail`, or desktop fallback.
 6. Encode one temporary MP4 with H.264 CRF 18, `yuv420p`, AAC 192 kb/s, and
    fast-start metadata.
 7. Require exactly one 1280×720 video stream, at least one audio stream, and a
@@ -78,4 +78,9 @@ final invocation, current merged `main` must pass:
 - active Meta XR Simulator route with non-black spectator output; and
 - zero open PRs and no tracked private media.
 
-No AVI, OGV, or MP4 was generated while implementing this pipeline.
+The first authorized attempt used Godot AVI and completed every route gate, but
+the writer raised a C++ exception while finalizing after frame 6,152. The
+wrapper removed the incomplete output and temporary directory. At
+1280×720×60 fps this is consistent with Godot's documented 4 GiB AVI limit.
+The pipeline therefore uses OGV at video quality 0.9 and audio quality 0.8 as
+its private intermediate; the validated public result remains H.264/AAC MP4.
