@@ -85,6 +85,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private KotorGameplaySimulation? gameplaySimulation;
     private int capturedFrames;
     private int captureTargetFrame = 60;
+    private bool captureCompleted;
     private int readyFrames;
     private bool moduleReady;
     private bool automatedChoiceApplied;
@@ -95,12 +96,20 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool automatedEquipmentApplied;
     private bool automatedCorridorTrigger;
     private bool automatedCorridorTriggerVerified;
+    private bool automatedCorridorTransmissionVerified;
     private bool dialogueCameraActive;
+    private bool dialogueCameraWasDynamic;
     private float dialogueFieldOfView = 55.0f;
+    private string lastDynamicDialogueActor = "";
     private string dialogueOwnerActor = "";
     private string dialogueManifestDirectory = "";
     private string openingDialogueConversation = "";
     private DialogueGraph? openingDialogueGraph;
+    private DialogueGraph? pendingAutomaticDialogueGraph;
+    private string pendingAutomaticDialogueTarget = "";
+    private string currentDialogueNodeKey = "";
+    private int automaticDialogueTransitionCount;
+    private string captureDialogueNode = "";
     private ulong inputLockedUntilMsec;
     private string currentVoiceActor = "";
     private LipTrack? currentLipTrack;
@@ -121,6 +130,8 @@ public sealed partial class KotorModuleBoot : Node3D
         if (int.TryParse(System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_FRAME"),
                 out var configuredCaptureFrame))
             captureTargetFrame = Math.Max(1, configuredCaptureFrame);
+        captureDialogueNode =
+            System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_DIALOGUE_NODE") ?? "";
         forcedPlayerAnimation =
             System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_PLAYER_ANIMATION") ?? "";
 
@@ -236,6 +247,26 @@ public sealed partial class KotorModuleBoot : Node3D
                          "global=END_TRASK_DLG:10 event=50 conversation=end_trask01 starter=8 " +
                          "speaker=CARTH");
             }
+            if (!automatedCorridorTransmissionVerified &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRANSMISSION") == "1" &&
+                currentDialogueNodeKey.Equals("entry:35", StringComparison.OrdinalIgnoreCase))
+            {
+                automatedCorridorTransmissionVerified = true;
+                var snapshot = RequireGameplaySimulation().CaptureSnapshot();
+                if (!snapshot.GlobalNumbers.TryGetValue("END_CARTH_DLG", out var carthGlobal) ||
+                    carthGlobal != 1 ||
+                    !snapshot.GlobalNumbers.TryGetValue("END_TRASK_DLG", out var traskGlobal) ||
+                    traskGlobal != 11 || !snapshot.MapRevealed ||
+                    !dialogueSpeaker.Text.Equals("TRASK ULGO", StringComparison.OrdinalIgnoreCase) ||
+                    activeChoiceButtons.Count != 2 || automaticDialogueTransitionCount != 3)
+                    throw new InvalidDataException(
+                        "First corridor transmission did not reach the journal choice");
+                GD.Print("NIKAMI_AURORA_CORRIDOR_TRANSMISSION status=pass " +
+                         "nodes=32->33->34->35 automatic=3 " +
+                         "globals=END_CARTH_DLG:1,END_TRASK_DLG:11 map=revealed " +
+                         "speaker=TRASK_ULGO choices=2");
+            }
             var configuredChoice = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_DIALOGUE_CHOICE");
             if (!automatedChoiceApplied && readyFrames >= 20 &&
                 int.TryParse(configuredChoice, out var choice) &&
@@ -273,11 +304,15 @@ public sealed partial class KotorModuleBoot : Node3D
         }
 
         var capturePath = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE");
-        if (moduleReady && !string.IsNullOrWhiteSpace(capturePath) &&
-            ++capturedFrames == captureTargetFrame)
+        if (moduleReady && !captureCompleted && !string.IsNullOrWhiteSpace(capturePath) &&
+            ++capturedFrames >= captureTargetFrame &&
+            (string.IsNullOrWhiteSpace(captureDialogueNode) ||
+             currentDialogueNodeKey.Equals(
+                 captureDialogueNode, StringComparison.OrdinalIgnoreCase)))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(capturePath))!);
             var error = GetViewport().GetTexture().GetImage().SavePng(capturePath);
+            captureCompleted = true;
             GD.Print($"NIKAMI_AURORA_CAPTURE status={error} path={capturePath}");
             if (System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_EXIT") == "1")
                 GetTree().Quit(error == Error.Ok ? 0 : 1);
@@ -449,7 +484,9 @@ public sealed partial class KotorModuleBoot : Node3D
             var materializedPlayer = LoadPlayerModel(
                 manifest.Player, manifest.CameraStyle, manifestDirectory);
             var materializedActors = LoadActorModels(manifest.Creatures, manifestDirectory);
-            AddCreatureMarkers(manifest.Creatures);
+            if (System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_DEBUG_CREATURE_MARKERS") == "1")
+                AddCreatureMarkers(manifest.Creatures);
             var materializedDoors = LoadDoorModels(manifest.Doors, manifestDirectory);
             var materializedPlaceables = LoadPlaceableModels(manifest.Placeables, manifestDirectory);
             BuildNavigation(manifest.Rooms);
@@ -619,7 +656,8 @@ public sealed partial class KotorModuleBoot : Node3D
         {
             Name = "ProceduralFallback",
             Mesh = new BoxMesh { Size = new Vector3(0.07f, 0.11f, 0.16f) },
-            MaterialOverride = material
+            MaterialOverride = material,
+            Visible = false
         };
         container.AddChild(fallback);
         return (container, fallback);
@@ -656,6 +694,7 @@ public sealed partial class KotorModuleBoot : Node3D
         xrRightModelManager = CreatePortableRenderModel(xrRightModelContainer, false);
         xrLeftVendorModel = TryCreateMetaRenderModel(xrLeftModelContainer, true);
         xrRightVendorModel = TryCreateMetaRenderModel(xrRightModelContainer, false);
+        UpdateControllerModelFallbacks();
         GD.Print("NIKAMI_AURORA_OPENXR status=ready worldScale=1.000 " +
                  "authority=hmd-relative-to-game-camera");
         GD.Print($"NIKAMI_AURORA_OPENXR_MODELS status=ready portable=true " +
@@ -871,6 +910,8 @@ public sealed partial class KotorModuleBoot : Node3D
                 throw new InvalidDataException($"Authored camera {cameraId} has an invalid basis");
             var fov = node.CameraFov is > 0 ? node.CameraFov.Value : source.Fov;
             SetPresentationCameraBase(position, position + forward, up, fov);
+            dialogueCameraWasDynamic = false;
+            lastDynamicDialogueActor = "";
             GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active mode=static id={cameraId} " +
                      $"fov={fov:F3} position={position} xr={xrActive}");
             if (!xrActive && cameraId == 1)
@@ -894,6 +935,9 @@ public sealed partial class KotorModuleBoot : Node3D
             return;
 
         var listenerPosition = playerBody.GlobalPosition + Vector3.Up * 1.55f;
+        FaceModelToward(speaker, listenerPosition);
+        if (playerModel is not null)
+            FaceModelToward(playerModel, speaker.GlobalPosition + Vector3.Up * 1.0f);
         var talkDummy = FindDescendantBySuffix<Node3D>(speaker, "talkdummy");
         var speakerPosition = talkDummy?.GlobalPosition ??
             (actorTalkOffsets.TryGetValue(speakerActor, out var talkOffset)
@@ -902,15 +946,46 @@ public sealed partial class KotorModuleBoot : Node3D
         var listenerToSpeaker = speakerPosition - listenerPosition;
         var distance = listenerToSpeaker.Length();
         if (distance < 0.01f) return;
+        if (node.CameraAngle == 0 && dialogueCameraWasDynamic &&
+            lastDynamicDialogueActor.Equals(speakerActor, StringComparison.OrdinalIgnoreCase))
+        {
+            GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=preserved mode=dynamic " +
+                     $"actor={speakerActor} angle=0 xr={xrActive}");
+            return;
+        }
         var direction = listenerToSpeaker / distance;
-        var offset = Math.Min(0.25f * distance, 1.0f);
         var side = direction.Cross(Vector3.Down).Normalized();
         var center = 0.5f * (listenerPosition + speakerPosition);
-        var eye = center - offset * direction + offset * side + 0.1f * Vector3.Up;
-        var target = speakerPosition - 0.1f * distance * side + 0.1f * Vector3.Up;
+        var tightSpeaker = node.CameraAngle is 1 or 2 or 4;
+        Vector3 eye;
+        if (tightSpeaker)
+        {
+            var forwardOffset = Math.Min(0.325f * distance, 0.875f);
+            var sideOffset = Math.Min(0.11f * distance, 0.293f);
+            eye = speakerPosition - forwardOffset * direction +
+                  sideOffset * side + 0.1f * Vector3.Up;
+        }
+        else
+        {
+            var offset = Math.Min(0.25f * distance, 1.0f);
+            eye = center - offset * direction + offset * side + 0.1f * Vector3.Up;
+        }
+        var targetHeight = tightSpeaker ? -0.1f : 0.1f;
+        var target = speakerPosition - 0.1f * distance * side +
+                     targetHeight * Vector3.Up;
         SetPresentationCameraBase(eye, target, Vector3.Up, dialogueFieldOfView);
-        GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active mode=speaker actor={speakerActor} " +
-                 $"fov={dialogueFieldOfView:F3} position={eye} xr={xrActive}");
+        dialogueCameraWasDynamic = true;
+        lastDynamicDialogueActor = speakerActor;
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active " +
+                 $"mode={(tightSpeaker ? "speaker-tight" : "speaker")} actor={speakerActor} " +
+                 $"angle={node.CameraAngle} fov={dialogueFieldOfView:F3} position={eye} xr={xrActive}");
+    }
+
+    private static void FaceModelToward(Node3D model, Vector3 target)
+    {
+        target.Y = model.GlobalPosition.Y;
+        if (model.GlobalPosition.DistanceSquaredTo(target) < 0.0001f) return;
+        model.LookAt(target, Vector3.Up);
     }
 
     private string? ResolveDialogueActor(DialogueNode node)
@@ -925,6 +1000,7 @@ public sealed partial class KotorModuleBoot : Node3D
         PlayActorAnimation(actor, "tlknorm");
         currentVoiceActor = actor;
         actorLipRigs.TryGetValue(actor, out currentLipRig);
+        currentLipRig?.Modifier.SetNeutral();
         currentLipTrack = null;
         currentLipSegment = -1;
         dialogueVoice.Stop();
@@ -1003,8 +1079,27 @@ public sealed partial class KotorModuleBoot : Node3D
             PlayActorAnimation(currentVoiceActor, "pause1");
         GD.Print($"NIKAMI_AURORA_DIALOGUE_AUDIO status=finished actor={currentVoiceActor}");
         currentVoiceActor = "";
+        if (pendingAutomaticDialogueGraph is not null &&
+            !string.IsNullOrWhiteSpace(pendingAutomaticDialogueTarget))
+        {
+            AdvanceAutomaticDialogue();
+            return;
+        }
         foreach (var button in activeChoiceButtons)
             button.Disabled = false;
+    }
+
+    private void AdvanceAutomaticDialogue()
+    {
+        var graph = pendingAutomaticDialogueGraph;
+        var target = pendingAutomaticDialogueTarget;
+        pendingAutomaticDialogueGraph = null;
+        pendingAutomaticDialogueTarget = "";
+        if (graph is null || string.IsNullOrWhiteSpace(target)) return;
+        automaticDialogueTransitionCount++;
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_AUTO status=advanced " +
+                 $"target={target} count={automaticDialogueTransitionCount}");
+        PresentDialogueNode(graph, target, new HashSet<string>(), 0);
     }
 
     private void StopDialoguePerformance()
@@ -1015,6 +1110,9 @@ public sealed partial class KotorModuleBoot : Node3D
         currentLipTrack = null;
         currentLipSegment = -1;
         currentVoiceActor = "";
+        pendingAutomaticDialogueGraph = null;
+        pendingAutomaticDialogueTarget = "";
+        currentDialogueNodeKey = "";
         if (!string.IsNullOrWhiteSpace(actor))
             PlayActorAnimation(actor, "pause1");
     }
@@ -1023,6 +1121,8 @@ public sealed partial class KotorModuleBoot : Node3D
     {
         if (!dialogueCameraActive) return;
         dialogueCameraActive = false;
+        dialogueCameraWasDynamic = false;
+        lastDynamicDialogueActor = "";
         if (xrActive)
         {
             xrOrigin.TopLevel = false;
@@ -1062,10 +1162,10 @@ public sealed partial class KotorModuleBoot : Node3D
             worldNotice.QueueFree();
             worldNotice = null;
         }
-        var target = playerModel.GlobalPosition + Vector3.Up * 1.0f;
+        var target = playerModel.GlobalPosition + Vector3.Up * 1.1f;
         var forward = -playerModel.GlobalTransform.Basis.Z.Normalized();
         var right = playerModel.GlobalTransform.Basis.X.Normalized();
-        var eye = target + forward * 1.05f + right * 0.75f + Vector3.Up * 0.05f;
+        var eye = target + forward * 1.8f + right * 1.1f + Vector3.Up * 0.1f;
         if (xrActive)
         {
             SetPresentationCameraBase(eye, target, Vector3.Up, 45.0f);
@@ -1205,7 +1305,7 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void ClearLipPose()
     {
-        currentLipRig?.Modifier.StopSample();
+        currentLipRig?.Modifier.SetNeutral();
         currentLipRig = null;
     }
 
@@ -1218,6 +1318,9 @@ public sealed partial class KotorModuleBoot : Node3D
             RestoreGameplayCamera();
             return;
         }
+        currentDialogueNodeKey = key;
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_NODE status=presented key={key} " +
+                 $"kind={node.Kind} speaker={node.Speaker} sound={node.Sound}");
         ExecuteScript(node.Script1);
         ExecuteScript(node.Script2);
         ApplyDialogueCamera(node);
@@ -1244,6 +1347,17 @@ public sealed partial class KotorModuleBoot : Node3D
         foreach (var child in dialogueChoices.GetChildren())
             child.QueueFree();
         activeChoiceButtons.Clear();
+
+        if (TryGetAutomaticDialogueTarget(graph, node, out var automaticTarget))
+        {
+            pendingAutomaticDialogueGraph = graph;
+            pendingAutomaticDialogueTarget = automaticTarget;
+            GD.Print($"NIKAMI_AURORA_DIALOGUE_AUTO status=armed " +
+                     $"source={key} target={automaticTarget} voice={dialogueVoice.Playing}");
+            if (!dialogueVoice.Playing)
+                Callable.From(AdvanceAutomaticDialogue).CallDeferred();
+            return;
+        }
 
         var choices = new List<(DialogueNode Node, string Target)>();
         foreach (var link in node.Links)
@@ -1276,6 +1390,26 @@ public sealed partial class KotorModuleBoot : Node3D
             dialogueChoices.AddChild(button);
             activeChoiceButtons.Add(button);
         }
+    }
+
+    private static bool TryGetAutomaticDialogueTarget(
+        DialogueGraph graph,
+        DialogueNode node,
+        out string target)
+    {
+        target = "";
+        if (!node.Kind.Equals("entry", StringComparison.OrdinalIgnoreCase) ||
+            node.Links.Count != 1)
+            return false;
+        var link = node.Links[0];
+        if (!string.IsNullOrWhiteSpace(link.Condition1) ||
+            !string.IsNullOrWhiteSpace(link.Condition2) ||
+            !graph.Nodes.TryGetValue(link.Target, out var reply) ||
+            !reply.Kind.Equals("reply", StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrWhiteSpace(reply.Text))
+            return false;
+        target = link.Target;
+        return true;
     }
 
     private void FollowDialogueChoice(DialogueGraph graph, string key)
@@ -1383,6 +1517,10 @@ public sealed partial class KotorModuleBoot : Node3D
             throw new InvalidDataException("Player movement animations are missing");
         playerWalkSpeed = source.WalkDistance / (float)walkAnimation.GetLength();
         playerRunSpeed = source.RunDistance / (float)runAnimation.GetLength();
+        var playerFaceRig = BuildLipRig(model, playerAnimationPlayer);
+        playerFaceRig?.Modifier.SetNeutral();
+        GD.Print($"NIKAMI_AURORA_PLAYER_FACE status=" +
+                 $"{(playerFaceRig is null ? "unavailable" : "neutralized")}");
         cameraPivot.Position = source.CameraOffset is { Count: >= 3 }
             ? ToGodot(source.CameraOffset)
             : Vector3.Up * source.Height;
@@ -1668,6 +1806,9 @@ public sealed partial class KotorModuleBoot : Node3D
                     GD.Print($"NIKAMI_AURORA_GLOBAL status=changed name={global.Name} " +
                              $"value={global.Before}->{global.After}");
                     break;
+                case KotorMapRevealed map:
+                    GD.Print($"NIKAMI_AURORA_MAP status=revealed value={map.Before}->{map.After}");
+                    break;
                 case KotorDialogueRequested requested:
                     PresentRequestedDialogue(requested);
                     break;
@@ -1809,6 +1950,11 @@ public sealed partial class KotorModuleBoot : Node3D
         }
         foreach (var expected in variant.Animation.Animations)
             _ = FindAnimationName(animationPlayer, expected);
+        var playerFaceRig = BuildLipRig(model, animationPlayer);
+        playerFaceRig?.Modifier.SetNeutral();
+        GD.Print($"NIKAMI_AURORA_PLAYER_FACE status=" +
+                 $"{(playerFaceRig is null ? "unavailable" : "neutralized")} " +
+                 $"variant={variant.Id}");
 
         var requestedAnimation = string.IsNullOrWhiteSpace(currentPlayerAnimation)
             ? "pause1"
@@ -1859,6 +2005,20 @@ public sealed partial class KotorModuleBoot : Node3D
                      $"global={trigger.GlobalName}:{trigger.GlobalValue} " +
                      $"actor={trigger.ActorTag} event={trigger.UserEvent} " +
                      $"conversation={trigger.Conversation} starter={trigger.DialogueStarter}");
+            return;
+        }
+        if (contract.Kind is KotorScriptContractKind.GlobalNumberAdd or
+            KotorScriptContractKind.GlobalNumberSet)
+        {
+            GD.Print($"NIKAMI_AURORA_NCS status=executed script={contract.Resref} " +
+                     $"kind={contract.KindName} global={contract.GlobalName} " +
+                     $"value={contract.GlobalValue}");
+            return;
+        }
+        if (contract.Kind == KotorScriptContractKind.RevealMap)
+        {
+            GD.Print($"NIKAMI_AURORA_NCS status=executed script={contract.Resref} " +
+                     $"kind={contract.KindName}");
             return;
         }
         GD.Print($"NIKAMI_AURORA_NCS status=executed script={contract.Resref} " +
@@ -2091,6 +2251,9 @@ public sealed partial class KotorModuleBoot : Node3D
                     KotorScriptContractKind.PlotExperienceIfPlayerExperience,
                 "dialogue-open-door" => KotorScriptContractKind.DialogueOpenDoor,
                 "trigger-dialogue" => KotorScriptContractKind.TriggerDialogue,
+                "global-number-add" => KotorScriptContractKind.GlobalNumberAdd,
+                "global-number-set" => KotorScriptContractKind.GlobalNumberSet,
+                "reveal-map" => KotorScriptContractKind.RevealMap,
                 _ => throw new InvalidDataException(
                     $"Unsupported script contract kind {contract.Kind} for {contract.Resref}")
             };
@@ -2151,7 +2314,9 @@ public sealed partial class KotorModuleBoot : Node3D
                         contract.ConditionScriptInstructionCount
                             ?? throw new InvalidDataException(
                                 $"Trigger contract {contract.Resref} has no condition count"))
-                    : null);
+                    : null,
+                contract.GlobalName,
+                contract.GlobalValue);
         }).ToArray();
         var doors = manifest.Doors.Select((door, index) =>
             new KotorDoorDefinition(DoorInstanceId(index), door.Tag, door.OnOpen));

@@ -37,17 +37,26 @@ shape_time = clamp(s, 0, 15) / 16 * talk_length
 At voice time `t`, the engine locates the surrounding LIP frames and linearly
 interpolates their position samples and spherically interpolates their rotation
 samples. The seven participating facial bones are upper mouth, left/right mouth
-corners, jaw, left/right lower mouth, and tongue tip. Imported position tracks
-are absolute local positions and replace the facial bone position; adding the
-rest position a second time visibly stretches the mouth and is rejected.
-Quaternion endpoints are normalized before slerp, with identity used only for a
-zero-length sample.
+corners, jaw, left/right lower mouth, and tongue tip. Talk tracks are absolute
+in the animation supermodel's face space, while a unique installed head has its
+own rest offsets. The retargeted destination is therefore:
+
+```text
+unique_head_rest + (sampled_talk_pose - talk_shape_0_pose)
+```
+
+Rotation uses the equivalent rest multiplied by the shape-0-relative rotation
+delta. Directly replacing unique-head positions with generic supermodel values
+collapses Trask's mouth and is rejected by the retail comparison. Quaternion
+endpoints are normalized before slerp, with identity used only for a zero-length
+sample.
 
 The facial overlay runs through Godot's supported post-animation
 `SkeletonModifier3D` stage, after `tlknorm`. Starting another line replaces the
-voice/LIP state. Finishing a line removes the modifier influence and returns the
-speaker to `pause1`. User response buttons remain disabled while the current
-voice is playing.
+voice/LIP state. Finishing a line returns the speaker to `pause1` while holding
+shape 0 relative to the unique head rest, so the generic idle cannot collapse
+the mouth between lines. User response buttons remain disabled while the
+current voice is playing.
 
 ## Verification and confidence
 
@@ -59,10 +68,13 @@ Runtime telemetry confirms:
 - changing left/right shapes and interpolation factors throughout the line;
 - clean voice completion and `pause1` restart after all 51 frames;
 - distinct, non-stretched facial captures at separate voice times.
+- attached-head regressions for Trask, Carth, and the equipped player after the
+  shape-space correction.
 
 Resource selection, timing frames, face-bone binding, full-line completion, and
-cleanup are `confirmed`. Exact MP3 decoder latency and retail facial blend order
-are `probable` until compared against a hash-bound retail frame/audio trace.
+cleanup are `confirmed`. Trask's shape-0 and mid-voice frames are now compared
+against the same recorded retail line. Exact MP3 decoder latency and the generic
+body-gesture blend remain `probable`.
 The verified opening DLG has zero explicit animation records, so default talk is
 the source-backed behavior here. Gesture-ID mapping in other conversations and
 script-forced multi-speaker interruption remain pending experiments.
@@ -71,3 +83,8 @@ The first-corridor Carth transmission now adds a second confirmed participant:
 source tag `Carth` resolves an assembled six-skin actor, `tlknorm`, the installed
 45,144-byte voice, and a 58-frame LIP track. Recorded retail comparison confirms
 Carth stands for this line and corroborates the static camera composition.
+
+The continuation contract confirms that three empty reply records are automatic
+controls rather than visible choices. Voice completion advances into two Trask
+lines and the journal line while swapping the active talk/LIP rig, then stops at
+the two non-empty player replies.

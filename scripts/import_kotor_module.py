@@ -731,7 +731,7 @@ def export_player_actor(
         weapon_model=None,
         weapon_name=None,
         animation_model=animation_model,
-        animation_names=("pause1", "walk", "run"),
+        animation_names=("pause1", "walk", "run", "talk"),
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
     )
 
@@ -776,7 +776,7 @@ def export_player_actor(
         weapon_model=weapon,
         weapon_name=weapon_model_name,
         animation_model=animation_model,
-        animation_names=("pause1", "walk", "run"),
+        animation_names=("pause1", "walk", "run", "talk"),
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
     )
     head_hook = find_node_transform(body, "headhook")
@@ -1022,6 +1022,51 @@ def export_dialogue(
                 corridor_node["sound"].lower() != "nm01aatras02057_" or
                 int(corridor_node["cameraId"]) != 1):
             raise RuntimeError("end_trask01 starter 8 no longer matches the corridor contract")
+
+        continuation = {
+            "entry:32": (
+                "carth", "nm01aatras02057_", "k_pend_cadlg_inc", 45144,
+                "F9FD9BC2306476F33575EEE4571179565EBE7C6664045C69D39FD706B81BBE35",
+                58, "A5414EA825DE77A5E8D3C358B8204D375B0993B4044B3F96F4A234F66880B777"),
+            "entry:33": (
+                "end_trask", "nm01aatras02058_", "", 49896,
+                "59FA95B831CCD2882B1B440B5B263C9E9D16DD7682A2DDA7486CC19F5E10DB4A",
+                78, "AB84D55486948D302F3F19D5E4A7CE28834AB57F4B88FAABDED03B44673EA411"),
+            "entry:34": (
+                "end_trask", "nm01aatras02059_", "k_pend_traskdl47", 30240,
+                "34C398210BC4D2C59325EAEA5BDFB5AC548EABACA2C8C1349CC57BDB8DDDC868",
+                43, "8BAC67FB32447637BF62605E1FBB830894EF907DB98A011ED352DC164C6C593F"),
+            "entry:35": (
+                "end_trask", "nm01aatras02243_", "k_pend_map", 33696,
+                "C66D925EDB856DF253B0EEE29DB2710FE9CC89E49EB1AC56AB22AFF3B56FD6B7",
+                59, "E5BDFA7038B1CC30F397276C7218B01E5BCE14E683263AC954378D17E1B87F30"),
+        }
+        for key, expected in continuation.items():
+            node = nodes[key]
+            media = node["media"] or {}
+            actual = (
+                node["speaker"].lower(), node["sound"].lower(), node["script1"].lower(),
+                media.get("audioByteCount"), media.get("audioSha256"),
+                media.get("lipFrameCount"), media.get("lipSourceSha256"),
+            )
+            if actual != expected:
+                raise RuntimeError(f"end_trask01 continuation node drifted: {key}")
+        automatic_chain = [
+            ("entry:32", "reply:43", "entry:33", ""),
+            ("entry:33", "reply:44", "entry:34", ""),
+            ("entry:34", "reply:45", "entry:35", "k_pend_carth11"),
+        ]
+        for entry_key, reply_key, next_key, reply_script in automatic_chain:
+            entry = nodes[entry_key]
+            reply = nodes[reply_key]
+            if (len(entry["links"]) != 1 or entry["links"][0]["target"] != reply_key or
+                    reply["kind"] != "reply" or reply["text"].strip() or
+                    reply["script1"].lower() != reply_script or len(reply["links"]) != 1 or
+                    reply["links"][0]["target"] != next_key):
+                raise RuntimeError(
+                    f"end_trask01 automatic continuation drifted: {entry_key}")
+        if [link["target"] for link in nodes["entry:35"]["links"]] != ["reply:50", "reply:46"]:
+            raise RuntimeError("end_trask01 journal choices no longer match the corridor contract")
     graph = {
         "schema": "nikami-aurora-kotor-dialogue-v1",
         "resref": dialogue_name,
@@ -1240,7 +1285,9 @@ def find_instruction_sequence(
     return None
 
 
-def export_opening_script_contracts(installation: Installation, plot_table: Any) -> list[dict[str, Any]]:
+def export_opening_script_contracts(
+    installation: Installation, plot_table: Any, module: str
+) -> list[dict[str, Any]]:
     plot_rows = {
         str(plot_table.get_cell(index, "label")).lower(): int(plot_table.get_cell(index, "xp"))
         for index in range(plot_table.get_height())
@@ -1249,11 +1296,26 @@ def export_opening_script_contracts(installation: Installation, plot_table: Any)
     plot_base_xp = plot_rows[plot_label]
 
     def load_script(resref: str) -> tuple[bytes, Any]:
-        resource = installation.resource(resref, ResourceType.NCS)
-        if resource is None:
-            raise RuntimeError(f"Opening NCS resource was not found: {resref}")
+        resource = find_named_module_resource(installation, module, resref, "NCS")
         data = resource_data(resource)
         return data, read_ncs(data)
+
+    def initialized_integer(ncs: Any, bp_offset: int) -> int | None:
+        if bp_offset >= 0 or bp_offset % 4:
+            raise ValueError(f"Invalid NCS base-pointer offset: {bp_offset}")
+        save_bp = next(
+            index for index, instruction in enumerate(ncs.instructions)
+            if instruction.ins_type.name == "SAVEBP")
+        initializers: list[int | None] = []
+        for index, instruction in enumerate(ncs.instructions[:save_bp]):
+            if not instruction.ins_type.name.startswith("RSADD"):
+                continue
+            following = ncs.instructions[index + 1]
+            initializers.append(
+                int(following.args[0])
+                if following.ins_type.name == "CONSTI" else None)
+        slot = len(initializers) + bp_offset // 4
+        return initializers[slot] if 0 <= slot < len(initializers) else None
 
     door_data, door_ncs = load_script("k_pend_door1xp")
     door_expected = [
@@ -1353,6 +1415,55 @@ def export_opening_script_contracts(installation: Installation, plot_table: Any)
             find_instruction_sequence(condition_ncs.instructions, condition_read_expected) is None):
         raise RuntimeError("k_pend_traskdl14 no longer selects END_TRASK_DLG value 10")
 
+    carth_dialogue_data, carth_dialogue_ncs = load_script("k_pend_cadlg_inc")
+    carth_dialogue_expected = [
+        ("JSR", ()),
+        ("RETN", ()),
+        ("RSADDI", ()),
+        ("CONSTS", ("END_CARTH_DLG",)),
+        ("ACTION", (580, 1)),
+        ("CPDOWNSP", (-8, 4)),
+        ("MOVSP", (-4,)),
+        ("CPTOPSP", (-4, 4)),
+        ("CONSTI", (1,)),
+        ("ADDII", ()),
+        ("CONSTS", ("END_CARTH_DLG",)),
+        ("ACTION", (581, 2)),
+        ("MOVSP", (-4,)),
+        ("RETN", ()),
+    ]
+    if [ncs_signature(item) for item in carth_dialogue_ncs.instructions] != carth_dialogue_expected:
+        raise RuntimeError("k_pend_cadlg_inc no longer increments END_CARTH_DLG")
+
+    trask_dialogue_data, trask_dialogue_ncs = load_script("k_pend_traskdl47")
+    trask_dialogue_expected = [
+        ("CPTOPBP", (-72, 4)),
+        ("JSR", ()),
+        ("RETN", ()),
+        ("CPTOPSP", (-4, 4)),
+        ("CONSTS", ("END_TRASK_DLG",)),
+        ("ACTION", (581, 2)),
+        ("MOVSP", (-4,)),
+        ("RETN", ()),
+    ]
+    if (find_instruction_sequence(trask_dialogue_ncs.instructions, trask_dialogue_expected) is None or
+            initialized_integer(trask_dialogue_ncs, -72) != 11):
+        raise RuntimeError("k_pend_traskdl47 no longer sets END_TRASK_DLG value 11")
+
+    map_data, map_ncs = load_script("k_pend_map")
+    map_expected = [
+        ("JSR", ()),
+        ("RETN", ()),
+        ("CONSTI", (4294967295,)),
+        ("CONSTF", (0.0,)),
+        ("CONSTF", (0.0,)),
+        ("CONSTF", (0.0,)),
+        ("ACTION", (515, 2)),
+        ("RETN", ()),
+    ]
+    if [ncs_signature(item) for item in map_ncs.instructions] != map_expected:
+        raise RuntimeError("k_pend_map no longer reveals the complete module map")
+
     def xp_contract(resref: str, data: bytes, ncs: Any, required_xp: int,
                     percentage: int) -> dict[str, Any]:
         return {
@@ -1404,6 +1515,31 @@ def export_opening_script_contracts(installation: Installation, plot_table: Any)
             "conditionScriptSourceSha256": sha256_bytes(condition_data),
             "conditionScriptInstructionCount": len(condition_ncs.instructions),
         },
+        {
+            "schema": "nikami-aurora-kotor-script-contract-v1",
+            "resref": "k_pend_cadlg_inc",
+            "kind": "global-number-add",
+            "sourceSha256": sha256_bytes(carth_dialogue_data),
+            "instructionCount": len(carth_dialogue_ncs.instructions),
+            "globalName": "END_CARTH_DLG",
+            "globalValue": 1,
+        },
+        {
+            "schema": "nikami-aurora-kotor-script-contract-v1",
+            "resref": "k_pend_traskdl47",
+            "kind": "global-number-set",
+            "sourceSha256": sha256_bytes(trask_dialogue_data),
+            "instructionCount": len(trask_dialogue_ncs.instructions),
+            "globalName": "END_TRASK_DLG",
+            "globalValue": 11,
+        },
+        {
+            "schema": "nikami-aurora-kotor-script-contract-v1",
+            "resref": "k_pend_map",
+            "kind": "reveal-map",
+            "sourceSha256": sha256_bytes(map_data),
+            "instructionCount": len(map_ncs.instructions),
+        },
     ]
 
 
@@ -1432,7 +1568,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
     if plot_resource is None:
         raise RuntimeError("plot.2da could not be resolved")
     plot_table = read_2da(resource_data(plot_resource))
-    script_contracts = export_opening_script_contracts(installation, plot_table)
+    script_contracts = export_opening_script_contracts(installation, plot_table, module)
     triggers = export_triggers(installation, git.triggers)
     area_resref = canonical_resref(ifo.area_name)
     lyt_resource = installation.resource(area_resref, ResourceType.LYT)
@@ -1608,8 +1744,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
             "authoredLights": sum(len(room["lights"]) for room in room_records),
         },
         "limitations": [
-            "Only Trask and the opening door are materialized; other creature and door records remain placements.",
-            "Dialogue traversal is partial; scripts, per-node gestures, animated cameras, and shot obstruction remain.",
+            "Only Trask, Carth, the player, and the opening door have assembled render models; other creature and door records remain placements.",
+            "Dialogue traversal is partial; unsupported scripts, per-node gestures, animated cameras, and shot obstruction remain.",
             "Room lightmaps and light nodes are source-authored; renderer transfer-function parity remains under test.",
         ],
     }

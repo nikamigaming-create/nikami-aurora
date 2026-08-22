@@ -110,6 +110,7 @@ Confirmed in synthetic and owned-runtime tests:
 - source-opaque room materials remain audited;
 - no-HMD Oculus OpenXR falls back cleanly through the same progression path.
 
-The rest of starter 8, Trask's response, exact transmission color/UI, true
+The remainder of starter 8 and Trask's journal prompt continue under the
+`kotor-corridor-transmission` contract. Exact transmission color/UI, true
 physical-HMD acceptance, Trask follower movement, and the following combat
 encounter remain subsequent isolated contracts.

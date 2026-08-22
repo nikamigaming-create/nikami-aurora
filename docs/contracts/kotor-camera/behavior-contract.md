@@ -21,9 +21,12 @@ The speaker position follows the animated `talkdummy` node. Until a player
 character model is assembled, the listener talk point is a documented 1.55 m
 offset from the authored player entry.
 
-The current proof chooses a deterministic speaker-close framing. Source-style
-shot randomization and line-of-sight correction remain pending so captures and
-tests stay reproducible.
+The current proof chooses deterministic framing. The corridor transmission's
+source `CameraAngle=1` uses a retail-calibrated tight-speaker shot after the
+participants face one another; an angle-0 continuation by the same speaker
+preserves that camera. Other dynamic nodes retain deterministic speaker-close
+framing. Source-style shot randomization and line-of-sight correction remain
+pending isolated experiments.
 
 ## Verified opening evidence
 

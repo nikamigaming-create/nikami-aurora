@@ -3,6 +3,7 @@ param(
     [string]$Manifest,
     [string]$Godot,
     [string]$CapturePath,
+    [string]$CaptureDialogueNode,
     [int]$CaptureFrame = 60,
     [int]$DialogueChoice = -1,
     [double]$TestMoveMeters = 0,
@@ -13,6 +14,7 @@ param(
     [switch]$EquipOpeningGear,
     [switch]$TestTutorialXpChain,
     [switch]$TestFirstCorridorTrigger,
+    [switch]$TestFirstCorridorTransmission,
     [switch]$SkipOpeningDialogue,
     [switch]$OpenXR,
     [switch]$CleanCapture,
@@ -44,6 +46,9 @@ if (-not [string]::IsNullOrWhiteSpace($CapturePath)) {
     $env:NIKAMI_AURORA_CAPTURE_FRAME = $CaptureFrame.ToString(
         [Globalization.CultureInfo]::InvariantCulture)
 }
+if (-not [string]::IsNullOrWhiteSpace($CaptureDialogueNode)) {
+    $env:NIKAMI_AURORA_CAPTURE_DIALOGUE_NODE = $CaptureDialogueNode
+}
 if ($CaptureAndExit) {
     $env:NIKAMI_AURORA_CAPTURE_EXIT = "1"
 }
@@ -72,6 +77,11 @@ if ($TestTutorialXpChain) {
 }
 if ($TestFirstCorridorTrigger) {
     $env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRIGGER = "1"
+    $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
+}
+if ($TestFirstCorridorTransmission) {
+    $env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRIGGER = "1"
+    $env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRANSMISSION = "1"
     $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
 }
 if (-not [string]::IsNullOrWhiteSpace($TestPlayerAnimation)) {
@@ -114,6 +124,7 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_MODULE_MANIFEST -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_FRAME -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_DIALOGUE_NODE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_EXIT -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_DIALOGUE_CHOICE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_MOVE_METERS -ErrorAction SilentlyContinue
@@ -124,6 +135,7 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_TEST_EQUIP_OPENING_GEAR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRIGGER -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRANSMISSION -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_OPENXR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CLEAN -ErrorAction SilentlyContinue

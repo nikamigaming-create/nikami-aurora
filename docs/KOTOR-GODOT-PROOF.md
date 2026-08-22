@@ -18,7 +18,7 @@ retail executable.
 - Navigation: 540 walkable source triangles with an accepted grounded movement
   proof from the authored entry point.
 - Player proof: portrait 18 / appearance 137, 11 meshes, 2,603 triangles, five
-  skins, and source `pause1`, `walk`, and `run` clips.
+  skins, and source `pause1`, `walk`, `run`, and facial `talk` clips.
 
 The importer resolves Trask from the area-local `end_trask.utc`, then applies
 the installed rules tables to assemble:
@@ -127,10 +127,20 @@ Confirmed in the new runtime:
 - source-assembled standing Carth with independent head skin, inherited
   `tlknorm`, installed voice/LIP, and retail-matched static camera 1 framing;
 - desktop cinematic-camera ownership separated from the gameplay SpringArm;
+- voice-finished automatic traversal of blank DLG reply controls from Carth
+  through Trask's journal line, ending at the two authored player responses;
+- module-scoped NCS effects for `END_CARTH_DLG=1`, `END_TRASK_DLG=11`, and
+  full-map reveal, without borrowing the next module's similarly named script;
+- retail-calibrated participant facing and tight `CameraAngle=1` Trask framing;
+- unique-head-relative LIP translation/rotation deltas, preventing generic
+  supermodel mouth collapse while preserving attached Trask, Carth, and player
+  head/hand hierarchies;
 - OpenXR action map and tracked grip nodes for movement, sprint, interaction,
   recenter, and haptic output;
 - portable and Meta runtime-controller model providers with per-hand procedural
   fallbacks kept local to the tracked grip pose;
+- desktop-hidden controller fallbacks and opt-in debug creature markers, keeping
+  proof/release frames free of placeholder geometry;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
 - walkmesh-constrained player movement;

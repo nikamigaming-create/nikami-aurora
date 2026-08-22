@@ -57,12 +57,20 @@ transmission at DLG starter 8. Carth is source-assembled and standing under the
 retail-matched static camera; desktop cinematics use an independent camera that
 the gameplay SpringArm cannot overwrite.
 
+That transmission now continues without fake prompts through the three empty
+DLG reply records, plays both Trask responses and the journal line, advances the
+two authored globals, reveals the map in profile state, and stops at the two
+real player responses. The tight Trask shot is calibrated against the same
+recorded retail sequence, and facial LIP deltas preserve each unique head's
+authored mouth rest instead of replacing it with the generic supermodel pose.
+
 XR controller presentation follows a three-level provider chain: portable
 OpenXR runtime models, dynamically available Meta FB models, then tracked
 procedural fallbacks. The same primary-stick and face-button actions feed
 gameplay and eventual live model animation. Runtime-model managers are created
 only after OpenXR initializes, so normal desktop and no-HMD fallback boots do
-not depend on an XR extension lifecycle.
+not depend on an XR extension lifecycle. Procedural controller meshes also stay
+hidden until XR is active, so they cannot leak into desktop character shots.
 
 ## Why a new runtime
 
