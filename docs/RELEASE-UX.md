@@ -30,3 +30,16 @@ developer shell:
 
 The checked-in PowerShell and Python entry points are development harnesses for
 the same pipeline. They are not the intended release interface.
+
+## Distribution gates
+
+`.gitignore` is not a release boundary. Every desktop archive and future XR
+package must be inspected independently after export and must reject game
+archives, generated assets, local captures, signing material, and private paths.
+The user-owned conversion result must be deterministic, versioned, fully
+SHA-256 indexed, validated in a staging directory, and atomically installed so
+a failed update leaves the previous cache usable.
+
+This gate follows the supplied
+[asset-free Godot XR release model](https://github.com/Brobert-in-aus/guides/blob/main/vr/shipping-an-asset-free-godot-xr-port.md),
+adapted to Aurora's owned-install importer and desktop/OpenXR targets.

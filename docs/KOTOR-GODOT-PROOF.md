@@ -17,6 +17,8 @@ retail executable.
 - Lighting: installed area ambient color and 134 room-model light records.
 - Navigation: 540 walkable source triangles with an accepted grounded movement
   proof from the authored entry point.
+- Player proof: portrait 18 / appearance 137, 11 meshes, 2,603 triangles, five
+  skins, and source `pause1`, `walk`, and `run` clips.
 
 The importer resolves Trask from the area-local `end_trask.utc`, then applies
 the installed rules tables to assemble:
@@ -43,6 +45,13 @@ of the first response advances to Trask's next authored entry.
 ```powershell
 ./scripts/Import-KotorModule.ps1 -GameRoot '<owned KOTOR install>'
 ./scripts/Start-KotorGodot.ps1
+```
+
+Request the OpenXR presentation path (with automatic desktop fallback when no
+HMD is available):
+
+```powershell
+./scripts/Start-KotorGodot.ps1 -OpenXR
 ```
 
 Generate an ignored local proof capture and automatically choose the first
@@ -91,6 +100,12 @@ Confirmed in the new runtime:
   `end_tutorial` row from `plot.2da`;
 - exact `end_locker01` UTP placement and `PLC_FootLker` model with bounded `E`
   interaction and `OnInventory=k_pend_chest02` execution;
+- textured `P_MAL_A_MED_01` player assembled from `PMBAM`, `PMBAMA01`, and
+  `PMHA01` without a private save;
+- third-person source-style camera and source-distance-derived player movement
+  animation speeds;
+- opt-in OpenXR origin/camera path with desktop fallback and HMD-relative
+  cinematic camera authority;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
 - walkmesh-constrained player movement;
@@ -103,7 +118,9 @@ Not yet implemented:
 - dialogue-camera obstruction correction and nondeterministic shot variants;
 - general DLG gesture-ID execution outside this zero-gesture conversation;
 - area, effects, and music playback;
-- player character creation/model assembly;
+- full character-creation UI and save-selected appearance/equipment;
+- OpenXR controller actions, render models, haptics, and physical-headset
+  stereo acceptance;
 - general NCS VM execution and complete plot/party state;
 - retail door animation and the installed `k_pend_door1xp` NCS behavior;
 - combat, inventory, saves, and area transitions.

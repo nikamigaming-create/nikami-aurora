@@ -18,6 +18,11 @@ walkmeshes and the first authored lockdown door is materialized and interactive.
 Validated NCS contracts now execute the opening dialogue-door and plot-XP
 branches. Full combat and general script execution remain active milestones.
 
+The current player slice materializes a deterministic chargen player from the
+installed appearance/portrait tables, drives source idle/walk/run clips, and
+shares one player/cinematic camera authority between desktop SpringArm and
+OpenXR origin presentations.
+
 ## Why a new runtime
 
 The existing [OpenKOTOR](https://github.com/nikamigaming-create/OpenKOTOR)

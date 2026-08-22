@@ -25,3 +25,9 @@ project/assembly_name="Nikami.Aurora.Godot"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.006, 0.012, 0.025, 1)
+
+[xr]
+
+openxr/enabled=false
+openxr/startup_alert=false
+shaders/enabled=true

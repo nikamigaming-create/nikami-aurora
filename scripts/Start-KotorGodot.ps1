@@ -7,9 +7,12 @@ param(
     [int]$DialogueChoice = -1,
     [double]$TestMoveMeters = 0,
     [int]$TestPlayerXp = -1,
+    [string]$TestPlayerAnimation,
     [switch]$OpenFirstDoor,
     [switch]$OpenFirstLocker,
     [switch]$TestTutorialXpChain,
+    [switch]$SkipOpeningDialogue,
+    [switch]$OpenXR,
     [switch]$CleanCapture,
     [switch]$LipSyncCloseup,
     [switch]$CaptureAndExit
@@ -60,6 +63,15 @@ if ($OpenFirstLocker) {
 if ($TestTutorialXpChain) {
     $env:NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN = "1"
 }
+if (-not [string]::IsNullOrWhiteSpace($TestPlayerAnimation)) {
+    $env:NIKAMI_AURORA_TEST_PLAYER_ANIMATION = $TestPlayerAnimation
+}
+if ($SkipOpeningDialogue) {
+    $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
+}
+if ($OpenXR) {
+    $env:NIKAMI_AURORA_OPENXR = "1"
+}
 if ($CleanCapture) {
     $env:NIKAMI_AURORA_CAPTURE_CLEAN = "1"
 }
@@ -72,7 +84,11 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Godot C# build failed with code $LASTEXITCODE"
     }
-    & $Godot --path (Join-Path $repo "godot")
+    $godotArguments = @("--path", (Join-Path $repo "godot"))
+    if ($OpenXR) {
+        $godotArguments += @("--xr-mode", "on")
+    }
+    & $Godot @godotArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Godot exited with code $LASTEXITCODE"
     }
@@ -85,9 +101,12 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_DIALOGUE_CHOICE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_MOVE_METERS -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_PLAYER_XP -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_PLAYER_ANIMATION -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_OPEN_DOOR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_OPEN_LOCKER -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_OPENXR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CLEAN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP -ErrorAction SilentlyContinue
 }
