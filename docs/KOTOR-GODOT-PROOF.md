@@ -120,6 +120,8 @@ Confirmed in the new runtime:
   hierarchy attachment and preserved idle/walk/run clips;
 - all three source `plc_chair2` opening-room placements materialized from one
   `PLC_Chair2` model while remaining excluded from interaction targeting;
+- source-opaque lightmapped and base room materials audited into opaque
+  depth-writing paths, eliminating floor bleed through opening-room furniture;
 - OpenXR action map and tracked grip nodes for movement, sprint, interaction,
   recenter, and haptic output;
 - portable and Meta runtime-controller model providers with per-hand procedural
