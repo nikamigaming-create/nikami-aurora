@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Godot;
+using Nikami.Aurora.Profiles.Kotor;
+using NumericsVector3 = System.Numerics.Vector3;
 
 namespace Nikami.Aurora.GodotRuntime;
 
@@ -29,6 +31,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private Camera3D camera = null!;
     private XROrigin3D xrOrigin = null!;
     private XRCamera3D xrCamera = null!;
+    private XRController3D xrLeftHand = null!;
+    private XRController3D xrRightHand = null!;
     private bool xrActive;
     private Node3D? playerModel;
     private AnimationPlayer? playerAnimationPlayer;
@@ -36,6 +40,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private string forcedPlayerAnimation = "";
     private float playerWalkSpeed = 1.7f;
     private float playerRunSpeed = 5.4f;
+    private KotorMovementSimulation? movementSimulation;
+    private NumericsVector3 simulationPlayerPosition;
     private float gameplayFieldOfView = DefaultGameplayFieldOfView;
     private AudioStreamPlayer dialogueVoice = null!;
     private Godot.Environment runtimeEnvironment = null!;
@@ -112,21 +118,34 @@ public sealed partial class KotorModuleBoot : Node3D
     public override void _Process(double delta)
     {
         var basis = new Basis(Vector3.Up, yaw);
-        var movement = Vector3.Zero;
-        if (Input.IsKeyPressed(Key.W)) movement -= basis.Z;
-        if (Input.IsKeyPressed(Key.S)) movement += basis.Z;
-        if (Input.IsKeyPressed(Key.A)) movement -= basis.X;
-        if (Input.IsKeyPressed(Key.D)) movement += basis.X;
-        var playerMoved = false;
-        var sprinting = Input.IsKeyPressed(Key.Shift);
-        if (!dialoguePanel.Visible && movement.LengthSquared() > 0.001f)
+        var rightIntent = 0.0f;
+        var forwardIntent = 0.0f;
+        if (Input.IsKeyPressed(Key.W)) forwardIntent += 1.0f;
+        if (Input.IsKeyPressed(Key.S)) forwardIntent -= 1.0f;
+        if (Input.IsKeyPressed(Key.A)) rightIntent -= 1.0f;
+        if (Input.IsKeyPressed(Key.D)) rightIntent += 1.0f;
+        if (xrActive)
         {
-            var speed = sprinting ? playerRunSpeed : playerWalkSpeed;
-            playerMoved = MovePlayer(movement.Normalized() * speed * (float)delta);
+            var stick = xrLeftHand.GetVector2("move");
+            rightIntent += stick.X;
+            forwardIntent += stick.Y;
         }
+        var sprinting = Input.IsKeyPressed(Key.Shift) ||
+                        (xrActive && xrLeftHand.IsButtonPressed("sprint"));
+        var intent = KotorMovementIntent.FromAxes(rightIntent, forwardIntent, sprinting);
+        var movementResult = !dialoguePanel.Visible
+            ? StepPlayer(intent, (float)delta)
+            : new KotorMovementResult(
+                simulationPlayerPosition, true, false, KotorLocomotionMode.Idle);
+        var requestedAnimation = movementResult.Mode switch
+        {
+            KotorLocomotionMode.Walk => "walk",
+            KotorLocomotionMode.Run => "run",
+            _ => "pause1"
+        };
         PlayPlayerAnimation(!string.IsNullOrWhiteSpace(forcedPlayerAnimation)
             ? forcedPlayerAnimation
-            : playerMoved ? sprinting ? "run" : "walk" : "pause1");
+            : requestedAnimation);
         UpdateInteractionPrompt();
         UpdateLipSync();
 
@@ -219,13 +238,32 @@ public sealed partial class KotorModuleBoot : Node3D
         }
         else if (inputEvent is InputEventKey interact && interact.Pressed && interact.Keycode == Key.E)
         {
-            var placeable = NearestPlaceable(2.6f);
-            var door = NearestDoor(2.6f);
-            if (placeable is not null && !dialoguePanel.Visible)
-                UsePlaceable(placeable);
-            else if (door is not null && !dialoguePanel.Visible)
-                ToggleDoor(door);
+            HandleInteraction();
         }
+    }
+
+    private void OnXrButtonPressed(string name)
+    {
+        if (name.EndsWith("interact", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleInteraction();
+        }
+        else if (name.EndsWith("recenter", StringComparison.OrdinalIgnoreCase))
+        {
+            XRServer.CenterOnHmd(XRServer.RotationMode.ResetButKeepTilt, true);
+            GD.Print("NIKAMI_AURORA_OPENXR status=recentered mode=keep-tilt");
+        }
+    }
+
+    private void HandleInteraction()
+    {
+        if (dialoguePanel.Visible) return;
+        var placeable = NearestPlaceable(2.6f);
+        var door = NearestDoor(2.6f);
+        if (placeable is not null)
+            UsePlaceable(placeable);
+        else if (door is not null)
+            ToggleDoor(door);
     }
 
     private async void LoadModuleAsync(string manifestPath)
@@ -290,10 +328,12 @@ public sealed partial class KotorModuleBoot : Node3D
             var materializedDoors = LoadDoorModels(manifest.Doors, manifestDirectory);
             var materializedPlaceables = LoadPlaceableModels(manifest.Placeables, manifestDirectory);
             BuildNavigation(manifest.Rooms);
+            simulationPlayerPosition = ToNumerics(manifest.Entry.Position);
             var entry = ToGodot(manifest.Entry.Position);
             if (!TryProjectToWalkmesh(entry, out var entryGround))
                 throw new InvalidDataException($"Authored entry point is not on the imported walkmesh: {entry}");
             entry.Y = entryGround;
+            simulationPlayerPosition.Z = entryGround;
             var trask = manifest.Creatures.FirstOrDefault(creature =>
                 creature.Template.Equals("end_trask", StringComparison.OrdinalIgnoreCase));
             playerBody.GlobalPosition = entry;
@@ -401,6 +441,22 @@ public sealed partial class KotorModuleBoot : Node3D
             Current = false
         };
         xrOrigin.AddChild(xrCamera);
+        xrLeftHand = new XRController3D
+        {
+            Name = "XRLeftHand",
+            Tracker = "left_hand",
+            Pose = "grip"
+        };
+        xrLeftHand.ButtonPressed += action => OnXrButtonPressed(action.ToString());
+        xrOrigin.AddChild(xrLeftHand);
+        xrRightHand = new XRController3D
+        {
+            Name = "XRRightHand",
+            Tracker = "right_hand",
+            Pose = "grip"
+        };
+        xrRightHand.ButtonPressed += action => OnXrButtonPressed(action.ToString());
+        xrOrigin.AddChild(xrRightHand);
     }
 
     private void CreateAudio()
@@ -1347,6 +1403,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private void BuildNavigation(IEnumerable<RoomRecord> rooms)
     {
         navigationTriangles.Clear();
+        var profileTriangles = new List<KotorNavigationTriangle>();
         foreach (var room in rooms)
         {
             if (room.WalkmeshTriangles is null) continue;
@@ -1357,56 +1414,76 @@ public sealed partial class KotorModuleBoot : Node3D
                     ToGodotWithOffset(triangle[0], room.Position),
                     ToGodotWithOffset(triangle[1], room.Position),
                     ToGodotWithOffset(triangle[2], room.Position)));
+                profileTriangles.Add(new KotorNavigationTriangle(
+                    ToNumericsWithOffset(triangle[0], room.Position),
+                    ToNumericsWithOffset(triangle[1], room.Position),
+                    ToNumericsWithOffset(triangle[2], room.Position)));
             }
         }
+        movementSimulation = new KotorMovementSimulation(
+            profileTriangles,
+            new KotorMovementConfiguration(playerWalkSpeed, playerRunSpeed));
     }
 
     private bool MovePlayer(Vector3 displacement)
     {
-        if (navigationTriangles.Count == 0) return false;
-        var candidate = playerBody.GlobalPosition + new Vector3(displacement.X, 0, displacement.Z);
-        foreach (var door in interactiveDoors)
-        {
-            if (door.Open) continue;
-            var obstruction = candidate - door.ClosedPosition;
-            obstruction.Y = 0;
-            if (obstruction.LengthSquared() < 0.65f * 0.65f) return false;
-        }
-        if (!TryProjectToWalkmesh(candidate, out var ground)) return false;
-        candidate.Y = ground;
-        playerBody.GlobalPosition = candidate;
-        return true;
+        if (movementSimulation is null) return false;
+        var nativeDisplacement = new NumericsVector3(displacement.X, -displacement.Z, displacement.Y);
+        var result = movementSimulation.TryDisplace(
+            simulationPlayerPosition, nativeDisplacement, CurrentDoorObstacles());
+        ApplyMovementResult(result);
+        return result.Accepted;
+    }
+
+    private KotorMovementResult StepPlayer(KotorMovementIntent intent, float deltaSeconds)
+    {
+        if (movementSimulation is null)
+            return new KotorMovementResult(
+                simulationPlayerPosition, false, false, KotorLocomotionMode.Idle);
+        var result = movementSimulation.Step(
+            simulationPlayerPosition, yaw, intent, deltaSeconds, CurrentDoorObstacles());
+        ApplyMovementResult(result);
+        return result;
+    }
+
+    private IReadOnlyList<KotorDoorObstacle> CurrentDoorObstacles() =>
+        interactiveDoors.Select(door => new KotorDoorObstacle(
+            ToNumerics(door.Source.Position), door.Open)).ToArray();
+
+    private void ApplyMovementResult(KotorMovementResult result)
+    {
+        if (!result.Accepted) return;
+        simulationPlayerPosition = result.Position;
+        playerBody.GlobalPosition = ToGodot(result.Position);
     }
 
     private bool TryProjectToWalkmesh(Vector3 position, out float ground)
     {
-        ground = 0;
-        var bestDistance = float.PositiveInfinity;
-        var found = false;
-        foreach (var triangle in navigationTriangles)
+        if (movementSimulation is not null &&
+            movementSimulation.TryProjectToWalkmesh(ToNumerics(position), out var nativeGround))
         {
-            var a = new Vector2(triangle.A.X, triangle.A.Z);
-            var b = new Vector2(triangle.B.X, triangle.B.Z);
-            var c = new Vector2(triangle.C.X, triangle.C.Z);
-            var p = new Vector2(position.X, position.Z);
-            var denominator = (b.Y - c.Y) * (a.X - c.X) + (c.X - b.X) * (a.Y - c.Y);
-            if (Mathf.Abs(denominator) < 0.000001f) continue;
-            var wa = ((b.Y - c.Y) * (p.X - c.X) + (c.X - b.X) * (p.Y - c.Y)) / denominator;
-            var wb = ((c.Y - a.Y) * (p.X - c.X) + (a.X - c.X) * (p.Y - c.Y)) / denominator;
-            var wc = 1.0f - wa - wb;
-            if (wa < -0.002f || wb < -0.002f || wc < -0.002f) continue;
-            var candidateGround = wa * triangle.A.Y + wb * triangle.B.Y + wc * triangle.C.Y;
-            var distance = Mathf.Abs(candidateGround - position.Y);
-            if (distance >= bestDistance) continue;
-            bestDistance = distance;
-            ground = candidateGround;
-            found = true;
+            ground = nativeGround;
+            return true;
         }
-        return found;
+        ground = 0;
+        return false;
     }
 
     private static Vector3 ToGodot(IReadOnlyList<float> source) =>
         new(source[0], source[2], -source[1]);
+
+    private static Vector3 ToGodot(NumericsVector3 source) =>
+        new(source.X, source.Z, -source.Y);
+
+    private static NumericsVector3 ToNumerics(IReadOnlyList<float> source) =>
+        new(source[0], source[1], source[2]);
+
+    private static NumericsVector3 ToNumerics(Vector3 source) =>
+        new(source.X, -source.Z, source.Y);
+
+    private static NumericsVector3 ToNumericsWithOffset(
+        IReadOnlyList<float> source, IReadOnlyList<float> offset) =>
+        new(source[0] + offset[0], source[1] + offset[1], source[2] + offset[2]);
 
     private static Color ToColor(IReadOnlyList<float> source) =>
         new(source[0], source[1], source[2]);

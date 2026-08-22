@@ -4,4 +4,7 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <RootNamespace>Nikami.Aurora.GodotRuntime</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../src/Nikami.Aurora.Profiles.Kotor/Nikami.Aurora.Profiles.Kotor.csproj" />
+  </ItemGroup>
 </Project>

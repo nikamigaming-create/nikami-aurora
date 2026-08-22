@@ -1,0 +1,132 @@
+[gd_resource type="OpenXRActionMap" format=3]
+
+[sub_resource type="OpenXRAction" id="ActionAim"]
+resource_name = "aim_pose"
+localized_name = "Aim pose"
+action_type = 3
+toplevel_paths = PackedStringArray("/user/hand/left", "/user/hand/right")
+
+[sub_resource type="OpenXRAction" id="ActionGrip"]
+resource_name = "grip_pose"
+localized_name = "Grip pose"
+action_type = 3
+toplevel_paths = PackedStringArray("/user/hand/left", "/user/hand/right")
+
+[sub_resource type="OpenXRAction" id="ActionHaptic"]
+resource_name = "haptic"
+localized_name = "Haptic"
+action_type = 4
+toplevel_paths = PackedStringArray("/user/hand/left", "/user/hand/right")
+
+[sub_resource type="OpenXRAction" id="ActionMove"]
+resource_name = "move"
+localized_name = "Move"
+action_type = 2
+toplevel_paths = PackedStringArray("/user/hand/left")
+
+[sub_resource type="OpenXRAction" id="ActionInteract"]
+resource_name = "interact"
+localized_name = "Interact"
+action_type = 0
+toplevel_paths = PackedStringArray("/user/hand/right")
+
+[sub_resource type="OpenXRAction" id="ActionSprint"]
+resource_name = "sprint"
+localized_name = "Sprint"
+action_type = 0
+toplevel_paths = PackedStringArray("/user/hand/left")
+
+[sub_resource type="OpenXRAction" id="ActionRecenter"]
+resource_name = "recenter"
+localized_name = "Recenter"
+action_type = 0
+toplevel_paths = PackedStringArray("/user/hand/left")
+
+[sub_resource type="OpenXRActionSet" id="ActionSetAurora"]
+resource_name = "aurora"
+localized_name = "Nikami Aurora"
+actions = [SubResource("ActionAim"), SubResource("ActionGrip"), SubResource("ActionHaptic"), SubResource("ActionMove"), SubResource("ActionInteract"), SubResource("ActionSprint"), SubResource("ActionRecenter")]
+
+[sub_resource type="OpenXRIPBinding" id="SimpleAimLeft"]
+action = SubResource("ActionAim")
+binding_path = "/user/hand/left/input/aim/pose"
+
+[sub_resource type="OpenXRIPBinding" id="SimpleAimRight"]
+action = SubResource("ActionAim")
+binding_path = "/user/hand/right/input/aim/pose"
+
+[sub_resource type="OpenXRIPBinding" id="SimpleGripLeft"]
+action = SubResource("ActionGrip")
+binding_path = "/user/hand/left/input/grip/pose"
+
+[sub_resource type="OpenXRIPBinding" id="SimpleGripRight"]
+action = SubResource("ActionGrip")
+binding_path = "/user/hand/right/input/grip/pose"
+
+[sub_resource type="OpenXRIPBinding" id="SimpleHapticLeft"]
+action = SubResource("ActionHaptic")
+binding_path = "/user/hand/left/output/haptic"
+
+[sub_resource type="OpenXRIPBinding" id="SimpleHapticRight"]
+action = SubResource("ActionHaptic")
+binding_path = "/user/hand/right/output/haptic"
+
+[sub_resource type="OpenXRIPBinding" id="SimpleInteract"]
+action = SubResource("ActionInteract")
+binding_path = "/user/hand/right/input/select/click"
+
+[sub_resource type="OpenXRIPBinding" id="SimpleRecenter"]
+action = SubResource("ActionRecenter")
+binding_path = "/user/hand/left/input/menu/click"
+
+[sub_resource type="OpenXRInteractionProfile" id="ProfileSimple"]
+interaction_profile_path = "/interaction_profiles/khr/simple_controller"
+bindings = [SubResource("SimpleAimLeft"), SubResource("SimpleAimRight"), SubResource("SimpleGripLeft"), SubResource("SimpleGripRight"), SubResource("SimpleHapticLeft"), SubResource("SimpleHapticRight"), SubResource("SimpleInteract"), SubResource("SimpleRecenter")]
+
+[sub_resource type="OpenXRIPBinding" id="TouchAimLeft"]
+action = SubResource("ActionAim")
+binding_path = "/user/hand/left/input/aim/pose"
+
+[sub_resource type="OpenXRIPBinding" id="TouchAimRight"]
+action = SubResource("ActionAim")
+binding_path = "/user/hand/right/input/aim/pose"
+
+[sub_resource type="OpenXRIPBinding" id="TouchGripLeft"]
+action = SubResource("ActionGrip")
+binding_path = "/user/hand/left/input/grip/pose"
+
+[sub_resource type="OpenXRIPBinding" id="TouchGripRight"]
+action = SubResource("ActionGrip")
+binding_path = "/user/hand/right/input/grip/pose"
+
+[sub_resource type="OpenXRIPBinding" id="TouchHapticLeft"]
+action = SubResource("ActionHaptic")
+binding_path = "/user/hand/left/output/haptic"
+
+[sub_resource type="OpenXRIPBinding" id="TouchHapticRight"]
+action = SubResource("ActionHaptic")
+binding_path = "/user/hand/right/output/haptic"
+
+[sub_resource type="OpenXRIPBinding" id="TouchMove"]
+action = SubResource("ActionMove")
+binding_path = "/user/hand/left/input/thumbstick"
+
+[sub_resource type="OpenXRIPBinding" id="TouchInteract"]
+action = SubResource("ActionInteract")
+binding_path = "/user/hand/right/input/a/click"
+
+[sub_resource type="OpenXRIPBinding" id="TouchSprint"]
+action = SubResource("ActionSprint")
+binding_path = "/user/hand/left/input/thumbstick/click"
+
+[sub_resource type="OpenXRIPBinding" id="TouchRecenter"]
+action = SubResource("ActionRecenter")
+binding_path = "/user/hand/left/input/menu/click"
+
+[sub_resource type="OpenXRInteractionProfile" id="ProfileTouch"]
+interaction_profile_path = "/interaction_profiles/oculus/touch_controller"
+bindings = [SubResource("TouchAimLeft"), SubResource("TouchAimRight"), SubResource("TouchGripLeft"), SubResource("TouchGripRight"), SubResource("TouchHapticLeft"), SubResource("TouchHapticRight"), SubResource("TouchMove"), SubResource("TouchInteract"), SubResource("TouchSprint"), SubResource("TouchRecenter")]
+
+[resource]
+action_sets = [SubResource("ActionSetAurora")]
+interaction_profiles = [SubResource("ProfileSimple"), SubResource("ProfileTouch")]

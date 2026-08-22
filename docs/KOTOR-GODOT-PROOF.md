@@ -106,6 +106,10 @@ Confirmed in the new runtime:
   animation speeds;
 - opt-in OpenXR origin/camera path with desktop fallback and HMD-relative
   cinematic camera authority;
+- profile-owned native-coordinate movement simulation shared by desktop and XR
+  intent, with synthetic speed/facing/dead-zone/door-blocker acceptance;
+- OpenXR action map and tracked grip nodes for movement, sprint, interaction,
+  recenter, and haptic output;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
 - walkmesh-constrained player movement;
@@ -119,8 +123,8 @@ Not yet implemented:
 - general DLG gesture-ID execution outside this zero-gesture conversation;
 - area, effects, and music playback;
 - full character-creation UI and save-selected appearance/equipment;
-- OpenXR controller actions, render models, haptics, and physical-headset
-  stereo acceptance;
+- OpenXR controller render models, gameplay haptic events, and physical-headset
+  stereo/input acceptance;
 - general NCS VM execution and complete plot/party state;
 - retail door animation and the installed `k_pend_door1xp` NCS behavior;
 - combat, inventory, saves, and area transitions.
