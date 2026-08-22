@@ -39,6 +39,11 @@ rotation or translation is applied between the runtime model and grip pose.
 Both portable and Meta render-model extensions are requested; Meta support
 remains optional because the fallback is always present.
 
+The grip containers and procedural fallbacks are safe to construct during a
+desktop boot. Portable and vendor runtime-model nodes are added only after the
+OpenXR interface successfully initializes; a disabled or unavailable runtime
+therefore cannot enter the render-model extension lifecycle.
+
 ## Evidence and remaining gates
 
 - Target executable SHA-256:
@@ -47,7 +52,8 @@ remains optional because the fallback is always present.
 - OpenXR creates an instance against Oculus runtime 1.207.0.
 - With no connected HMD, initialization fails with
   `XR_ERROR_FORM_FACTOR_UNAVAILABLE` and desktop play remains functional.
-- Provider hierarchy construction and no-HMD fallback are `confirmed`.
+- Grip/fallback hierarchy construction, runtime-provider deferral, clean
+  desktop boot, and no-HMD fallback are `confirmed`.
 
 Physical six-degree tracking, runtime model selection, trigger/grip/button/stick
 animation calibration, focus-loss recovery, controller/hand switching, haptic
