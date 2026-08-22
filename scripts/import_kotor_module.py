@@ -24,8 +24,11 @@ try:
     from pykotor.resource.generics.git import read_git
     from pykotor.resource.generics.ifo import read_ifo
     from pykotor.resource.generics.utc import read_utc
+    from pykotor.resource.generics.utd import read_utd
     from pykotor.resource.type import ResourceType
     from pykotor.tools import creature as creature_tools
+    from pykotor.tools import door as door_tools
+    from utility.common.geometry import SurfaceMaterial
 except ImportError as exc:
     raise SystemExit(
         "Missing importer dependency. Install requirements-import.txt with Python 3.12."
@@ -167,6 +170,7 @@ def export_room(
     triangle_count = 0
     diffuse_textures: set[str] = set()
     lightmaps: set[str] = set()
+    walkmesh_triangles: list[list[list[float]]] = []
 
     def visit(node: Any, parent_transform: np.ndarray) -> None:
         nonlocal mesh_count, vertex_count, triangle_count
@@ -174,6 +178,25 @@ def export_room(
         mesh = node.mesh
         node_name = str(node.name or "").lower()
         collision_only = node.aabb is not None or node_name.startswith("walkmesh")
+        if collision_only and mesh is not None and mesh.vertex_positions and mesh.faces:
+            local_vertices = [
+                world_transform @ np.asarray(
+                    [float(vertex.x), float(vertex.y), float(vertex.z), 1.0], dtype=np.float64)
+                for vertex in mesh.vertex_positions
+            ]
+            for face in mesh.faces:
+                material_id = int(face.material) & 0x1F
+                try:
+                    walkable = SurfaceMaterial(material_id).walkable()
+                except ValueError:
+                    walkable = False
+                indices = (face.v1, face.v2, face.v3)
+                if walkable and all(0 <= index < len(local_vertices) for index in indices):
+                    walkmesh_triangles.append([
+                        [float(local_vertices[index][0]), float(local_vertices[index][1]),
+                         float(local_vertices[index][2])]
+                        for index in indices
+                    ])
         if (mesh is not None and bool(mesh.render) and not collision_only and
                 mesh.vertex_positions and mesh.faces):
             vertices = np.asarray(
@@ -238,6 +261,7 @@ def export_room(
         "triangleCount": triangle_count,
         "diffuseTextures": sorted(diffuse_textures, key=str.lower),
         "lightmaps": sorted(lightmaps, key=str.lower),
+        "walkmeshTriangles": walkmesh_triangles,
     }
     if mesh_count > 0:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -469,6 +493,41 @@ def export_dialogue(
     }
 
 
+def export_opening_door(
+    installation: Installation,
+    output_path: Path,
+    textures: TextureCache,
+) -> dict[str, Any]:
+    utd_resource = installation.resource("sw_door_test001", ResourceType.UTD)
+    if utd_resource is None:
+        raise RuntimeError("sw_door_test001.utd could not be resolved")
+    utd_bytes = resource_data(utd_resource)
+    utd = read_utd(utd_bytes)
+    order = [SearchLocation.OVERRIDE, SearchLocation.CHITIN]
+    genericdoors_resource = installation.resource("genericdoors", ResourceType.TwoDA, order)
+    if genericdoors_resource is None:
+        raise RuntimeError("genericdoors.2da could not be resolved")
+    genericdoors = read_2da(resource_data(genericdoors_resource))
+    model_name = door_tools.get_model(utd, installation, genericdoors=genericdoors)
+    if not model_name:
+        raise RuntimeError("Opening door model could not be resolved")
+    scene = trimesh.Scene(base_frame="end_door01")
+    _, model_record = add_actor_model(
+        scene, installation, model_name, textures, np.identity(4))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(scene.export(file_type="glb"))
+    return {
+        "glb": f"doors/{output_path.name}",
+        "model": model_name,
+        "conversation": canonical_resref(utd.conversation),
+        "onOpen": canonical_resref(utd.on_open),
+        "locked": bool(utd.locked),
+        "keyRequired": bool(utd.key_required),
+        "utdSha256": sha256_bytes(utd_bytes),
+        "modelSource": model_record,
+    }
+
+
 def import_module(game_root: Path, module: str, output_root: Path) -> Path:
     executable = game_root / "swkotor.exe"
     if not executable.is_file():
@@ -509,6 +568,8 @@ def import_module(game_root: Path, module: str, output_root: Path) -> Path:
         trask_actor["conversation"],
         output_root / "dialogues" / f"{trask_actor['conversation']}.json",
     )
+    opening_door = export_opening_door(
+        installation, output_root / "doors" / "end_door01.glb", textures)
     creatures = []
     for creature in git.creatures:
         record = {
@@ -519,16 +580,18 @@ def import_module(game_root: Path, module: str, output_root: Path) -> Path:
         if record["template"].lower() == "end_trask":
             record.update(trask_actor)
         creatures.append(record)
-    doors = [
-        {
+    doors = []
+    for door in git.doors:
+        record = {
             "template": canonical_resref(door.resref),
             "tag": str(door.tag),
             "position": vector3(door.position),
             "bearing": float(door.bearing),
             "linkedToModule": canonical_resref(door.linked_to_module),
         }
-        for door in git.doors
-    ]
+        if record["tag"].lower() == "end_door01":
+            record.update(opening_door)
+        doors.append(record)
     waypoints = [
         {
             "template": canonical_resref(waypoint.resref),
@@ -568,6 +631,7 @@ def import_module(game_root: Path, module: str, output_root: Path) -> Path:
             "cameras": len(git.cameras),
             "placeables": len(git.placeables),
             "triggers": len(git.triggers),
+            "walkmeshTriangles": sum(len(room["walkmeshTriangles"]) for room in room_records),
         },
         "limitations": [
             "Diffuse textures are embedded; authored lightmaps are inventoried but not yet applied.",

@@ -4,6 +4,8 @@ param(
     [string]$Godot,
     [string]$CapturePath,
     [int]$DialogueChoice = -1,
+    [double]$TestMoveMeters = 0,
+    [switch]$OpenFirstDoor,
     [switch]$CaptureAndExit
 )
 
@@ -33,6 +35,13 @@ if ($CaptureAndExit) {
 if ($DialogueChoice -ge 0) {
     $env:NIKAMI_AURORA_DIALOGUE_CHOICE = $DialogueChoice.ToString()
 }
+if ($TestMoveMeters -ne 0) {
+    $env:NIKAMI_AURORA_TEST_MOVE_METERS = $TestMoveMeters.ToString(
+        [Globalization.CultureInfo]::InvariantCulture)
+}
+if ($OpenFirstDoor) {
+    $env:NIKAMI_AURORA_TEST_OPEN_DOOR = "1"
+}
 
 try {
     & dotnet build (Join-Path $repo "godot\Nikami.Aurora.Godot.csproj") --configuration Debug
@@ -49,4 +58,6 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_CAPTURE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_EXIT -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_DIALOGUE_CHOICE -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_MOVE_METERS -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_OPEN_DOOR -ErrorAction SilentlyContinue
 }

@@ -13,6 +13,8 @@ retail executable.
 - Layout: 15 authored room records, including one walkmesh-only connector.
 - Godot geometry: 14 visual room models, 78,346 triangles.
 - Gameplay placements: 26 creatures, 15 doors, and 58 waypoints.
+- Navigation: 540 walkable source triangles with an accepted grounded movement
+  proof from the authored entry point.
 
 The importer resolves Trask from the area-local `end_trask.utc`, then applies
 the installed rules tables to assemble:
@@ -54,6 +56,9 @@ Confirmed in the new runtime:
 - assembled static Trask model;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
+- walkmesh-constrained player movement;
+- the exact `end_door01` placement and `DOR_LHR01` model with bounded `E`
+  interaction.
 
 Not yet implemented:
 
@@ -62,7 +67,11 @@ Not yet implemented:
 - voice and area audio playback;
 - player character creation/model assembly;
 - NCS condition/action execution and plot state;
-- walkmesh collision, doors, combat, inventory, saves, and area transitions.
+- retail door animation and the installed `k_pend_door1xp` NCS behavior;
+- combat, inventory, saves, and area transitions.
+
+The current door-opening presentation is a temporary Godot tween. It is not
+claimed as retail animation or native script parity.
 
 Generated GLBs, localized dialogue text, screenshots, and all other game data
 remain under ignored local directories and are never published.

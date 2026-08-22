@@ -10,7 +10,9 @@ installation, validate profile-specific source markers, produce a SHA-256-bound
 target manifest, import the real KOTOR Endar Spire room geometry and textures,
 load that owned-data bundle into Godot, assemble Trask from his installed body,
 head, texture, and weapon resources, and advance through the first authored
-dialogue choices. Full gameplay and script execution remain active milestones.
+dialogue choices. Movement is constrained to the installed room walkmeshes and
+the first authored lockdown door is materialized and interactive. Full combat
+and script execution remain active milestones.
 
 ## Why a new runtime
 

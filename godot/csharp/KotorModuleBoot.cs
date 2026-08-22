@@ -6,6 +6,7 @@ namespace Nikami.Aurora.GodotRuntime;
 
 public sealed partial class KotorModuleBoot : Node3D
 {
+    private CharacterBody3D playerBody = null!;
     private Camera3D camera = null!;
     private Label status = null!;
     private Label details = null!;
@@ -14,11 +15,16 @@ public sealed partial class KotorModuleBoot : Node3D
     private Label dialogueSpeaker = null!;
     private Label dialogueText = null!;
     private VBoxContainer dialogueChoices = null!;
+    private Label interactionPrompt = null!;
     private readonly List<Button> activeChoiceButtons = [];
+    private readonly List<NavigationTriangle> navigationTriangles = [];
+    private readonly List<InteractiveDoor> interactiveDoors = [];
     private int capturedFrames;
     private int readyFrames;
     private bool moduleReady;
     private bool automatedChoiceApplied;
+    private bool automatedMoveApplied;
+    private bool automatedDoorApplied;
     private string lastDialogueSpeaker = "TRASK ULGO";
     private float yaw;
     private float pitch;
@@ -41,23 +47,29 @@ public sealed partial class KotorModuleBoot : Node3D
 
     public override void _Process(double delta)
     {
-        var basis = camera.GlobalTransform.Basis;
+        var basis = new Basis(Vector3.Up, yaw);
         var movement = Vector3.Zero;
         if (Input.IsKeyPressed(Key.W)) movement -= basis.Z;
         if (Input.IsKeyPressed(Key.S)) movement += basis.Z;
         if (Input.IsKeyPressed(Key.A)) movement -= basis.X;
         if (Input.IsKeyPressed(Key.D)) movement += basis.X;
-        if (Input.IsKeyPressed(Key.Space)) movement += Vector3.Up;
-        if (Input.IsKeyPressed(Key.Ctrl)) movement -= Vector3.Up;
         if (movement.LengthSquared() > 0.001f)
         {
             var speed = Input.IsKeyPressed(Key.Shift) ? 12.0f : 5.0f;
-            camera.GlobalPosition += movement.Normalized() * speed * (float)delta;
+            MovePlayer(movement.Normalized() * speed * (float)delta);
         }
+        UpdateInteractionPrompt();
 
         if (moduleReady)
         {
             readyFrames++;
+            if (!automatedDoorApplied && readyFrames >= 10 &&
+                System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_OPEN_DOOR") == "1" &&
+                interactiveDoors.Count > 0)
+            {
+                automatedDoorApplied = true;
+                ToggleDoor(interactiveDoors[0]);
+            }
             var configuredChoice = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_DIALOGUE_CHOICE");
             if (!automatedChoiceApplied && readyFrames >= 20 &&
                 int.TryParse(configuredChoice, out var choice) &&
@@ -66,6 +78,17 @@ public sealed partial class KotorModuleBoot : Node3D
                 automatedChoiceApplied = true;
                 activeChoiceButtons[choice].EmitSignal(BaseButton.SignalName.Pressed);
                 GD.Print($"NIKAMI_AURORA_DIALOGUE_CHOICE status=selected index={choice}");
+            }
+            var configuredMove = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_MOVE_METERS");
+            if (!automatedMoveApplied && readyFrames >= 30 &&
+                double.TryParse(configuredMove, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var meters) && Math.Abs(meters) > 0.001)
+            {
+                automatedMoveApplied = true;
+                var start = playerBody.GlobalPosition;
+                var accepted = MovePlayer(-basis.Z * (float)meters);
+                GD.Print($"NIKAMI_AURORA_NAV_TEST status={(accepted ? "accepted" : "rejected")} " +
+                         $"from={start} to={playerBody.GlobalPosition} requested={meters:F3}");
             }
         }
 
@@ -86,13 +109,20 @@ public sealed partial class KotorModuleBoot : Node3D
         {
             yaw -= motion.Relative.X * 0.0025f;
             pitch = Mathf.Clamp(pitch - motion.Relative.Y * 0.0025f, -1.45f, 1.45f);
-            camera.Rotation = new Vector3(pitch, yaw, 0);
+            playerBody.Rotation = new Vector3(0, yaw, 0);
+            camera.Rotation = new Vector3(pitch, 0, 0);
         }
         else if (inputEvent is InputEventKey key && key.Pressed && key.Keycode == Key.Escape)
         {
             Input.MouseMode = Input.MouseMode == Input.MouseModeEnum.Captured
                 ? Input.MouseModeEnum.Visible
                 : Input.MouseModeEnum.Captured;
+        }
+        else if (inputEvent is InputEventKey interact && interact.Pressed && interact.Keycode == Key.E)
+        {
+            var door = NearestDoor(2.6f);
+            if (door is not null && !dialoguePanel.Visible)
+                ToggleDoor(door);
         }
     }
 
@@ -135,23 +165,37 @@ public sealed partial class KotorModuleBoot : Node3D
 
             var materializedActors = LoadActorModels(manifest.Creatures, manifestDirectory);
             AddCreatureMarkers(manifest.Creatures);
-            var entry = ToGodot(manifest.Entry.Position) + Vector3.Up * 1.65f;
+            var materializedDoors = LoadDoorModels(manifest.Doors, manifestDirectory);
+            BuildNavigation(manifest.Rooms);
+            var entry = ToGodot(manifest.Entry.Position);
+            if (!TryProjectToWalkmesh(entry, out var entryGround))
+                throw new InvalidDataException($"Authored entry point is not on the imported walkmesh: {entry}");
+            entry.Y = entryGround;
             var trask = manifest.Creatures.FirstOrDefault(creature =>
                 creature.Template.Equals("end_trask", StringComparison.OrdinalIgnoreCase));
-            camera.GlobalPosition = entry;
+            playerBody.GlobalPosition = entry;
             if (trask is not null)
-                camera.LookAt(ToGodot(trask.Position) + Vector3.Up * 1.2f, Vector3.Up);
-            yaw = camera.Rotation.Y;
-            pitch = camera.Rotation.X;
+            {
+                var target = ToGodot(trask.Position) + Vector3.Up * 1.2f;
+                var direction = (target - camera.GlobalPosition).Normalized();
+                yaw = Mathf.Atan2(-direction.X, -direction.Z);
+                pitch = -Mathf.Asin(direction.Y);
+                playerBody.Rotation = new Vector3(0, yaw, 0);
+                camera.Rotation = new Vector3(pitch, 0, 0);
+            }
 
             loadingBackdrop.Visible = false;
             status.Text = $"{manifest.Module.ToUpperInvariant()}  •  ENDAR SPIRE";
             details.Text = $"{manifest.Rooms.Count} authored / {loadedRooms} visual rooms  •  " +
                            $"{materializedActors} actor / {manifest.Counts.Creatures} creature placements  •  " +
-                           $"{manifest.Counts.Doors} doors  •  source {manifest.Target.ExecutableSha256[..12]}";
+                           $"{manifest.Counts.WalkmeshTriangles} nav triangles  •  " +
+                           $"{materializedDoors} door / {manifest.Counts.Doors} placements  •  " +
+                           $"source {manifest.Target.ExecutableSha256[..12]}";
             GD.Print($"NIKAMI_AURORA_KOTOR_BOOT status=pass module={manifest.Module} " +
                      $"rooms={loadedRooms} authoredRooms={manifest.Rooms.Count} creatures={manifest.Counts.Creatures} " +
                      $"sha256={manifest.Target.ExecutableSha256}");
+            GD.Print($"NIKAMI_AURORA_NAV status=ready triangles={navigationTriangles.Count} " +
+                     $"entry={playerBody.GlobalPosition}");
             var openingActor = manifest.Creatures.FirstOrDefault(creature => creature.Dialogue is not null);
             if (openingActor is not null)
                 LoadOpeningDialogue(openingActor, manifestDirectory);
@@ -193,6 +237,14 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void CreateCamera()
     {
+        playerBody = new CharacterBody3D { Name = "Player" };
+        AddChild(playerBody);
+        var playerCollision = new CollisionShape3D
+        {
+            Position = Vector3.Up * 0.85f,
+            Shape = new CapsuleShape3D { Radius = 0.32f, Height = 1.7f }
+        };
+        playerBody.AddChild(playerCollision);
         camera = new Camera3D
         {
             Current = true,
@@ -200,7 +252,8 @@ public sealed partial class KotorModuleBoot : Node3D
             Far = 1000.0f,
             Fov = 72.0f
         };
-        AddChild(camera);
+        camera.Position = Vector3.Up * 1.65f;
+        playerBody.AddChild(camera);
     }
 
     private void CreateOverlay()
@@ -235,13 +288,23 @@ public sealed partial class KotorModuleBoot : Node3D
 
         var controls = new Label
         {
-            Text = "WASD move  •  mouse look  •  Shift sprint  •  Space/Ctrl rise/fall  •  Esc release mouse",
+            Text = "WASD move  •  mouse look  •  Shift sprint  •  E interact  •  Esc release mouse",
             Position = new Vector2(36, 680),
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
         controls.AddThemeFontSizeOverride("font_size", 14);
         controls.AddThemeColorOverride("font_color", new Color(0.62f, 0.7f, 0.8f));
         layer.AddChild(controls);
+
+        interactionPrompt = new Label
+        {
+            Position = new Vector2(460, 610),
+            Visible = false,
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        interactionPrompt.AddThemeFontSizeOverride("font_size", 20);
+        interactionPrompt.AddThemeColorOverride("font_color", new Color(0.45f, 0.88f, 1.0f));
+        layer.AddChild(interactionPrompt);
 
         dialoguePanel = new PanelContainer
         {
@@ -445,6 +508,71 @@ public sealed partial class KotorModuleBoot : Node3D
         return loaded;
     }
 
+    private int LoadDoorModels(IEnumerable<DoorRecord> doors, string manifestDirectory)
+    {
+        interactiveDoors.Clear();
+        foreach (var door in doors)
+        {
+            if (string.IsNullOrWhiteSpace(door.Glb)) continue;
+            var path = Path.GetFullPath(Path.Combine(manifestDirectory,
+                door.Glb.Replace('/', Path.DirectorySeparatorChar)));
+            var document = new GltfDocument();
+            var state = new GltfState();
+            if (document.AppendFromFile(path, state) != Error.Ok ||
+                document.GenerateScene(state) is not Node3D model)
+                throw new InvalidDataException($"Godot could not import door {door.Tag}: {path}");
+            model.Name = $"Door_{door.Tag}";
+            model.Position = ToGodot(door.Position);
+            model.Rotation = new Vector3(0, -door.Bearing, 0);
+            MakeDiffuseProofReadable(model);
+            AddChild(model);
+            interactiveDoors.Add(new InteractiveDoor(door, model, model.Position));
+            GD.Print($"NIKAMI_AURORA_DOOR status=ready tag={door.Tag} model={door.Model} " +
+                     $"conversation={door.Conversation} nativeOnOpen={door.OnOpen}");
+        }
+        return interactiveDoors.Count;
+    }
+
+    private void UpdateInteractionPrompt()
+    {
+        if (dialoguePanel.Visible)
+        {
+            interactionPrompt.Visible = false;
+            return;
+        }
+        var door = NearestDoor(2.6f);
+        interactionPrompt.Visible = door is not null;
+        if (door is not null)
+            interactionPrompt.Text = door.Open ? "E  CLOSE LOCKDOWN DOOR" : "E  OPEN LOCKDOWN DOOR";
+    }
+
+    private InteractiveDoor? NearestDoor(float maximumDistance)
+    {
+        InteractiveDoor? nearest = null;
+        var best = maximumDistance;
+        foreach (var door in interactiveDoors)
+        {
+            var delta = door.ClosedPosition - playerBody.GlobalPosition;
+            delta.Y = 0;
+            var distance = delta.Length();
+            if (distance >= best) continue;
+            best = distance;
+            nearest = door;
+        }
+        return nearest;
+    }
+
+    private void ToggleDoor(InteractiveDoor door)
+    {
+        door.Open = !door.Open;
+        var destination = door.Open ? door.ClosedPosition + Vector3.Up * 2.8f : door.ClosedPosition;
+        CreateTween().SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.InOut)
+            .TweenProperty(door.Model, "position", destination, 0.7);
+        GD.Print($"NIKAMI_AURORA_DOOR status={(door.Open ? "opened" : "closed")} " +
+                 $"tag={door.Source.Tag} model={door.Source.Model} conversation={door.Source.Conversation} " +
+                 $"nativeOnOpen={door.Source.OnOpen}");
+    }
+
     private static void MakeDiffuseProofReadable(Node node)
     {
         if (node is MeshInstance3D instance && instance.Mesh is not null)
@@ -463,8 +591,72 @@ public sealed partial class KotorModuleBoot : Node3D
             MakeDiffuseProofReadable(child);
     }
 
+    private void BuildNavigation(IEnumerable<RoomRecord> rooms)
+    {
+        navigationTriangles.Clear();
+        foreach (var room in rooms)
+        {
+            if (room.WalkmeshTriangles is null) continue;
+            foreach (var triangle in room.WalkmeshTriangles)
+            {
+                if (triangle.Count != 3) continue;
+                navigationTriangles.Add(new NavigationTriangle(
+                    ToGodotWithOffset(triangle[0], room.Position),
+                    ToGodotWithOffset(triangle[1], room.Position),
+                    ToGodotWithOffset(triangle[2], room.Position)));
+            }
+        }
+    }
+
+    private bool MovePlayer(Vector3 displacement)
+    {
+        if (navigationTriangles.Count == 0) return false;
+        var candidate = playerBody.GlobalPosition + new Vector3(displacement.X, 0, displacement.Z);
+        foreach (var door in interactiveDoors)
+        {
+            if (door.Open) continue;
+            var obstruction = candidate - door.ClosedPosition;
+            obstruction.Y = 0;
+            if (obstruction.LengthSquared() < 0.65f * 0.65f) return false;
+        }
+        if (!TryProjectToWalkmesh(candidate, out var ground)) return false;
+        candidate.Y = ground;
+        playerBody.GlobalPosition = candidate;
+        return true;
+    }
+
+    private bool TryProjectToWalkmesh(Vector3 position, out float ground)
+    {
+        ground = 0;
+        var bestDistance = float.PositiveInfinity;
+        var found = false;
+        foreach (var triangle in navigationTriangles)
+        {
+            var a = new Vector2(triangle.A.X, triangle.A.Z);
+            var b = new Vector2(triangle.B.X, triangle.B.Z);
+            var c = new Vector2(triangle.C.X, triangle.C.Z);
+            var p = new Vector2(position.X, position.Z);
+            var denominator = (b.Y - c.Y) * (a.X - c.X) + (c.X - b.X) * (a.Y - c.Y);
+            if (Mathf.Abs(denominator) < 0.000001f) continue;
+            var wa = ((b.Y - c.Y) * (p.X - c.X) + (c.X - b.X) * (p.Y - c.Y)) / denominator;
+            var wb = ((c.Y - a.Y) * (p.X - c.X) + (a.X - c.X) * (p.Y - c.Y)) / denominator;
+            var wc = 1.0f - wa - wb;
+            if (wa < -0.002f || wb < -0.002f || wc < -0.002f) continue;
+            var candidateGround = wa * triangle.A.Y + wb * triangle.B.Y + wc * triangle.C.Y;
+            var distance = Mathf.Abs(candidateGround - position.Y);
+            if (distance >= bestDistance) continue;
+            bestDistance = distance;
+            ground = candidateGround;
+            found = true;
+        }
+        return found;
+    }
+
     private static Vector3 ToGodot(IReadOnlyList<float> source) =>
         new(source[0], source[2], -source[1]);
+
+    private static Vector3 ToGodotWithOffset(IReadOnlyList<float> source, IReadOnlyList<float> offset) =>
+        ToGodot(new[] { source[0] + offset[0], source[1] + offset[1], source[2] + offset[2] });
 
     private static JsonSerializerOptions JsonOptions() => new()
     {
@@ -478,13 +670,18 @@ public sealed partial class KotorModuleBoot : Node3D
         TargetRecord Target,
         IReadOnlyList<RoomRecord> Rooms,
         IReadOnlyList<CreatureRecord> Creatures,
+        IReadOnlyList<DoorRecord> Doors,
         CountRecord Counts);
 
     private sealed record EntryRecord(IReadOnlyList<float> Position, float DirectionRadians);
     private sealed record TargetRecord(string ExecutableSha256);
-    private sealed record RoomRecord(string Model, string? Glb, IReadOnlyList<float> Position);
+    private sealed record RoomRecord(string Model, string? Glb, IReadOnlyList<float> Position,
+        IReadOnlyList<IReadOnlyList<IReadOnlyList<float>>>? WalkmeshTriangles);
     private sealed record CreatureRecord(string Template, IReadOnlyList<float> Position, float Bearing,
         string? Glb, string? Conversation, DialogueReference? Dialogue);
+    private sealed record DoorRecord(string Template, string Tag, IReadOnlyList<float> Position, float Bearing,
+        string LinkedToModule, string? Glb, string? Model, string? Conversation, string? OnOpen,
+        bool Locked, bool KeyRequired);
     private sealed record DialogueReference(string Path, string SourceSha256, int StarterCount,
         int NodeCount, int OpeningStarter);
     private sealed record DialogueGraph(string Schema, int OpeningStarter,
@@ -494,5 +691,13 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record DialogueLink(string Target, string Condition1, bool Condition1Not,
         string Condition2, bool Condition2Not, int Logic);
     private sealed record CountRecord(int Rooms, int Creatures, int Doors, int Waypoints, int Cameras,
-        int Placeables, int Triggers);
+        int Placeables, int Triggers, int WalkmeshTriangles);
+    private readonly record struct NavigationTriangle(Vector3 A, Vector3 B, Vector3 C);
+    private sealed class InteractiveDoor(DoorRecord source, Node3D model, Vector3 closedPosition)
+    {
+        public DoorRecord Source { get; } = source;
+        public Node3D Model { get; } = model;
+        public Vector3 ClosedPosition { get; } = closedPosition;
+        public bool Open { get; set; }
+    }
 }
