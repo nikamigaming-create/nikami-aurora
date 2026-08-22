@@ -31,8 +31,8 @@ the head inside the collar and is explicitly rejected by visual QA.
 
 - 13 rendered meshes and 2,250 vertices;
 - five glTF skins;
-- `pause1`, `tlknorm`, and `walk` clips;
-- 88, 83, and 70 animation channels respectively;
+- `pause1`, `tlknorm`, `walk`, and `talk` clips;
+- 88, 83, 70, and 14 animation channels respectively;
 - Trask's source bearing preserved through the KOTOR-to-Godot basis;
 - pistol attachment follows the animated right hand;
 - authored dialogue-camera capture verifies that the head is present and the
@@ -43,5 +43,6 @@ torso and below `0.0000005` for each arm. This rules out hand scaling from the
 skin-slot, weight, or inverse-bind mapping. Very close wide-angle QA cameras are
 not valid proportion references.
 
-Lip animation timing, per-dialogue gesture selection, animation events,
-transitions, and dangly-mesh simulation remain separate parity gates.
+Per-dialogue gesture selection, animation events, transitions, and dangly-mesh
+simulation remain separate parity gates. Voice-bound facial timing is specified
+in the dialogue-performance contract.

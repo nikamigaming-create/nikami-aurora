@@ -27,6 +27,7 @@ the installed rules tables to assemble:
 - right-hand model `w_BlstrPstl_001`;
 - five source-derived glTF skins across 13 rendered meshes;
 - inherited `pause1`, `tlknorm`, and `walk` clips from `S_Male02`;
+- the 16-shape `talk` facial clip from `S_Male02`;
 - dialogue graph `end_trask01`.
 
 The Godot dialogue view starts at the installed opening branch and displays the
@@ -76,6 +77,9 @@ Confirmed in the new runtime:
 - weapon attachment following the animated right hand;
 - GFF WXYZ camera orientation, height, pitch, and FOV import;
 - per-node DLG camera directives and source-style dialogue framing;
+- 50 installed dialogue voice/LIP pairs resolved into the ignored bundle;
+- MP3 voice playback, 16-shape LIP interpolation on seven facial bones, and
+  return to `pause1` when a line ends;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
 - walkmesh-constrained player movement;
@@ -86,8 +90,8 @@ Not yet implemented:
 
 - final renderer transfer-function and light-attenuation parity;
 - dialogue-camera obstruction correction and nondeterministic shot variants;
-- lipsync and per-line gesture selection;
-- voice and area audio playback;
+- per-line DLG gesture-ID execution;
+- area, effects, and music playback;
 - player character creation/model assembly;
 - NCS condition/action execution and plot state;
 - retail door animation and the installed `k_pend_door1xp` NCS behavior;

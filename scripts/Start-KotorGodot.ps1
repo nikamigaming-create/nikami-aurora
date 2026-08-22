@@ -3,10 +3,12 @@ param(
     [string]$Manifest,
     [string]$Godot,
     [string]$CapturePath,
+    [int]$CaptureFrame = 60,
     [int]$DialogueChoice = -1,
     [double]$TestMoveMeters = 0,
     [switch]$OpenFirstDoor,
     [switch]$CleanCapture,
+    [switch]$LipSyncCloseup,
     [switch]$CaptureAndExit
 )
 
@@ -29,6 +31,8 @@ if ([string]::IsNullOrWhiteSpace($Godot)) {
 $env:NIKAMI_AURORA_MODULE_MANIFEST = (Resolve-Path -LiteralPath $Manifest).Path
 if (-not [string]::IsNullOrWhiteSpace($CapturePath)) {
     $env:NIKAMI_AURORA_CAPTURE = [IO.Path]::GetFullPath($CapturePath)
+    $env:NIKAMI_AURORA_CAPTURE_FRAME = $CaptureFrame.ToString(
+        [Globalization.CultureInfo]::InvariantCulture)
 }
 if ($CaptureAndExit) {
     $env:NIKAMI_AURORA_CAPTURE_EXIT = "1"
@@ -46,6 +50,9 @@ if ($OpenFirstDoor) {
 if ($CleanCapture) {
     $env:NIKAMI_AURORA_CAPTURE_CLEAN = "1"
 }
+if ($LipSyncCloseup) {
+    $env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP = "1"
+}
 
 try {
     & dotnet build (Join-Path $repo "godot\Nikami.Aurora.Godot.csproj") --configuration Debug
@@ -60,9 +67,11 @@ try {
 finally {
     Remove-Item Env:NIKAMI_AURORA_MODULE_MANIFEST -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_FRAME -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_EXIT -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_DIALOGUE_CHOICE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_MOVE_METERS -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_OPEN_DOOR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CLEAN -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP -ErrorAction SilentlyContinue
 }

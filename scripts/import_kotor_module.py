@@ -19,7 +19,9 @@ try:
     import numpy as np
     import trimesh
     from PIL import Image
+    from pykotor.extract.capsule import Capsule
     from pykotor.extract.installation import Installation, SearchLocation
+    from pykotor.resource.formats.lip import read_lip
     from pykotor.resource.formats.lyt import read_lyt
     from pykotor.resource.formats.mdl import read_mdl
     from pykotor.resource.formats.mdl.mdl_types import MDLControllerType
@@ -585,7 +587,7 @@ def export_trask_actor(
         weapon_model=right,
         weapon_name=right_model,
         animation_model=animation_model,
-        animation_names=("pause1", "tlknorm", "walk"),
+        animation_names=("pause1", "tlknorm", "walk", "talk"),
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
     )
     model_records = [{
@@ -624,6 +626,7 @@ def export_dialogue(
     installation: Installation,
     dialogue_name: str,
     output_path: Path,
+    lip_capsule: Capsule | None,
 ) -> dict[str, Any]:
     resource = installation.resource(dialogue_name, ResourceType.DLG)
     if resource is None:
@@ -631,6 +634,7 @@ def export_dialogue(
     data = resource_data(resource)
     dialogue = read_dlg(data)
     talktable = installation.talktable()
+    all_nodes = [*dialogue.all_entries(), *dialogue.all_replies()]
 
     def node_key(node: Any) -> str:
         kind = "entry" if isinstance(node, DLGEntry) else "reply"
@@ -649,6 +653,73 @@ def export_dialogue(
             "participant": str(animation.participant),
         }
 
+    sound_names = {
+        canonical_resref(getattr(node, "sound", ""))
+        for node in all_nodes
+        if canonical_resref(getattr(node, "sound", ""))
+    }
+    playable_sounds = installation.sounds(
+        sound_names,
+        [
+            SearchLocation.OVERRIDE,
+            SearchLocation.VOICE,
+            SearchLocation.SOUND,
+            SearchLocation.CHITIN,
+        ],
+    )
+    bundle_root = output_path.parent.parent
+    media_by_sound: dict[str, dict[str, Any]] = {}
+    for sound_name in sorted(sound_names, key=str.lower):
+        media: dict[str, Any] = {}
+        playable = playable_sounds.get(sound_name)
+        if playable:
+            if playable.startswith(b"RIFF"):
+                extension = "wav"
+            elif playable.startswith(b"ID3") or playable[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+                extension = "mp3"
+            else:
+                raise RuntimeError(
+                    f"Unsupported playable audio payload for {sound_name}: {playable[:12]!r}")
+            audio_relative = f"audio/{sound_name.lower()}.{extension}"
+            audio_path = bundle_root / audio_relative
+            audio_path.parent.mkdir(parents=True, exist_ok=True)
+            audio_path.write_bytes(playable)
+            media.update({
+                "audioPath": audio_relative,
+                "audioFormat": extension,
+                "audioSha256": sha256_bytes(playable),
+                "audioByteCount": len(playable),
+            })
+        lip_bytes = (
+            lip_capsule.resource(sound_name, ResourceType.LIP)
+            if lip_capsule is not None else None
+        )
+        if lip_bytes:
+            lip = read_lip(lip_bytes)
+            lip_relative = f"lips/{sound_name.lower()}.json"
+            lip_path = bundle_root / lip_relative
+            lip_path.parent.mkdir(parents=True, exist_ok=True)
+            lip_payload = {
+                "schema": "nikami-aurora-kotor-lip-v1",
+                "resref": sound_name,
+                "sourceSha256": sha256_bytes(lip_bytes),
+                "length": float(lip.length),
+                "frames": [
+                    {"time": float(frame.time), "shape": int(frame.shape)}
+                    for frame in lip.frames
+                ],
+            }
+            lip_path.write_text(
+                json.dumps(lip_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            media.update({
+                "lipPath": lip_relative,
+                "lipSourceSha256": lip_payload["sourceSha256"],
+                "lipLength": lip_payload["length"],
+                "lipFrameCount": len(lip.frames),
+            })
+        if media:
+            media_by_sound[sound_name.lower()] = media
+
     def link_record(link: Any) -> dict[str, Any]:
         return {
             "target": node_key(link.node),
@@ -660,8 +731,9 @@ def export_dialogue(
         }
 
     nodes: dict[str, dict[str, Any]] = {}
-    for node in [*dialogue.all_entries(), *dialogue.all_replies()]:
+    for node in all_nodes:
         key = node_key(node)
+        sound_name = canonical_resref(getattr(node, "sound", ""))
         nodes[key] = {
             "kind": "entry" if isinstance(node, DLGEntry) else "reply",
             "listIndex": int(node.list_index),
@@ -670,7 +742,8 @@ def export_dialogue(
             "speaker": str(getattr(node, "speaker", "")),
             "listener": str(getattr(node, "listener", "")),
             "voice": canonical_resref(getattr(node, "vo_resref", "")),
-            "sound": canonical_resref(getattr(node, "sound", "")),
+            "sound": sound_name,
+            "media": media_by_sound.get(sound_name.lower()) if sound_name else None,
             "cameraAngle": int(getattr(node, "camera_angle", 0)),
             "cameraId": getattr(node, "camera_id", None),
             "cameraFov": getattr(node, "camera_fov", None),
@@ -792,6 +865,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         installation,
         trask_actor["conversation"],
         output_root / "dialogues" / f"{trask_actor['conversation']}.json",
+        Capsule(game_root / "lips" / f"{module}_loc.mod")
+        if (game_root / "lips" / f"{module}_loc.mod").is_file() else None,
     )
     opening_door = export_opening_door(
         installation, output_root / "doors" / "end_door01.glb", textures)
@@ -891,7 +966,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         },
         "limitations": [
             "Only Trask and the opening door are materialized; other creature and door records remain placements.",
-            "Dialogue traversal and cameras are partial; scripts, audio, lip sync, animated cameras, and shot obstruction remain.",
+            "Dialogue traversal is partial; scripts, per-node gestures, animated cameras, and shot obstruction remain.",
             "Room lightmaps and light nodes are source-authored; renderer transfer-function parity remains under test.",
         ],
     }

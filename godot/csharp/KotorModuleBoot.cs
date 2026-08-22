@@ -25,6 +25,7 @@ public sealed partial class KotorModuleBoot : Node3D
     };
     private CharacterBody3D playerBody = null!;
     private Camera3D camera = null!;
+    private AudioStreamPlayer dialogueVoice = null!;
     private Godot.Environment runtimeEnvironment = null!;
     private CanvasLayer overlayLayer = null!;
     private Label status = null!;
@@ -44,8 +45,11 @@ public sealed partial class KotorModuleBoot : Node3D
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Vector3> actorTalkOffsets =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, LipRig> actorLipRigs =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, CameraRecord> dialogueCameras = [];
     private int capturedFrames;
+    private int captureTargetFrame = 60;
     private int readyFrames;
     private bool moduleReady;
     private bool automatedChoiceApplied;
@@ -54,6 +58,11 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool dialogueCameraActive;
     private float dialogueFieldOfView = 55.0f;
     private string dialogueOwnerActor = "";
+    private string dialogueManifestDirectory = "";
+    private string currentVoiceActor = "";
+    private LipTrack? currentLipTrack;
+    private LipRig? currentLipRig;
+    private int currentLipSegment = -1;
     private string lastDialogueSpeaker = "TRASK ULGO";
     private float yaw;
     private float pitch;
@@ -62,8 +71,12 @@ public sealed partial class KotorModuleBoot : Node3D
     {
         CreateEnvironment();
         CreateCamera();
+        CreateAudio();
         CreateOverlay();
         Input.MouseMode = Input.MouseModeEnum.Captured;
+        if (int.TryParse(System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_FRAME"),
+                out var configuredCaptureFrame))
+            captureTargetFrame = Math.Max(1, configuredCaptureFrame);
 
         var manifestPath = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_MODULE_MANIFEST");
         if (string.IsNullOrWhiteSpace(manifestPath))
@@ -88,6 +101,7 @@ public sealed partial class KotorModuleBoot : Node3D
             MovePlayer(movement.Normalized() * speed * (float)delta);
         }
         UpdateInteractionPrompt();
+        UpdateLipSync();
 
         if (moduleReady)
         {
@@ -122,10 +136,14 @@ public sealed partial class KotorModuleBoot : Node3D
             if (readyFrames == 40 &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_CLEAN") == "1")
                 overlayLayer.Visible = false;
+            if (readyFrames == 40 &&
+                System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP") == "1")
+                FrameLipSyncCloseup(dialogueOwnerActor);
         }
 
         var capturePath = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE");
-        if (moduleReady && !string.IsNullOrWhiteSpace(capturePath) && ++capturedFrames == 60)
+        if (moduleReady && !string.IsNullOrWhiteSpace(capturePath) &&
+            ++capturedFrames == captureTargetFrame)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(capturePath))!);
             var error = GetViewport().GetTexture().GetImage().SavePng(capturePath);
@@ -296,6 +314,13 @@ public sealed partial class KotorModuleBoot : Node3D
         playerBody.AddChild(camera);
     }
 
+    private void CreateAudio()
+    {
+        dialogueVoice = new AudioStreamPlayer { Name = "DialogueVoice" };
+        dialogueVoice.Finished += OnDialogueVoiceFinished;
+        AddChild(dialogueVoice);
+    }
+
     private void CreateOverlay()
     {
         overlayLayer = new CanvasLayer();
@@ -405,6 +430,7 @@ public sealed partial class KotorModuleBoot : Node3D
             throw new InvalidDataException($"Unsupported dialogue graph: {path}");
         var starterIndex = Math.Clamp(graph.OpeningStarter, 0, graph.Starters.Count - 1);
         dialogueOwnerActor = actor.Template;
+        dialogueManifestDirectory = manifestDirectory;
         PresentDialogueNode(graph, graph.Starters[starterIndex].Target, new HashSet<string>(), 0);
     }
 
@@ -473,6 +499,106 @@ public sealed partial class KotorModuleBoot : Node3D
         return string.IsNullOrWhiteSpace(node.Speaker) ? dialogueOwnerActor : node.Speaker;
     }
 
+    private void PlayDialoguePerformance(DialogueNode node, string actor)
+    {
+        ClearLipPose();
+        PlayActorAnimation(actor, "tlknorm");
+        currentVoiceActor = actor;
+        actorLipRigs.TryGetValue(actor, out currentLipRig);
+        currentLipTrack = null;
+        currentLipSegment = -1;
+        dialogueVoice.Stop();
+        if (node.Media?.AudioPath is not { Length: > 0 } audioRelative)
+            return;
+
+        var audioPath = ResolveBundlePath(audioRelative);
+        var audioBytes = File.ReadAllBytes(audioPath);
+        AudioStream stream = node.Media.AudioFormat.ToLowerInvariant() switch
+        {
+            "mp3" => AudioStreamMP3.LoadFromBuffer(audioBytes),
+            "wav" => AudioStreamWav.LoadFromBuffer(audioBytes, new Godot.Collections.Dictionary()),
+            _ => throw new InvalidDataException(
+                $"Unsupported dialogue audio format: {node.Media.AudioFormat}")
+        };
+        dialogueVoice.Stream = stream;
+        if (node.Media.LipPath is { Length: > 0 } lipRelative)
+        {
+            var lipPath = ResolveBundlePath(lipRelative);
+            currentLipTrack = JsonSerializer.Deserialize<LipTrack>(
+                File.ReadAllText(lipPath), JsonOptions())
+                ?? throw new InvalidDataException($"LIP track is empty: {lipPath}");
+            if (currentLipTrack.Schema != "nikami-aurora-kotor-lip-v1")
+                throw new InvalidDataException($"Unsupported LIP track: {lipPath}");
+        }
+        dialogueVoice.Play();
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_AUDIO status=playing actor={actor} sound={node.Sound} " +
+                 $"format={node.Media.AudioFormat} bytes={audioBytes.Length} " +
+                 $"duration={stream.GetLength():F3} lipFrames={currentLipTrack?.Frames.Count ?? 0}");
+    }
+
+    private string ResolveBundlePath(string relativePath)
+    {
+        var root = Path.GetFullPath(dialogueManifestDirectory) + Path.DirectorySeparatorChar;
+        var fullPath = Path.GetFullPath(Path.Combine(
+            dialogueManifestDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"Dialogue media path escapes the bundle: {relativePath}");
+        return fullPath;
+    }
+
+    private void UpdateLipSync()
+    {
+        if (currentLipTrack is null || !dialogueVoice.Playing || currentLipTrack.Frames.Count == 0)
+            return;
+        var time = dialogueVoice.GetPlaybackPosition();
+        var rightIndex = currentLipTrack.Frames.Count - 1;
+        for (var index = 0; index < currentLipTrack.Frames.Count; index++)
+        {
+            if (time <= currentLipTrack.Frames[index].Time)
+            {
+                rightIndex = index;
+                break;
+            }
+        }
+        var leftIndex = Math.Max(0, rightIndex - 1);
+        var segmentChanged = rightIndex != currentLipSegment;
+        currentLipSegment = rightIndex;
+        var left = currentLipTrack.Frames[leftIndex];
+        var right = currentLipTrack.Frames[rightIndex];
+        var span = right.Time - left.Time;
+        var factor = span > 0.000001f ? Math.Clamp((time - left.Time) / span, 0.0f, 1.0f) : 0.0f;
+        if (currentLipRig is not null)
+            currentLipRig.Modifier.SetSample(left.Shape, right.Shape, factor);
+        if (segmentChanged)
+            GD.Print($"NIKAMI_AURORA_LIP status=sample actor={currentVoiceActor} time={time:F3} " +
+                     $"left={left.Shape} right={right.Shape} factor={factor:F3}");
+    }
+
+    private void OnDialogueVoiceFinished()
+    {
+        ClearLipPose();
+        currentLipTrack = null;
+        currentLipSegment = -1;
+        if (!string.IsNullOrWhiteSpace(currentVoiceActor))
+            PlayActorAnimation(currentVoiceActor, "pause1");
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_AUDIO status=finished actor={currentVoiceActor}");
+        currentVoiceActor = "";
+        foreach (var button in activeChoiceButtons)
+            button.Disabled = false;
+    }
+
+    private void StopDialoguePerformance()
+    {
+        var actor = currentVoiceActor;
+        dialogueVoice.Stop();
+        ClearLipPose();
+        currentLipTrack = null;
+        currentLipSegment = -1;
+        currentVoiceActor = "";
+        if (!string.IsNullOrWhiteSpace(actor))
+            PlayActorAnimation(actor, "pause1");
+    }
+
     private void RestoreGameplayCamera()
     {
         if (!dialogueCameraActive) return;
@@ -482,6 +608,23 @@ public sealed partial class KotorModuleBoot : Node3D
         camera.Rotation = new Vector3(pitch, 0, 0);
         camera.Fov = GameplayFieldOfView;
         GD.Print("NIKAMI_AURORA_DIALOGUE_CAMERA status=released");
+    }
+
+    private void FrameLipSyncCloseup(string actor)
+    {
+        if (!actorModels.TryGetValue(actor, out var model)) return;
+        var target = actorTalkOffsets.TryGetValue(actor, out var talkOffset)
+            ? model.GlobalTransform * talkOffset
+            : model.GlobalPosition + Vector3.Up * 1.6f;
+        var forward = -model.GlobalTransform.Basis.Z.Normalized();
+        var eye = target + forward * 1.35f + Vector3.Up * 0.03f;
+        camera.TopLevel = true;
+        camera.GlobalPosition = eye;
+        camera.LookAt(target, Vector3.Up);
+        camera.Fov = 40.0f;
+        dialogueCameraActive = true;
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active mode=lip-closeup actor={actor} " +
+                 $"fov={camera.Fov:F3} position={eye}");
     }
 
     private static T? FindDescendant<T>(Node node) where T : Node
@@ -507,11 +650,76 @@ public sealed partial class KotorModuleBoot : Node3D
         return null;
     }
 
+    private static IEnumerable<T> FindDescendants<T>(Node node) where T : Node
+    {
+        if (node is T match) yield return match;
+        foreach (var child in node.GetChildren())
+        {
+            foreach (var found in FindDescendants<T>(child))
+                yield return found;
+        }
+    }
+
+    private static LipRig? BuildLipRig(Node actor, AnimationPlayer animationPlayer)
+    {
+        var talk = animationPlayer.GetAnimation("talk");
+        if (talk is null) return null;
+        var skeletons = FindDescendants<Skeleton3D>(actor).ToArray();
+        var tracks = new Dictionary<int, KotorLipModifier.TrackBinding>();
+        Skeleton3D? targetSkeleton = null;
+        for (var trackIndex = 0; trackIndex < talk.GetTrackCount(); trackIndex++)
+        {
+            var type = talk.TrackGetType(trackIndex);
+            if (type is not Animation.TrackType.Position3D and not Animation.TrackType.Rotation3D)
+                continue;
+            var path = talk.TrackGetPath(trackIndex).ToString();
+            var separator = path.LastIndexOf(':');
+            if (separator < 0 || separator == path.Length - 1) continue;
+            var boneName = path[(separator + 1)..];
+            var skeleton = skeletons.FirstOrDefault(candidate => candidate.FindBone(boneName) >= 0);
+            if (skeleton is null) continue;
+            if (targetSkeleton is not null && targetSkeleton != skeleton)
+                throw new InvalidDataException("Talk animation spans multiple skeletons");
+            targetSkeleton = skeleton;
+            var boneIndex = skeleton.FindBone(boneName);
+            if (!tracks.TryGetValue(boneIndex, out var boneTrack))
+            {
+                boneTrack = new KotorLipModifier.TrackBinding(boneIndex);
+                tracks[boneIndex] = boneTrack;
+            }
+            if (type == Animation.TrackType.Position3D)
+                boneTrack.PositionTrack = trackIndex;
+            else
+                boneTrack.RotationTrack = trackIndex;
+        }
+        if (targetSkeleton is null || tracks.Count == 0) return null;
+        var ordered = tracks.Values.OrderBy(track => BoneDepth(targetSkeleton, track.BoneIndex)).ToArray();
+        var modifier = new KotorLipModifier { Name = "KotorLipModifier" };
+        targetSkeleton.AddChild(modifier);
+        modifier.Configure(talk, ordered);
+        return new LipRig(modifier, talk, ordered);
+    }
+
+    private static int BoneDepth(Skeleton3D skeleton, int boneIndex)
+    {
+        var depth = 0;
+        while ((boneIndex = skeleton.GetBoneParent(boneIndex)) >= 0)
+            depth++;
+        return depth;
+    }
+
+    private void ClearLipPose()
+    {
+        currentLipRig?.Modifier.StopSample();
+        currentLipRig = null;
+    }
+
     private void PresentDialogueNode(DialogueGraph graph, string key, HashSet<string> visited, int depth)
     {
         if (depth > 32 || !visited.Add(key) || !graph.Nodes.TryGetValue(key, out var node))
         {
             dialoguePanel.Visible = false;
+            StopDialoguePerformance();
             RestoreGameplayCamera();
             return;
         }
@@ -524,7 +732,7 @@ public sealed partial class KotorModuleBoot : Node3D
         }
         var speakerActor = ResolveDialogueActor(node);
         if (speakerActor is not null)
-            PlayActorAnimation(speakerActor, "tlknorm");
+            PlayDialoguePerformance(node, speakerActor);
 
         dialoguePanel.Visible = true;
         Input.MouseMode = Input.MouseModeEnum.Visible;
@@ -553,8 +761,10 @@ public sealed partial class KotorModuleBoot : Node3D
             close.Pressed += () =>
             {
                 dialoguePanel.Visible = false;
+                StopDialoguePerformance();
                 RestoreGameplayCamera();
             };
+            close.Disabled = dialogueVoice.Playing;
             dialogueChoices.AddChild(close);
             activeChoiceButtons.Add(close);
             return;
@@ -563,6 +773,7 @@ public sealed partial class KotorModuleBoot : Node3D
         {
             var label = choice.Node.Kind == "reply" ? choice.Node.Text : "Continue";
             var button = CreateChoiceButton(label);
+            button.Disabled = dialogueVoice.Playing;
             var targetKey = choice.Target;
             button.Pressed += () => FollowDialogueChoice(graph, targetKey);
             dialogueChoices.AddChild(button);
@@ -576,6 +787,8 @@ public sealed partial class KotorModuleBoot : Node3D
         if (visible is null)
         {
             dialoguePanel.Visible = false;
+            StopDialoguePerformance();
+            RestoreGameplayCamera();
             return;
         }
         if (visible.Kind == "reply" && visible.Links.Count > 0)
@@ -639,6 +852,7 @@ public sealed partial class KotorModuleBoot : Node3D
         actorModels.Clear();
         actorAnimations.Clear();
         actorTalkOffsets.Clear();
+        actorLipRigs.Clear();
         var loaded = 0;
         foreach (var creature in creatures)
         {
@@ -672,6 +886,14 @@ public sealed partial class KotorModuleBoot : Node3D
                 PlayActorAnimation(creature.Template, "pause1");
                 GD.Print($"NIKAMI_AURORA_ACTOR_ANIMATION status=ready actor={creature.Template} " +
                          $"tracks={string.Join(',', animationPlayer.GetAnimationList())}");
+                var lipRig = BuildLipRig(actor, animationPlayer);
+                if (lipRig is not null)
+                {
+                    actorLipRigs[creature.Template] = lipRig;
+                    GD.Print($"NIKAMI_AURORA_LIP_RIG status=ready actor={creature.Template} " +
+                             $"bones={lipRig.Tracks.Count} tracks={lipRig.TrackCount} " +
+                             $"shapes=16 duration={lipRig.Animation.GetLength():F3}");
+                }
             }
             loaded++;
         }
@@ -912,10 +1134,26 @@ public sealed partial class KotorModuleBoot : Node3D
         int NodeCount, int OpeningStarter);
     private sealed record DialogueGraph(string Schema, int OpeningStarter,
         IReadOnlyList<DialogueLink> Starters, IReadOnlyDictionary<string, DialogueNode> Nodes);
-    private sealed record DialogueNode(string Kind, string Text, string Speaker,
+    private sealed record DialogueNode(string Kind, string Text, string Speaker, string Sound,
         int CameraAngle, int? CameraId, float? CameraFov, float? CameraHeight,
-        IReadOnlyList<DialogueAnimation> Animations, IReadOnlyList<DialogueLink> Links);
+        IReadOnlyList<DialogueAnimation> Animations, DialogueMedia? Media,
+        IReadOnlyList<DialogueLink> Links);
     private sealed record DialogueAnimation(int AnimationId, string Participant);
+    private sealed record DialogueMedia(string AudioPath, string AudioFormat, string AudioSha256,
+        int AudioByteCount, string? LipPath, string? LipSourceSha256, float? LipLength,
+        int? LipFrameCount);
+    private sealed record LipTrack(string Schema, string Resref, string SourceSha256, float Length,
+        IReadOnlyList<LipFrame> Frames);
+    private sealed record LipFrame(float Time, int Shape);
+    private sealed class LipRig(KotorLipModifier modifier, Animation animation,
+        IReadOnlyList<KotorLipModifier.TrackBinding> tracks)
+    {
+        public KotorLipModifier Modifier { get; } = modifier;
+        public Animation Animation { get; } = animation;
+        public IReadOnlyList<KotorLipModifier.TrackBinding> Tracks { get; } = tracks;
+        public int TrackCount => Tracks.Sum(track =>
+            (track.PositionTrack >= 0 ? 1 : 0) + (track.RotationTrack >= 0 ? 1 : 0));
+    }
     private sealed record DialogueLink(string Target, string Condition1, bool Condition1Not,
         string Condition2, bool Condition2Not, int Logic);
     private sealed record CountRecord(int Rooms, int Creatures, int Doors, int Waypoints, int Cameras,
