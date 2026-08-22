@@ -11,10 +11,10 @@ target manifest, import the real KOTOR Endar Spire room geometry and textures,
 load that owned-data bundle into Godot, assemble Trask from his installed body,
 head, texture, weapon, skin weights, and inherited animations, and advance
 through the first authored dialogue choices. Authored lightmaps, area ambient
-color, and room light nodes drive the opening presentation. Movement is
-constrained to the installed room walkmeshes and the first authored lockdown
-door is materialized and interactive. Full combat and script execution remain
-active milestones.
+color, room light nodes, static cameras, and dialogue framing drive the opening
+presentation. Movement is constrained to the installed room walkmeshes and the
+first authored lockdown door is materialized and interactive. Full combat and
+script execution remain active milestones.
 
 ## Why a new runtime
 

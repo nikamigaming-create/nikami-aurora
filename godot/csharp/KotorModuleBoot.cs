@@ -6,6 +6,7 @@ namespace Nikami.Aurora.GodotRuntime;
 
 public sealed partial class KotorModuleBoot : Node3D
 {
+    private const float GameplayFieldOfView = 72.0f;
     private static readonly Shader OdysseyLightmapShader = new()
     {
         Code = """
@@ -39,12 +40,20 @@ public sealed partial class KotorModuleBoot : Node3D
     private readonly List<InteractiveDoor> interactiveDoors = [];
     private readonly Dictionary<string, AnimationPlayer> actorAnimations =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Node3D> actorModels =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Vector3> actorTalkOffsets =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<int, CameraRecord> dialogueCameras = [];
     private int capturedFrames;
     private int readyFrames;
     private bool moduleReady;
     private bool automatedChoiceApplied;
     private bool automatedMoveApplied;
     private bool automatedDoorApplied;
+    private bool dialogueCameraActive;
+    private float dialogueFieldOfView = 55.0f;
+    private string dialogueOwnerActor = "";
     private string lastDialogueSpeaker = "TRASK ULGO";
     private float yaw;
     private float pitch;
@@ -166,6 +175,10 @@ public sealed partial class KotorModuleBoot : Node3D
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
 
             var manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
+            dialogueCameras.Clear();
+            foreach (var sourceCamera in manifest.Cameras)
+                dialogueCameras[sourceCamera.Id] = sourceCamera;
+            dialogueFieldOfView = manifest.CameraStyle.ViewAngle;
             ApplyAreaLighting(manifest.Lighting);
             var loadedRooms = 0;
             foreach (var room in manifest.Rooms)
@@ -277,7 +290,7 @@ public sealed partial class KotorModuleBoot : Node3D
             Current = true,
             Near = 0.05f,
             Far = 1000.0f,
-            Fov = 72.0f
+            Fov = GameplayFieldOfView
         };
         camera.Position = Vector3.Up * 1.65f;
         playerBody.AddChild(camera);
@@ -391,7 +404,7 @@ public sealed partial class KotorModuleBoot : Node3D
         if (graph.Schema != "nikami-aurora-kotor-dialogue-v1" || graph.Starters.Count == 0)
             throw new InvalidDataException($"Unsupported dialogue graph: {path}");
         var starterIndex = Math.Clamp(graph.OpeningStarter, 0, graph.Starters.Count - 1);
-        PlayActorAnimation(actor.Template, "tlknorm");
+        dialogueOwnerActor = actor.Template;
         PresentDialogueNode(graph, graph.Starters[starterIndex].Target, new HashSet<string>(), 0);
     }
 
@@ -406,6 +419,71 @@ public sealed partial class KotorModuleBoot : Node3D
         GD.Print($"NIKAMI_AURORA_ACTOR_ANIMATION status=playing actor={actor} animation={match}");
     }
 
+    private void ApplyDialogueCamera(DialogueNode node)
+    {
+        if (node.CameraId is int cameraId && cameraId > 0 &&
+            dialogueCameras.TryGetValue(cameraId, out var source))
+        {
+            var position = ToGodot(source.Position) + Vector3.Up * source.Height;
+            var forward = ToGodot(source.Forward).Normalized();
+            var up = ToGodot(source.Up).Normalized();
+            if (forward.LengthSquared() < 0.99f || up.LengthSquared() < 0.99f)
+                throw new InvalidDataException($"Authored camera {cameraId} has an invalid basis");
+            camera.TopLevel = true;
+            camera.GlobalPosition = position;
+            camera.LookAt(position + forward, up);
+            camera.Fov = node.CameraFov is > 0 ? node.CameraFov.Value : source.Fov;
+            dialogueCameraActive = true;
+            GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active mode=static id={cameraId} " +
+                     $"fov={camera.Fov:F3} position={position}");
+            return;
+        }
+        var speakerActor = ResolveDialogueActor(node);
+        if (string.IsNullOrWhiteSpace(node.Text) || speakerActor is null ||
+            !actorModels.TryGetValue(speakerActor, out var speaker))
+            return;
+
+        var listenerPosition = playerBody.GlobalPosition + Vector3.Up * 1.55f;
+        var talkDummy = FindDescendantBySuffix<Node3D>(speaker, "talkdummy");
+        var speakerPosition = talkDummy?.GlobalPosition ??
+            (actorTalkOffsets.TryGetValue(speakerActor, out var talkOffset)
+                ? speaker.GlobalTransform * talkOffset
+                : speaker.GlobalPosition + Vector3.Up * 1.55f);
+        var listenerToSpeaker = speakerPosition - listenerPosition;
+        var distance = listenerToSpeaker.Length();
+        if (distance < 0.01f) return;
+        var direction = listenerToSpeaker / distance;
+        var offset = Math.Min(0.25f * distance, 1.0f);
+        var side = direction.Cross(Vector3.Down).Normalized();
+        var center = 0.5f * (listenerPosition + speakerPosition);
+        var eye = center - offset * direction + offset * side + 0.1f * Vector3.Up;
+        var target = speakerPosition - 0.1f * distance * side + 0.1f * Vector3.Up;
+        camera.TopLevel = true;
+        camera.GlobalPosition = eye;
+        camera.LookAt(target, Vector3.Up);
+        camera.Fov = dialogueFieldOfView;
+        dialogueCameraActive = true;
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active mode=speaker actor={speakerActor} " +
+                 $"fov={camera.Fov:F3} position={eye}");
+    }
+
+    private string? ResolveDialogueActor(DialogueNode node)
+    {
+        if (node.Kind != "entry") return null;
+        return string.IsNullOrWhiteSpace(node.Speaker) ? dialogueOwnerActor : node.Speaker;
+    }
+
+    private void RestoreGameplayCamera()
+    {
+        if (!dialogueCameraActive) return;
+        dialogueCameraActive = false;
+        camera.TopLevel = false;
+        camera.Position = Vector3.Up * 1.65f;
+        camera.Rotation = new Vector3(pitch, 0, 0);
+        camera.Fov = GameplayFieldOfView;
+        GD.Print("NIKAMI_AURORA_DIALOGUE_CAMERA status=released");
+    }
+
     private static T? FindDescendant<T>(Node node) where T : Node
     {
         if (node is T match) return match;
@@ -417,19 +495,36 @@ public sealed partial class KotorModuleBoot : Node3D
         return null;
     }
 
+    private static T? FindDescendantBySuffix<T>(Node node, string suffix) where T : Node
+    {
+        if (node is T match && node.Name.ToString().EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            return match;
+        foreach (var child in node.GetChildren())
+        {
+            var found = FindDescendantBySuffix<T>(child, suffix);
+            if (found is not null) return found;
+        }
+        return null;
+    }
+
     private void PresentDialogueNode(DialogueGraph graph, string key, HashSet<string> visited, int depth)
     {
         if (depth > 32 || !visited.Add(key) || !graph.Nodes.TryGetValue(key, out var node))
         {
             dialoguePanel.Visible = false;
+            RestoreGameplayCamera();
             return;
         }
+        ApplyDialogueCamera(node);
         if (string.IsNullOrWhiteSpace(node.Text))
         {
             if (node.Links.Count > 0)
                 PresentDialogueNode(graph, node.Links[0].Target, visited, depth + 1);
             return;
         }
+        var speakerActor = ResolveDialogueActor(node);
+        if (speakerActor is not null)
+            PlayActorAnimation(speakerActor, "tlknorm");
 
         dialoguePanel.Visible = true;
         Input.MouseMode = Input.MouseModeEnum.Visible;
@@ -455,7 +550,11 @@ public sealed partial class KotorModuleBoot : Node3D
         if (choices.Count == 0)
         {
             var close = CreateChoiceButton("Continue");
-            close.Pressed += () => dialoguePanel.Visible = false;
+            close.Pressed += () =>
+            {
+                dialoguePanel.Visible = false;
+                RestoreGameplayCamera();
+            };
             dialogueChoices.AddChild(close);
             activeChoiceButtons.Add(close);
             return;
@@ -537,6 +636,9 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private int LoadActorModels(IEnumerable<CreatureRecord> creatures, string manifestDirectory)
     {
+        actorModels.Clear();
+        actorAnimations.Clear();
+        actorTalkOffsets.Clear();
         var loaded = 0;
         foreach (var creature in creatures)
         {
@@ -554,6 +656,9 @@ public sealed partial class KotorModuleBoot : Node3D
             // axis to Godot -Z, so the yaw sign is preserved.
             actor.Rotation = new Vector3(0, creature.Bearing, 0);
             AddChild(actor);
+            actorModels[creature.Template] = actor;
+            if (creature.TalkOffset is { Count: >= 3 })
+                actorTalkOffsets[creature.Template] = ToGodot(creature.TalkOffset);
             var animationPlayer = FindDescendant<AnimationPlayer>(actor);
             if (animationPlayer is not null)
             {
@@ -776,23 +881,30 @@ public sealed partial class KotorModuleBoot : Node3D
         EntryRecord Entry,
         TargetRecord Target,
         AreaLightingRecord Lighting,
+        CameraStyleRecord CameraStyle,
         IReadOnlyList<RoomRecord> Rooms,
         IReadOnlyList<CreatureRecord> Creatures,
         IReadOnlyList<DoorRecord> Doors,
+        IReadOnlyList<CameraRecord> Cameras,
         CountRecord Counts);
 
     private sealed record EntryRecord(IReadOnlyList<float> Position, float DirectionRadians);
     private sealed record TargetRecord(string ExecutableSha256);
     private sealed record AreaLightingRecord(IReadOnlyList<float> DynamicAmbient, bool Shadows,
         int ShadowOpacity, string SourceSha256);
+    private sealed record CameraStyleRecord(int Id, float ViewAngle, string SourceSha256);
     private sealed record RoomRecord(string Model, string? Glb, IReadOnlyList<float> Position,
         IReadOnlyList<IReadOnlyList<IReadOnlyList<float>>>? WalkmeshTriangles,
         IReadOnlyList<LightRecord>? Lights);
     private sealed record LightRecord(string Name, IReadOnlyList<float> Position,
         IReadOnlyList<float> Color, float Radius, float Multiplier, bool AmbientOnly,
         int DynamicType, bool AffectDynamic, bool Shadow, int Priority);
+    private sealed record CameraRecord(int Id, IReadOnlyList<float> Position, float Height, float Fov,
+        float PitchDegrees, IReadOnlyList<float> OrientationWxyz, IReadOnlyList<float> Forward,
+        IReadOnlyList<float> Up);
     private sealed record CreatureRecord(string Template, IReadOnlyList<float> Position, float Bearing,
-        string? Glb, string? Conversation, DialogueReference? Dialogue);
+        string? Glb, string? Conversation, DialogueReference? Dialogue,
+        IReadOnlyList<float>? TalkOffset);
     private sealed record DoorRecord(string Template, string Tag, IReadOnlyList<float> Position, float Bearing,
         string LinkedToModule, string? Glb, string? Model, string? Conversation, string? OnOpen,
         bool Locked, bool KeyRequired);
@@ -801,7 +913,9 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record DialogueGraph(string Schema, int OpeningStarter,
         IReadOnlyList<DialogueLink> Starters, IReadOnlyDictionary<string, DialogueNode> Nodes);
     private sealed record DialogueNode(string Kind, string Text, string Speaker,
-        IReadOnlyList<DialogueLink> Links);
+        int CameraAngle, int? CameraId, float? CameraFov, float? CameraHeight,
+        IReadOnlyList<DialogueAnimation> Animations, IReadOnlyList<DialogueLink> Links);
+    private sealed record DialogueAnimation(int AnimationId, string Participant);
     private sealed record DialogueLink(string Target, string Condition1, bool Condition1Not,
         string Condition2, bool Condition2Not, int Logic);
     private sealed record CountRecord(int Rooms, int Creatures, int Doors, int Waypoints, int Cameras,

@@ -13,6 +13,7 @@ retail executable.
 - Layout: 15 authored room records, including one walkmesh-only connector.
 - Godot geometry: 14 visual room models, 78,346 triangles.
 - Gameplay placements: 26 creatures, 15 doors, and 58 waypoints.
+- Cameras: 40 installed GIT camera records plus the area camera-style row.
 - Lighting: installed area ambient color and 134 room-model light records.
 - Navigation: 540 walkable source triangles with an accepted grounded movement
   proof from the authored entry point.
@@ -57,7 +58,6 @@ For a local visual-QA frame without the proof overlay:
   -CapturePath 'artifacts/kotor-trask-qa.png' `
   -DialogueChoice 0 `
   -OpenFirstDoor `
-  -TestMoveMeters 6.25 `
   -CleanCapture `
   -CaptureAndExit
 ```
@@ -74,6 +74,8 @@ Confirmed in the new runtime:
 - assembled, skinned Trask model with separate hook-bound head skin;
 - inherited idle, talk, and walk animation tracks;
 - weapon attachment following the animated right hand;
+- GFF WXYZ camera orientation, height, pitch, and FOV import;
+- per-node DLG camera directives and source-style dialogue framing;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
 - walkmesh-constrained player movement;
@@ -83,6 +85,7 @@ Confirmed in the new runtime:
 Not yet implemented:
 
 - final renderer transfer-function and light-attenuation parity;
+- dialogue-camera obstruction correction and nondeterministic shot variants;
 - lipsync and per-line gesture selection;
 - voice and area audio playback;
 - player character creation/model assembly;

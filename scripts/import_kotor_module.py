@@ -125,6 +125,33 @@ def quaternion_matrix(node: Any) -> np.ndarray:
     return transform
 
 
+def camera_vectors(camera: Any) -> tuple[list[float], list[float]]:
+    # GFF Orientation stores w,x,y,z. PyKotor's generic Vector4 exposes those
+    # file-order values through x,y,z,w respectively.
+    file_quaternion = np.asarray([
+        float(camera.orientation.x),
+        float(camera.orientation.y),
+        float(camera.orientation.z),
+        float(camera.orientation.w),
+    ], dtype=np.float64)
+    magnitude = np.linalg.norm(file_quaternion)
+    if magnitude <= 1e-12:
+        file_quaternion = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    else:
+        file_quaternion /= magnitude
+    rotation = (
+        trimesh.transformations.quaternion_matrix(file_quaternion)
+        @ trimesh.transformations.rotation_matrix(
+            math.radians(float(camera.pitch)), [1.0, 0.0, 0.0])
+    )
+    forward = rotation @ np.asarray([0.0, 0.0, -1.0, 0.0])
+    up = rotation @ np.asarray([0.0, 1.0, 0.0, 0.0])
+    return (
+        [float(item) for item in forward[:3]],
+        [float(item) for item in up[:3]],
+    )
+
+
 class TextureCache:
     def __init__(self, installation: Installation):
         self.installation = installation
@@ -535,6 +562,13 @@ def export_trask_actor(
     head = head_mdl = head_mdx = None
     if head_model:
         head, head_mdl, head_mdx = load_model_pair(installation, head_model)
+    talk_offset = None
+    if head is not None:
+        head_hook = find_node_transform(body, "headhook")
+        talk_dummy = find_node_transform(head, "talkdummy")
+        if head_hook is not None and talk_dummy is not None:
+            talk_transform = head_hook @ talk_dummy
+            talk_offset = [float(item) for item in talk_transform[:3, 3]]
     right = right_mdl = right_mdx = None
     if right_model:
         right, right_mdl, right_mdx = load_model_pair(installation, right_model)
@@ -582,6 +616,7 @@ def export_trask_actor(
         "animationSource": "S_Male02",
         "animationSourceSha256": animation_source_hash,
         "animation": animation_report,
+        "talkOffset": talk_offset,
     }
 
 
@@ -608,6 +643,12 @@ def export_dialogue(
         stringref = text_ref(node)
         return talktable.string(stringref) if stringref >= 0 else ""
 
+    def animation_record(animation: Any) -> dict[str, Any]:
+        return {
+            "animationId": int(animation.animation_id),
+            "participant": str(animation.participant),
+        }
+
     def link_record(link: Any) -> dict[str, Any]:
         return {
             "target": node_key(link.node),
@@ -630,6 +671,11 @@ def export_dialogue(
             "listener": str(getattr(node, "listener", "")),
             "voice": canonical_resref(getattr(node, "vo_resref", "")),
             "sound": canonical_resref(getattr(node, "sound", "")),
+            "cameraAngle": int(getattr(node, "camera_angle", 0)),
+            "cameraId": getattr(node, "camera_id", None),
+            "cameraFov": getattr(node, "camera_fov", None),
+            "cameraHeight": getattr(node, "camera_height", None),
+            "animations": [animation_record(item) for item in getattr(node, "animations", [])],
             "script1": canonical_resref(getattr(node, "script1", "")),
             "script2": canonical_resref(getattr(node, "script2", "")),
             "links": [link_record(link) for link in node.links],
@@ -710,6 +756,11 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
     ifo = read_ifo(resource_data(ifo_resource))
     git = read_git(resource_data(git_resource))
     are = read_are(resource_data(are_resource))
+    camera_style_resource = installation.resource("camerastyle", ResourceType.TwoDA)
+    if camera_style_resource is None:
+        raise RuntimeError("camerastyle.2da could not be resolved")
+    camera_styles = read_2da(resource_data(camera_style_resource))
+    dialogue_view_angle = float(camera_styles.get_cell(int(are.camera_style), "viewangle"))
     area_resref = canonical_resref(ifo.area_name)
     lyt_resource = installation.resource(area_resref, ResourceType.LYT)
     if lyt_resource is None:
@@ -775,6 +826,24 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         }
         for waypoint in git.waypoints
     ]
+    cameras = []
+    for source_camera in git.cameras:
+        forward, up = camera_vectors(source_camera)
+        cameras.append({
+            "id": int(source_camera.camera_id),
+            "position": vector3(source_camera.position),
+            "height": float(source_camera.height),
+            "fov": float(source_camera.fov),
+            "pitchDegrees": float(source_camera.pitch),
+            "orientationWxyz": [
+                float(source_camera.orientation.x),
+                float(source_camera.orientation.y),
+                float(source_camera.orientation.z),
+                float(source_camera.orientation.w),
+            ],
+            "forward": forward,
+            "up": up,
+        })
     manifest = {
         "schema": SCHEMA,
         "profileId": "kotor",
@@ -799,10 +868,16 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
             "shadowOpacity": int(are.shadow_opacity),
             "sourceSha256": sha256_bytes(resource_data(are_resource)),
         },
+        "cameraStyle": {
+            "id": int(are.camera_style),
+            "viewAngle": dialogue_view_angle,
+            "sourceSha256": sha256_bytes(resource_data(camera_style_resource)),
+        },
         "rooms": room_records,
         "creatures": creatures,
         "doors": doors,
         "waypoints": waypoints,
+        "cameras": cameras,
         "counts": {
             "rooms": len(room_records),
             "creatures": len(creatures),
@@ -816,7 +891,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         },
         "limitations": [
             "Only Trask and the opening door are materialized; other creature and door records remain placements.",
-            "Dialogue graph traversal is partial; scripts, audio, lip sync, and cinematic camera execution remain.",
+            "Dialogue traversal and cameras are partial; scripts, audio, lip sync, animated cameras, and shot obstruction remain.",
             "Room lightmaps and light nodes are source-authored; renderer transfer-function parity remains under test.",
         ],
     }

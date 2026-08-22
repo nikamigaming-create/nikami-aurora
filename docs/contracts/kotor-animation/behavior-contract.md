@@ -35,8 +35,13 @@ the head inside the collar and is explicitly rejected by visual QA.
 - 88, 83, and 70 animation channels respectively;
 - Trask's source bearing preserved through the KOTOR-to-Godot basis;
 - pistol attachment follows the animated right hand;
-- clean close-up capture verifies that the head is present and the talk pose is
-  not the source rest/T-pose.
+- authored dialogue-camera capture verifies that the head is present and the
+  talk pose is not the source rest/T-pose.
+
+Rest-pose reconstruction errors are below `0.0000009` source units for the
+torso and below `0.0000005` for each arm. This rules out hand scaling from the
+skin-slot, weight, or inverse-bind mapping. Very close wide-angle QA cameras are
+not valid proportion references.
 
 Lip animation timing, per-dialogue gesture selection, animation events,
 transitions, and dangly-mesh simulation remain separate parity gates.
