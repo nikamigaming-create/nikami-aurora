@@ -47,6 +47,10 @@ Opening-room furniture now distinguishes baked room meshes from GIT placeables.
 The installed `PLC_Chair2` model is instanced at all three authored placements;
 because the UTP is not usable, those chairs never steal the footlocker prompt.
 
+Source-opaque room furniture now stays in Godot's opaque depth-writing path.
+The lightmap shader no longer turns generic diffuse alpha into transparency, so
+the opening sofas and bunks correctly occlude the floor behind them.
+
 XR controller presentation follows a three-level provider chain: portable
 OpenXR runtime models, dynamically available Meta FB models, then tracked
 procedural fallbacks. The same primary-stick and face-button actions feed

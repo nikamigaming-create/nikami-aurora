@@ -13,15 +13,16 @@ public sealed partial class KotorModuleBoot : Node3D
     {
         Code = """
             shader_type spatial;
-            render_mode unshaded;
+            render_mode unshaded, depth_draw_opaque;
             uniform sampler2D albedo_texture : source_color, filter_linear_mipmap_anisotropic;
             uniform sampler2D lightmap_texture : source_color, filter_linear_mipmap_anisotropic;
             void fragment() {
                 vec4 base = texture(albedo_texture, UV);
                 vec3 lightmap = texture(lightmap_texture, UV2).rgb;
+                // Current room GLBs declare these surfaces opaque. Writing
+                // ALPHA at all would move them into Godot's transparent pass
+                // and disable the depth behavior solid furniture requires.
                 ALBEDO = base.rgb * min(vec3(1.0), lightmap);
-                ALPHA = base.a;
-                if (ALPHA < 0.05) discard;
             }
             """
     };
@@ -380,6 +381,8 @@ public sealed partial class KotorModuleBoot : Node3D
                      $"xp={initialPlayerExperience}");
             ApplyAreaLighting(manifest.Lighting);
             var loadedRooms = 0;
+            var lightmappedOpaqueMaterials = 0;
+            var baseOpaqueMaterials = 0;
             foreach (var room in manifest.Rooms)
             {
                 if (string.IsNullOrWhiteSpace(room.Glb)) continue;
@@ -392,12 +395,19 @@ public sealed partial class KotorModuleBoot : Node3D
                     throw new InvalidDataException($"Godot could not import room {room.Model}: {glbPath}");
                 imported.Name = room.Model;
                 imported.Position = ToGodot(room.Position);
-                ConfigureStaticRoomMaterials(imported);
+                var materialReport = ConfigureStaticRoomMaterials(imported);
+                lightmappedOpaqueMaterials += materialReport.LightmappedOpaque;
+                baseOpaqueMaterials += materialReport.BaseOpaque;
                 AddChild(imported);
                 loadedRooms++;
                 details.Text = $"Rooms {loadedRooms}/{manifest.Rooms.Count}  •  {room.Model}";
                 await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             }
+            if (lightmappedOpaqueMaterials == 0 || baseOpaqueMaterials == 0)
+                throw new InvalidDataException("Room opacity audit found no configured materials");
+            GD.Print($"NIKAMI_AURORA_OPACITY status=pass policy=source-opaque " +
+                     $"lightmapped={lightmappedOpaqueMaterials} base={baseOpaqueMaterials} " +
+                     "alphaWrites=0 depthWrite=opaque");
 
             var authoredLights = LoadAuthoredLights(manifest.Rooms, manifest.Lighting);
             var materializedPlayer = LoadPlayerModel(
@@ -1780,8 +1790,10 @@ public sealed partial class KotorModuleBoot : Node3D
         return loaded;
     }
 
-    private static void ConfigureStaticRoomMaterials(Node node)
+    private static StaticMaterialReport ConfigureStaticRoomMaterials(Node node)
     {
+        var lightmappedOpaque = 0;
+        var baseOpaque = 0;
         if (node is MeshInstance3D instance && instance.Mesh is not null)
         {
             for (var surface = 0; surface < instance.Mesh.GetSurfaceCount(); surface++)
@@ -1793,17 +1805,30 @@ public sealed partial class KotorModuleBoot : Node3D
                     lightmapped.SetShaderParameter("albedo_texture", source.AlbedoTexture);
                     lightmapped.SetShaderParameter("lightmap_texture", source.EmissionTexture);
                     instance.SetSurfaceOverrideMaterial(surface, lightmapped);
+                    lightmappedOpaque++;
                     continue;
                 }
                 var material = (BaseMaterial3D)source.Duplicate();
                 material.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
+                material.Transparency = BaseMaterial3D.TransparencyEnum.Disabled;
+                material.DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.OpaqueOnly;
+                material.NoDepthTest = false;
+                var albedo = material.AlbedoColor;
+                albedo.A = 1.0f;
+                material.AlbedoColor = albedo;
                 material.Metallic = 0;
                 material.Roughness = 1;
                 instance.SetSurfaceOverrideMaterial(surface, material);
+                baseOpaque++;
             }
         }
         foreach (var child in node.GetChildren())
-            ConfigureStaticRoomMaterials(child);
+        {
+            var childReport = ConfigureStaticRoomMaterials(child);
+            lightmappedOpaque += childReport.LightmappedOpaque;
+            baseOpaque += childReport.BaseOpaque;
+        }
+        return new StaticMaterialReport(lightmappedOpaque, baseOpaque);
     }
 
     private void BuildNavigation(IEnumerable<RoomRecord> rooms)
@@ -2131,6 +2156,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record CountRecord(int Rooms, int Creatures, int Doors, int Waypoints, int Cameras,
         int Placeables, int Triggers, int WalkmeshTriangles, int AuthoredLights);
     private readonly record struct NavigationTriangle(Vector3 A, Vector3 B, Vector3 C);
+    private readonly record struct StaticMaterialReport(int LightmappedOpaque, int BaseOpaque);
     private sealed class InteractiveDoor(
         string instanceId,
         DoorRecord source,
