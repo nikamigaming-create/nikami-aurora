@@ -117,5 +117,9 @@ an explicit renderer delta, not visual-parity evidence.
 - The Vulkan/OpenGL tone difference remains uncalibrated against retail.
 - Godot Movie Maker has not been invoked yet. No draft or showcase video was
   generated while developing this contract.
+- Godot 4.6.3 emits two known engine-exit diagnostics after the post-draw
+  shutdown request (interaction-profile RIDs and a spatial-entity disconnect).
+  The final wrapper requires exactly those two post-route signatures and rejects
+  every changed, additional, or pre-shutdown error.
 - A final MP4 remains blocked on the complete startup-to-action route and all
   facial, opacity, audio, desktop, fallback, and active-XR gates.

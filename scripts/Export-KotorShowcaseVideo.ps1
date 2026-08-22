@@ -48,6 +48,8 @@ if (-not $temporaryDirectory.StartsWith(
 New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
 $intermediate = Join-Path $temporaryDirectory 'godot-showcase.avi'
 $encoded = Join-Path $temporaryDirectory 'nikami-aurora-kotor-showcase.mp4'
+$godotStdoutLog = Join-Path $temporaryDirectory 'godot-stdout.log'
+$godotStderrLog = Join-Path $temporaryDirectory 'godot-stderr.log'
 $completed = $false
 
 try {
@@ -58,6 +60,8 @@ try {
         CleanCapture = $true
         MoviePath = $intermediate
         MovieFps = $FramesPerSecond
+        GodotStdoutPath = $godotStdoutLog
+        GodotStderrPath = $godotStderrLog
     }
     if (-not [string]::IsNullOrWhiteSpace($Manifest)) {
         $launch.Manifest = $Manifest
@@ -76,6 +80,42 @@ try {
     if (-not (Test-Path -LiteralPath $intermediate -PathType Leaf) -or
         (Get-Item -LiteralPath $intermediate).Length -lt 1MB) {
         throw 'Godot Movie Maker did not produce a usable intermediate.'
+    }
+
+    $consoleText = (Get-Content -LiteralPath $godotStdoutLog -Raw) +
+                   [Environment]::NewLine +
+                   (Get-Content -LiteralPath $godotStderrLog -Raw)
+    $shutdownMarker = 'NIKAMI_AURORA_OPENXR status=shutdown-requested boundary=frame-post-draw'
+    $shutdownIndex = $consoleText.IndexOf(
+        $shutdownMarker, [StringComparison]::Ordinal)
+    if ($shutdownIndex -lt 0) {
+        throw 'Godot console did not report its post-draw OpenXR shutdown request.'
+    }
+    $allowedTeardownErrors = @(
+        "^ERROR: 2 RID allocations of type 'N9OpenXRAPI18InteractionProfileE' were leaked at exit\.$",
+        "^ERROR: Attempt to disconnect a nonexistent connection from '<OpenXRSpatialEntityExtension#[0-9]+>'\. Signal: 'spatial_discovery_recommended', callable: 'OpenXRSpatialMarkerTrackingCapability::_on_spatial_discovery_recommended'\.$"
+    )
+    $consoleErrors = [regex]::Matches(
+        $consoleText, '(?m)^ERROR:.*$') | ForEach-Object {
+            $_.Value.TrimEnd([char[]]"`r")
+        }
+    foreach ($consoleError in $consoleErrors) {
+        $allowed = $false
+        foreach ($pattern in $allowedTeardownErrors) {
+            if ($consoleError -match $pattern) {
+                $allowed = $true
+                break
+            }
+        }
+        if (-not $allowed -or
+            $consoleText.IndexOf($consoleError, [StringComparison]::Ordinal) -lt
+                $shutdownIndex) {
+            throw "Unexpected Godot console error: $consoleError"
+        }
+    }
+    if ($consoleErrors.Count -ne 2) {
+        throw "Expected exactly two allowlisted Godot teardown diagnostics, " +
+              "found $($consoleErrors.Count)."
     }
 
     $runtimeLog = Join-Path $env:APPDATA `
@@ -137,6 +177,7 @@ try {
         videoCodec = [string]$video[0].codec_name
         audioCodec = [string]$audio[0].codec_name
         framesPerSecond = $FramesPerSecond
+        allowlistedGodotTeardownDiagnostics = $consoleErrors.Count
     }
     $completed = $true
     $result | ConvertTo-Json

@@ -179,6 +179,8 @@ Confirmed in the new runtime:
   depth-writing paths, eliminating floor bleed through opening-room furniture;
 - source-low-alpha blast decals isolated in blended, non-depth-writing
   materials without weakening opaque floor/furniture coverage;
+- explicit TXI additive window/nebula overlays transferred separately from
+  alpha mixing, revealing the owned `LSP_stars02` exterior sphere;
 - native polygon crossing for `end_trig02`, profile global
   `END_TRASK_DLG 0→10`, Trask event 50, and `end_trask01` starter 8 selection;
 - source-assembled standing Carth with independent head skin, inherited

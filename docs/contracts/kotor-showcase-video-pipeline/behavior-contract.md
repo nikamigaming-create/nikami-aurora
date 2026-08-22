@@ -21,8 +21,9 @@ The wrapper refuses to start unless:
 
 `Start-KotorGodot.ps1 -MoviePath` separately requires both the showcase route
 and OpenXR simulator. It accepts only Godot Movie Maker `.avi` or `.ogv`
-intermediates. The console Godot executable is selected when installed so the
-wrapper waits for route completion instead of racing a detached GUI process.
+  intermediates. The real Godot executable is launched with a
+  `ProcessStartInfo.ArgumentList` and `WaitForExit()` so arguments remain
+  correctly bounded and recording cannot race a detached GUI process.
 
 ## Recording flow
 
@@ -46,6 +47,14 @@ wrapper waits for route completion instead of racing a detached GUI process.
 
 If any step fails, the wrapper removes a partial destination that it created.
 It never overwrites an existing output.
+
+The foreground Godot console is also captured. Godot 4.6.3 emits exactly two
+known diagnostics after Aurora reports its post-draw OpenXR shutdown request: two
+interaction-profile RIDs at engine exit and a spatial-entity signal disconnect.
+The wrapper allowlists only those exact post-shutdown signatures and requires
+exactly two occurrences. Any earlier, additional, or changed `ERROR:` line
+fails recording. These are engine teardown diagnostics after route/movie
+completion, not suppressed runtime failures.
 
 ## Filesystem safety
 

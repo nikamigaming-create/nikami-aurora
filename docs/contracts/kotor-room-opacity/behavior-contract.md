@@ -82,9 +82,9 @@ Confirmed after the fix:
 - locker inventory and the `0→50→150` XP chain pass; and
 - Oculus OpenXR without an HMD still follows the clean desktop fallback.
 
-The first-encounter slice now separately marks known low-alpha room FX such as
-`LHR_blst02` as blended and non-depth-writing. That narrow classification is
-bound to decoded source alpha coverage; opaque sofa, bunk, wall, and floor
-materials remain unchanged. Complete TXI blend/additive/environment-map
-semantics are still a separate classifier contract, and this rule must not be
-generalized to every future Aurora-family material.
+The first-encounter slice separately marks known low-alpha room FX such as
+`LHR_blst02` as mix-blended and non-depth-writing. The starfield slice also
+transfers exact TXI `blending 1`/`blending additive` directives into a distinct
+additive path, restoring stars behind `LHR_dust01`. Opaque sofa, bunk, wall, and
+floor materials remain unchanged. Complete environment-map, decal-order, and
+animated-TXI semantics remain separate contracts.

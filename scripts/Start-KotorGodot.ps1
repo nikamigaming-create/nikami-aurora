@@ -25,6 +25,8 @@ param(
     [string]$MoviePath,
     [ValidateRange(1, 240)]
     [int]$MovieFps = 60,
+    [string]$GodotStdoutPath,
+    [string]$GodotStderrPath,
     [switch]$CleanCapture,
     [switch]$LipSyncCloseup,
     [switch]$EquipmentCloseup,
@@ -49,12 +51,6 @@ if ([string]::IsNullOrWhiteSpace($Godot)) {
     }
     $Godot = $command.Source
 }
-$godotConsole = Join-Path (Split-Path -Parent $Godot) `
-    (([IO.Path]::GetFileNameWithoutExtension($Godot) -replace '_console$', '') + '_console.exe')
-if (Test-Path -LiteralPath $godotConsole -PathType Leaf) {
-    $Godot = $godotConsole
-}
-
 $resolvedMoviePath = $null
 if (-not [string]::IsNullOrWhiteSpace($MoviePath)) {
     if (-not $ShowcaseRoute -or -not $OpenXRSimulator) {
@@ -70,6 +66,17 @@ if (-not [string]::IsNullOrWhiteSpace($MoviePath)) {
         New-Item -ItemType Directory -Path $movieDirectory -Force | Out-Null
     }
     $env:NIKAMI_AURORA_SHOWCASE_EXIT_ON_COMPLETE = "1"
+}
+if ([string]::IsNullOrWhiteSpace($GodotStdoutPath) -xor
+    [string]::IsNullOrWhiteSpace($GodotStderrPath)) {
+    throw '-GodotStdoutPath and -GodotStderrPath must be supplied together.'
+}
+$redirectGodotOutput = -not [string]::IsNullOrWhiteSpace($GodotStdoutPath)
+$resolvedGodotStdoutPath = $null
+$resolvedGodotStderrPath = $null
+if ($redirectGodotOutput) {
+    $resolvedGodotStdoutPath = [IO.Path]::GetFullPath($GodotStdoutPath)
+    $resolvedGodotStderrPath = [IO.Path]::GetFullPath($GodotStderrPath)
 }
 
 $env:NIKAMI_AURORA_MODULE_MANIFEST = (Resolve-Path -LiteralPath $Manifest).Path
@@ -189,9 +196,31 @@ try {
             "--fixed-fps", $MovieFps.ToString([Globalization.CultureInfo]::InvariantCulture)
         )
     }
-    & $Godot @godotArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Godot exited with code $LASTEXITCODE"
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $Godot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $redirectGodotOutput
+    $startInfo.RedirectStandardError = $redirectGodotOutput
+    foreach ($argument in $godotArguments) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+    $godotProcess = [Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $godotProcess) {
+        throw "Godot process could not be started."
+    }
+    if ($redirectGodotOutput) {
+        $stdoutTask = $godotProcess.StandardOutput.ReadToEndAsync()
+        $stderrTask = $godotProcess.StandardError.ReadToEndAsync()
+    }
+    $godotProcess.WaitForExit()
+    if ($redirectGodotOutput) {
+        [IO.File]::WriteAllText(
+            $resolvedGodotStdoutPath, $stdoutTask.GetAwaiter().GetResult())
+        [IO.File]::WriteAllText(
+            $resolvedGodotStderrPath, $stderrTask.GetAwaiter().GetResult())
+    }
+    if ($godotProcess.ExitCode -ne 0) {
+        throw "Godot exited with code $($godotProcess.ExitCode)"
     }
 }
 finally {
