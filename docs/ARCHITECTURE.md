@@ -22,6 +22,9 @@ Profiles.Kotor        Profiles.DragonAgeOrigins
 - Importers consume owned installations and write ignored local bundles.
 - Godot-facing nodes remain adapters; simulation and compatibility rules stay
   in ordinary C# services.
+- Desktop and OpenXR frontends emit the same KOTOR profile intent. KOTOR
+  locomotion outcomes are computed by `Profiles.Kotor`; tracked HMD/controller
+  pose remains presentation state and never mutates gameplay state directly.
 
 ## Profile-owned boundaries
 

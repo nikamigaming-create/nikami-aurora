@@ -25,6 +25,10 @@ internal static class Program
             passed++;
             MarkerRejectsTraversal();
             passed++;
+            KotorMovementUsesProfileSpeedsAndFacing();
+            passed++;
+            KotorMovementRejectsClosedDoor();
+            passed++;
             Console.WriteLine($"NIKAMI_AURORA_ACCEPTANCE_PASS tests={passed}");
             return 0;
         }
@@ -108,6 +112,63 @@ internal static class Program
         }
 
         Expect(threw, "traversing marker path was accepted");
+    }
+
+    private static void KotorMovementUsesProfileSpeedsAndFacing()
+    {
+        var navigation = new[]
+        {
+            new KotorNavigationTriangle(
+                new System.Numerics.Vector3(-10, -10, 2),
+                new System.Numerics.Vector3(10, -10, 2),
+                new System.Numerics.Vector3(0, 10, 2))
+        };
+        var simulation = new KotorMovementSimulation(
+            navigation, new KotorMovementConfiguration(2, 6));
+        var start = new System.Numerics.Vector3(0, 0, 2);
+        var walk = simulation.Step(
+            start, 0, new KotorMovementIntent(0, 1, false), 0.5f, []);
+        var run = simulation.Step(
+            start, MathF.PI / 2, new KotorMovementIntent(0, 1, true), 0.5f, []);
+        var deadZone = simulation.Step(
+            start, 0, KotorMovementIntent.FromAxes(0.1f, 0.1f, false), 0.5f, []);
+
+        Expect(walk.Accepted && walk.Moved && walk.Mode == KotorLocomotionMode.Walk,
+            "profile walk intent was rejected");
+        Expect(System.Numerics.Vector3.Distance(
+                   walk.Position, new System.Numerics.Vector3(0, 1, 2)) < 0.00001f,
+            "profile walk speed or zero-facing basis drifted");
+        Expect(System.Numerics.Vector3.Distance(
+                   run.Position, new System.Numerics.Vector3(-3, 0, 2)) < 0.00001f,
+            "profile run speed or rotated-facing basis drifted");
+        Expect(deadZone.Accepted && !deadZone.Moved &&
+               deadZone.Mode == KotorLocomotionMode.Idle,
+            "XR-style radial dead zone produced movement");
+    }
+
+    private static void KotorMovementRejectsClosedDoor()
+    {
+        var navigation = new[]
+        {
+            new KotorNavigationTriangle(
+                new System.Numerics.Vector3(-10, -10, 0),
+                new System.Numerics.Vector3(10, -10, 0),
+                new System.Numerics.Vector3(0, 10, 0))
+        };
+        var simulation = new KotorMovementSimulation(
+            navigation, new KotorMovementConfiguration(2, 6));
+        var start = System.Numerics.Vector3.Zero;
+        var closed = simulation.Step(
+            start, 0, new KotorMovementIntent(0, 1, false), 0.5f,
+            [new KotorDoorObstacle(new System.Numerics.Vector3(0, 1, 0), false)]);
+        var open = simulation.Step(
+            start, 0, new KotorMovementIntent(0, 1, false), 0.5f,
+            [new KotorDoorObstacle(new System.Numerics.Vector3(0, 1, 0), true)]);
+
+        Expect(!closed.Accepted && !closed.Moved && closed.Position == start,
+            "closed authored door did not block movement");
+        Expect(open.Accepted && open.Moved,
+            "open authored door still blocked movement");
     }
 
     private static void MaterializeMarkers(string root, GameProfileDescriptor descriptor)

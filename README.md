@@ -23,6 +23,10 @@ installed appearance/portrait tables, drives source idle/walk/run clips, and
 shares one player/cinematic camera authority between desktop SpringArm and
 OpenXR origin presentations.
 
+Desktop keys and OpenXR controller axes now map into one immutable movement
+intent. Native-coordinate speed, facing, walkmesh, and closed-door outcomes are
+owned and synthetically tested by `Profiles.Kotor`, not duplicated in Godot.
+
 ## Why a new runtime
 
 The existing [OpenKOTOR](https://github.com/nikamigaming-create/OpenKOTOR)

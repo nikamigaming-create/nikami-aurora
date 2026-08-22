@@ -20,9 +20,10 @@ skins, and two hook-bound head skins. `S_Male02` supplies `pause1`, `walk`, and
 
 `appearance.2da` records walk distance 1.813 and run distance 3.96. Dividing by
 the installed clip durations yields 1.700 m/s walk and 5.400 m/s run. The
-runtime owns no alternate guessed speed constants. Walkmesh acceptance remains
-authoritative for the current slice; movement/state must move out of the Godot
-adapter into the profile simulation seam before combat and replay work.
+runtime owns no alternate guessed speed constants. `Profiles.Kotor` now owns
+native-coordinate facing conversion, radial input dead zone, fixed-delta speed,
+walkmesh acceptance, and closed-door rejection. Godot submits intent and applies
+the returned position/locomotion mode.
 
 ## Desktop camera
 
@@ -53,11 +54,18 @@ player intent -> shared player/simulation state
       desktop SpringArm       OpenXR tracked camera
 ```
 
+The action map defines aim/grip poses, left-stick movement, sprint, interaction,
+recenter, and haptic output for Oculus Touch plus pose/interaction/recenter
+fallbacks for the Khronos simple controller. Both tracked grip nodes are direct
+children of the XR origin. Recenter uses `ResetButKeepTilt`; controller motion
+maps through the same profile intent as desktop keys.
+
 The startup probe created OpenXR 1.1.54 against Oculus runtime 1.207.0. With no
 connected HMD it returned `XR_ERROR_FORM_FACTOR_UNAVAILABLE` and the game
-continued through the desktop camera. Runtime discovery and fallback are
-`confirmed`; physical-headset stereo output, controller actions, recentering,
-haptics, and comfort behavior remain unverified gates.
+continued through the desktop camera. Runtime discovery, action-map parsing,
+simulation separation, and fallback are `confirmed`; physical-headset stereo
+and controller sampling, render models, gameplay haptic events, and comfort
+behavior remain unverified gates.
 
 ## Asset-free release boundary
 
