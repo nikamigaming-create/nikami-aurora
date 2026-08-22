@@ -33,6 +33,14 @@ public sealed partial class KotorModuleBoot : Node3D
     private XRCamera3D xrCamera = null!;
     private XRController3D xrLeftHand = null!;
     private XRController3D xrRightHand = null!;
+    private Node3D xrLeftModelContainer = null!;
+    private Node3D xrRightModelContainer = null!;
+    private OpenXRRenderModelManager xrLeftModelManager = null!;
+    private OpenXRRenderModelManager xrRightModelManager = null!;
+    private MeshInstance3D xrLeftFallback = null!;
+    private MeshInstance3D xrRightFallback = null!;
+    private Node3D? xrLeftVendorModel;
+    private Node3D? xrRightVendorModel;
     private bool xrActive;
     private Node3D? playerModel;
     private AnimationPlayer? playerAnimationPlayer;
@@ -126,12 +134,13 @@ public sealed partial class KotorModuleBoot : Node3D
         if (Input.IsKeyPressed(Key.D)) rightIntent += 1.0f;
         if (xrActive)
         {
-            var stick = xrLeftHand.GetVector2("move");
+            var stick = xrLeftHand.GetVector2("primary");
             rightIntent += stick.X;
             forwardIntent += stick.Y;
+            UpdateControllerModelFallbacks();
         }
         var sprinting = Input.IsKeyPressed(Key.Shift) ||
-                        (xrActive && xrLeftHand.IsButtonPressed("sprint"));
+                        (xrActive && xrLeftHand.IsButtonPressed("primary_click"));
         var intent = KotorMovementIntent.FromAxes(rightIntent, forwardIntent, sprinting);
         var movementResult = !dialoguePanel.Visible
             ? StepPlayer(intent, (float)delta)
@@ -244,7 +253,7 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void OnXrButtonPressed(string name)
     {
-        if (name.EndsWith("interact", StringComparison.OrdinalIgnoreCase))
+        if (name.EndsWith("ax_button", StringComparison.OrdinalIgnoreCase))
         {
             HandleInteraction();
         }
@@ -457,6 +466,44 @@ public sealed partial class KotorModuleBoot : Node3D
         };
         xrRightHand.ButtonPressed += action => OnXrButtonPressed(action.ToString());
         xrOrigin.AddChild(xrRightHand);
+        (xrLeftModelContainer, xrLeftModelManager, xrLeftFallback) =
+            CreateControllerPresentation(xrLeftHand, true);
+        (xrRightModelContainer, xrRightModelManager, xrRightFallback) =
+            CreateControllerPresentation(xrRightHand, false);
+        GD.Print("NIKAMI_AURORA_OPENXR_MODELS status=configured " +
+                 "portable=left,right vendor=dynamic fallback=left,right pose=grip");
+    }
+
+    private static (Node3D Container, OpenXRRenderModelManager Manager, MeshInstance3D Fallback)
+        CreateControllerPresentation(XRController3D controller, bool left)
+    {
+        var container = new Node3D { Name = "ControllerModelContainer" };
+        controller.AddChild(container);
+        var manager = new OpenXRRenderModelManager
+        {
+            Name = "OpenXRRenderModelManager",
+            Tracker = left
+                ? OpenXRRenderModelManager.RenderModelTracker.LeftHand
+                : OpenXRRenderModelManager.RenderModelTracker.RightHand,
+            MakeLocalToPose = "grip"
+        };
+        container.AddChild(manager);
+        var material = new StandardMaterial3D
+        {
+            AlbedoColor = left
+                ? new Color(0.18f, 0.55f, 0.95f)
+                : new Color(0.95f, 0.38f, 0.18f),
+            Metallic = 0.15f,
+            Roughness = 0.55f
+        };
+        var fallback = new MeshInstance3D
+        {
+            Name = "ProceduralFallback",
+            Mesh = new BoxMesh { Size = new Vector3(0.07f, 0.11f, 0.16f) },
+            MaterialOverride = material
+        };
+        container.AddChild(fallback);
+        return (container, manager, fallback);
     }
 
     private void CreateAudio()
@@ -486,9 +533,37 @@ public sealed partial class KotorModuleBoot : Node3D
         xrCamera.Current = true;
         GetViewport().UseXR = true;
         DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
+        xrLeftVendorModel = TryCreateMetaRenderModel(xrLeftModelContainer, true);
+        xrRightVendorModel = TryCreateMetaRenderModel(xrRightModelContainer, false);
         GD.Print("NIKAMI_AURORA_OPENXR status=ready worldScale=1.000 " +
                  "authority=hmd-relative-to-game-camera");
+        GD.Print($"NIKAMI_AURORA_OPENXR_MODELS status=ready portable=true " +
+                 $"metaFb={xrLeftVendorModel is not null && xrRightVendorModel is not null} " +
+                 "fallback=procedural");
     }
+
+    private static Node3D? TryCreateMetaRenderModel(Node3D container, bool left)
+    {
+        if (!ClassDB.ClassExists("OpenXRFbRenderModel") ||
+            ClassDB.Instantiate("OpenXRFbRenderModel").AsGodotObject() is not Node3D model)
+            return null;
+        model.Name = "OpenXRFbRenderModel";
+        model.Set("render_model_type", left ? 0 : 1);
+        container.AddChild(model);
+        return model;
+    }
+
+    private void UpdateControllerModelFallbacks()
+    {
+        xrLeftFallback.Visible = !HasLoadedControllerModel(
+            xrLeftModelManager, xrLeftVendorModel);
+        xrRightFallback.Visible = !HasLoadedControllerModel(
+            xrRightModelManager, xrRightVendorModel);
+    }
+
+    private static bool HasLoadedControllerModel(
+        OpenXRRenderModelManager portable, Node3D? vendor) =>
+        portable.GetChildCount() > 0 || vendor?.GetChildCount() > 0;
 
     private void CreateOverlay()
     {
