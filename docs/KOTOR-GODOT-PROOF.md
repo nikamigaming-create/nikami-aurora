@@ -110,6 +110,8 @@ Confirmed in the new runtime:
   intent, with synthetic speed/facing/dead-zone/door-blocker acceptance;
 - OpenXR action map and tracked grip nodes for movement, sprint, interaction,
   recenter, and haptic output;
+- portable and Meta runtime-controller model providers with per-hand procedural
+  fallbacks kept local to the tracked grip pose;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
 - walkmesh-constrained player movement;

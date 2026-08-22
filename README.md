@@ -27,6 +27,11 @@ Desktop keys and OpenXR controller axes now map into one immutable movement
 intent. Native-coordinate speed, facing, walkmesh, and closed-door outcomes are
 owned and synthetically tested by `Profiles.Kotor`, not duplicated in Godot.
 
+XR controller presentation follows a three-level provider chain: portable
+OpenXR runtime models, dynamically available Meta FB models, then tracked
+procedural fallbacks. The same primary-stick and face-button actions feed
+gameplay and eventual live model animation.
+
 ## Why a new runtime
 
 The existing [OpenKOTOR](https://github.com/nikamigaming-create/OpenKOTOR)
