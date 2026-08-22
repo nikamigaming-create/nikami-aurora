@@ -73,6 +73,14 @@ deterministic combat-ready gate verifies every launch, impact, voice, script
 global, environment placement, and music transition; general combat AI remains
 a later milestone.
 
+Those slices now run as one deterministic startup-to-action route. It begins at
+the installed opening dialogue, waits through every selected voice, takes the
+shortest validated authored branch, opens the locker and equips its Clothing
+and Short Sword, traverses the real corridor trigger, completes the Carth/Trask
+transmission, and reaches then releases the first Sith fight. Completion asserts
+15 voices, seven choices, XP/equipment/map/global state, both doors, music, and
+all first-encounter effects before exposing a capture/movie stage key.
+
 XR controller presentation follows a three-level provider chain: portable
 OpenXR runtime models, dynamically available Meta FB models, then tracked
 procedural fallbacks. The same primary-stick and face-button actions feed

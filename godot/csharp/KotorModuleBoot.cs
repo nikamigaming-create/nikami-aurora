@@ -73,6 +73,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool xrActive;
     private bool xrSpectatorActive;
     private float xrSpectatorFieldOfView = DefaultGameplayFieldOfView;
+    private Transform3D xrGameplayOriginOffset = Transform3D.Identity;
+    private bool xrGameplayOriginCalibrated;
     private Node3D? playerModel;
     private AnimationPlayer? playerAnimationPlayer;
     private PlayerEquipmentVariantRecord? openingEquipmentVariant;
@@ -129,6 +131,16 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool automatedCorridorTriggerVerified;
     private bool automatedCorridorTransmissionVerified;
     private bool automatedFirstEncounterVerified;
+    private bool showcaseRouteEnabled;
+    private ShowcasePhase showcasePhase;
+    private int showcasePhaseFrames;
+    private int showcaseRouteFrames;
+    private string showcaseChoiceNode = "";
+    private int showcaseChoiceHoldFrames;
+    private int showcaseOpeningChoiceCount;
+    private int showcaseTransmissionChoiceCount;
+    private int showcaseTransmissionAutomaticBaseline;
+    private bool showcaseTransmissionVerified;
     private bool firstEncounterStarted;
     private bool firstEncounterCombatReady;
     private bool cinematicSequenceActive;
@@ -177,6 +189,11 @@ public sealed partial class KotorModuleBoot : Node3D
             captureTargetFrame = Math.Max(1, configuredCaptureFrame);
         captureDialogueNode =
             System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_DIALOGUE_NODE") ?? "";
+        showcaseRouteEnabled = System.Environment.GetEnvironmentVariable(
+            "NIKAMI_AURORA_SHOWCASE_ROUTE") == "1";
+        showcasePhase = showcaseRouteEnabled
+            ? ShowcasePhase.OpeningDialogue
+            : ShowcasePhase.Disabled;
         forcedPlayerAnimation =
             System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_PLAYER_ANIMATION") ?? "";
 
@@ -319,8 +336,9 @@ public sealed partial class KotorModuleBoot : Node3D
                     "NIKAMI_AURORA_TEST_FIRST_ENCOUNTER") == "1")
                 StartFirstEncounter();
             if (firstEncounterCombatReady && !automatedFirstEncounterVerified &&
-                System.Environment.GetEnvironmentVariable(
-                    "NIKAMI_AURORA_TEST_FIRST_ENCOUNTER") == "1")
+                (System.Environment.GetEnvironmentVariable(
+                     "NIKAMI_AURORA_TEST_FIRST_ENCOUNTER") == "1" ||
+                 showcaseRouteEnabled))
             {
                 automatedFirstEncounterVerified = true;
                 var snapshot = RequireGameplaySimulation().CaptureSnapshot();
@@ -385,6 +403,8 @@ public sealed partial class KotorModuleBoot : Node3D
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP") == "1")
                 FrameChairCloseup();
+            if (showcaseRouteEnabled)
+                AdvanceShowcaseRoute();
         }
 
         UpdateXrSpectatorCamera();
@@ -1046,14 +1066,50 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void UpdateXrSpectatorCamera()
     {
-        if (!xrSpectatorActive || xrSpectatorCamera is null) return;
-        if (!dialogueCameraActive)
+        if (xrActive && !dialogueCameraActive)
         {
-            xrOrigin.TopLevel = true;
-            xrOrigin.GlobalTransform = playerBody.GlobalTransform;
+            if (!xrGameplayOriginCalibrated)
+                RecenterXrGameplayBase();
+            else
+                ApplyXrGameplayBase();
         }
+        if (!xrSpectatorActive || xrSpectatorCamera is null) return;
         xrSpectatorCamera.GlobalTransform = xrCamera.GlobalTransform;
         xrSpectatorCamera.Fov = xrSpectatorFieldOfView;
+    }
+
+    private void RecenterXrGameplayBase()
+    {
+        if (!xrActive) return;
+        var desiredLocalHead = new Transform3D(Basis.Identity, cameraPivot.Position);
+        xrGameplayOriginOffset = desiredLocalHead * xrCamera.Transform.AffineInverse();
+        xrGameplayOriginCalibrated = true;
+        ApplyXrGameplayBase();
+        var desiredHead = playerBody.GlobalTransform * desiredLocalHead;
+        var error = xrCamera.GlobalPosition.DistanceTo(desiredHead.Origin);
+        var forwardDot = (-xrCamera.GlobalBasis.Z).Normalized()
+            .Dot((-desiredHead.Basis.Z).Normalized());
+        if (error > 0.002f || forwardDot < 0.999f)
+            throw new InvalidDataException(
+                $"XR gameplay camera alignment drifted by {error:F6} m / " +
+                $"forward dot {forwardDot:F6}");
+        GD.Print($"NIKAMI_AURORA_XR_GAMEPLAY_BASE status=recentered " +
+                 $"desired={desiredHead.Origin} actual={xrCamera.GlobalPosition} " +
+                 $"error={error:F6} forwardDot={forwardDot:F6}");
+    }
+
+    private void ApplyXrGameplayBase()
+    {
+        if (xrSpectatorActive)
+        {
+            xrOrigin.TopLevel = true;
+            xrOrigin.GlobalTransform = playerBody.GlobalTransform * xrGameplayOriginOffset;
+        }
+        else
+        {
+            xrOrigin.TopLevel = false;
+            xrOrigin.Transform = xrGameplayOriginOffset;
+        }
     }
 
     private static bool HasVisibleCapturePixels(Godot.Image image)
@@ -1268,7 +1324,9 @@ public sealed partial class KotorModuleBoot : Node3D
             ContentMarginBottom = 16
         };
         dialoguePanel.AddThemeStyleboxOverride("panel", panelStyle);
-        overlayLayer.AddChild(dialoguePanel);
+        var dialogueLayer = new CanvasLayer { Name = "DialogueLayer" };
+        AddChild(dialogueLayer);
+        dialogueLayer.AddChild(dialoguePanel);
         var dialogueLayout = new VBoxContainer();
         dialoguePanel.AddChild(dialogueLayout);
         dialogueSpeaker = new Label();
@@ -1370,12 +1428,15 @@ public sealed partial class KotorModuleBoot : Node3D
                                        xrCamera.Transform.AffineInverse();
             xrSpectatorFieldOfView = fov;
             var alignmentError = xrCamera.GlobalPosition.DistanceTo(position);
-            if (alignmentError > 0.002f)
+            var forwardDot = (-xrCamera.GlobalBasis.Z).Normalized()
+                .Dot((-desiredHeadTransform.Basis.Z).Normalized());
+            if (alignmentError > 0.002f || forwardDot < 0.999f)
                 throw new InvalidDataException(
-                    $"XR presentation camera alignment drifted by {alignmentError:F6} m");
+                    $"XR presentation camera alignment drifted by {alignmentError:F6} m / " +
+                    $"forward dot {forwardDot:F6}");
             GD.Print($"NIKAMI_AURORA_XR_CAMERA_BASE status=recentered " +
                      $"desired={position} actual={xrCamera.GlobalPosition} " +
-                     $"error={alignmentError:F6}");
+                     $"error={alignmentError:F6} forwardDot={forwardDot:F6}");
         }
         else
         {
@@ -1624,18 +1685,8 @@ public sealed partial class KotorModuleBoot : Node3D
         lastDynamicDialogueActor = "";
         if (xrActive)
         {
-            if (xrSpectatorActive)
-            {
-                xrOrigin.TopLevel = true;
-                xrOrigin.GlobalTransform = playerBody.GlobalTransform;
-                xrSpectatorFieldOfView = gameplayFieldOfView;
-            }
-            else
-            {
-                xrOrigin.TopLevel = false;
-                xrOrigin.Position = Vector3.Zero;
-                xrOrigin.Rotation = Vector3.Zero;
-            }
+            xrSpectatorFieldOfView = gameplayFieldOfView;
+            RecenterXrGameplayBase();
         }
         else
         {
@@ -1943,6 +1994,191 @@ public sealed partial class KotorModuleBoot : Node3D
             FinishFirstEncounter();
     }
 
+    private void AdvanceShowcaseRoute()
+    {
+        showcaseRouteFrames++;
+        showcasePhaseFrames++;
+        switch (showcasePhase)
+        {
+            case ShowcasePhase.OpeningDialogue:
+                if (TryApplyShowcaseChoice(true)) return;
+                if (!dialoguePanel.Visible && string.IsNullOrWhiteSpace(currentDialogueConversation) &&
+                    showcaseOpeningChoiceCount == 5)
+                {
+                    if (!IsDoorOpen(RequireInteractiveDoor("end_door01")))
+                        throw new InvalidDataException(
+                            "Showcase opening dialogue did not open end_door01");
+                    SetShowcasePhase(ShowcasePhase.Gear);
+                }
+                break;
+            case ShowcasePhase.Gear:
+                if (showcasePhaseFrames < 30) return;
+                var locker = materializedPlaceables.Single(placeable =>
+                    placeable.Source.Template.Equals(
+                        "footlker001", StringComparison.OrdinalIgnoreCase));
+                UsePlaceable(locker);
+                EquipOpeningGear(null);
+                var gearSnapshot = RequireGameplaySimulation().CaptureSnapshot();
+                if (gearSnapshot.PlayerExperience != 50 ||
+                    !gearSnapshot.Equipment.TryGetValue(
+                        KotorEquipmentSlot.Armor, out var armor) ||
+                    !armor.Equals("g_a_clothes01", StringComparison.OrdinalIgnoreCase) ||
+                    !gearSnapshot.Equipment.TryGetValue(
+                        KotorEquipmentSlot.RightHand, out var weapon) ||
+                    !weapon.Equals("g_w_shortswrd01", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException(
+                        "Showcase gear phase did not equip Clothing and Short Sword at XP 50");
+                SetShowcasePhase(ShowcasePhase.Corridor);
+                break;
+            case ShowcasePhase.Corridor:
+                if (showcasePhaseFrames < 60) return;
+                var basis = new Basis(Vector3.Up, yaw);
+                if (!MovePlayer(-basis.Z * 10.0f))
+                    throw new InvalidDataException(
+                        "Showcase corridor traversal was rejected by navigation");
+                SetShowcasePhase(ShowcasePhase.Transmission);
+                break;
+            case ShowcasePhase.Transmission:
+                if (!showcaseTransmissionVerified &&
+                    currentDialogueNodeKey.Equals(
+                        "entry:35", StringComparison.OrdinalIgnoreCase))
+                {
+                    var transmissionEntry = RequireGameplaySimulation().CaptureSnapshot();
+                    if (automaticDialogueTransitionCount -
+                        showcaseTransmissionAutomaticBaseline != 3 ||
+                        activeChoiceButtons.Count != 2 ||
+                        !transmissionEntry.GlobalNumbers.TryGetValue(
+                            "END_CARTH_DLG", out var entryCarthGlobal) ||
+                        entryCarthGlobal != 1 ||
+                        !transmissionEntry.GlobalNumbers.TryGetValue(
+                            "END_TRASK_DLG", out var entryTraskGlobal) ||
+                        entryTraskGlobal != 11 || !transmissionEntry.MapRevealed)
+                        throw new InvalidDataException(
+                            "Showcase transmission did not reach the journal choice exactly");
+                    showcaseTransmissionVerified = true;
+                    GD.Print("NIKAMI_AURORA_SHOWCASE_TRANSMISSION status=pass " +
+                             "automatic=3 globals=END_CARTH_DLG:1,END_TRASK_DLG:11 " +
+                             "map=revealed choices=2");
+                }
+                if (TryApplyShowcaseChoice(false)) return;
+                if (!dialoguePanel.Visible && string.IsNullOrWhiteSpace(currentDialogueConversation) &&
+                    showcaseTransmissionChoiceCount == 2)
+                {
+                    var transmission = RequireGameplaySimulation().CaptureSnapshot();
+                    if (!transmission.GlobalNumbers.TryGetValue(
+                            "END_CARTH_DLG", out var carthGlobal) || carthGlobal != 1 ||
+                        !transmission.GlobalNumbers.TryGetValue(
+                            "END_TRASK_DLG", out var traskGlobal) || traskGlobal != 11 ||
+                        !transmission.MapRevealed)
+                        throw new InvalidDataException(
+                            "Showcase corridor transmission state drifted");
+                    SetShowcasePhase(ShowcasePhase.EncounterLeadIn);
+                }
+                break;
+            case ShowcasePhase.EncounterLeadIn:
+                if (showcasePhaseFrames < 60) return;
+                StartFirstEncounter();
+                SetShowcasePhase(ShowcasePhase.Encounter);
+                break;
+            case ShowcasePhase.Encounter:
+                if (automatedFirstEncounterVerified &&
+                    currentDialogueNodeKey.Equals(
+                        "encounter:gameplay-ready", StringComparison.OrdinalIgnoreCase))
+                    SetShowcasePhase(ShowcasePhase.FinalHold);
+                break;
+            case ShowcasePhase.FinalHold:
+                if (showcasePhaseFrames < 120) return;
+                VerifyShowcaseCompletion();
+                SetShowcasePhase(ShowcasePhase.Complete);
+                currentDialogueNodeKey = "showcase:complete";
+                if (System.Environment.GetEnvironmentVariable(
+                        "NIKAMI_AURORA_SHOWCASE_EXIT_ON_COMPLETE") == "1")
+                    Callable.From(() => GetTree().Quit(0)).CallDeferred();
+                break;
+            case ShowcasePhase.Disabled:
+            case ShowcasePhase.Complete:
+            default:
+                break;
+        }
+    }
+
+    private bool TryApplyShowcaseChoice(bool opening)
+    {
+        if (!dialoguePanel.Visible || dialogueVoice.Playing || activeChoiceButtons.Count == 0)
+            return false;
+        int? choice = opening
+            ? currentDialogueNodeKey switch
+            {
+                "entry:55" or "entry:58" or "entry:71" or "entry:73" or "reply:92" => 0,
+                _ => null
+            }
+            : currentDialogueNodeKey switch
+            {
+                "entry:35" or "reply:50" => 0,
+                _ => null
+            };
+        if (choice is null || choice.Value >= activeChoiceButtons.Count)
+            throw new InvalidDataException(
+                $"Showcase reached an unsupported choice node: {currentDialogueNodeKey}");
+        if (!showcaseChoiceNode.Equals(
+                currentDialogueNodeKey, StringComparison.OrdinalIgnoreCase))
+        {
+            showcaseChoiceNode = currentDialogueNodeKey;
+            showcaseChoiceHoldFrames = 0;
+        }
+        if (++showcaseChoiceHoldFrames < 30 || activeChoiceButtons[choice.Value].Disabled)
+            return false;
+        activeChoiceButtons[choice.Value].EmitSignal(BaseButton.SignalName.Pressed);
+        if (opening)
+            showcaseOpeningChoiceCount++;
+        else
+            showcaseTransmissionChoiceCount++;
+        GD.Print($"NIKAMI_AURORA_SHOWCASE_CHOICE status=selected " +
+                 $"phase={showcasePhase} node={showcaseChoiceNode} index={choice.Value}");
+        showcaseChoiceNode = "";
+        showcaseChoiceHoldFrames = 0;
+        return true;
+    }
+
+    private void SetShowcasePhase(ShowcasePhase phase)
+    {
+        showcasePhase = phase;
+        showcasePhaseFrames = 0;
+        showcaseChoiceNode = "";
+        showcaseChoiceHoldFrames = 0;
+        if (phase == ShowcasePhase.Transmission)
+            showcaseTransmissionAutomaticBaseline = automaticDialogueTransitionCount;
+        GD.Print($"NIKAMI_AURORA_SHOWCASE status=phase phase={phase} " +
+                 $"frame={showcaseRouteFrames}");
+    }
+
+    private void VerifyShowcaseCompletion()
+    {
+        var snapshot = RequireGameplaySimulation().CaptureSnapshot();
+        var firstDoor = RequireInteractiveDoor("end_door01");
+        var encounterDoor = RequireInteractiveDoor("end_door02");
+        if (!automatedFirstEncounterVerified || cinematicSequenceActive ||
+            !IsDoorOpen(firstDoor) || !IsDoorOpen(encounterDoor) ||
+            snapshot.PlayerExperience != 50 || !snapshot.MapRevealed ||
+            !snapshot.GlobalNumbers.TryGetValue("END_CARTH_DLG", out var carthGlobal) ||
+            carthGlobal != 1 ||
+            !snapshot.GlobalNumbers.TryGetValue("END_TRASK_DLG", out var traskGlobal) ||
+            traskGlobal != 1 ||
+            !snapshot.Equipment.ContainsKey(KotorEquipmentSlot.Armor) ||
+            !snapshot.Equipment.ContainsKey(KotorEquipmentSlot.RightHand) ||
+            showcaseOpeningChoiceCount != 5 || showcaseTransmissionChoiceCount != 2 ||
+            !showcaseTransmissionVerified ||
+            playedDialogueMedia.Count < 15 ||
+            !currentMusicResref.Equals(
+                "mus_theme_sith", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException(
+                "Showcase route did not preserve its complete startup-to-action state");
+        GD.Print("NIKAMI_AURORA_SHOWCASE status=pass " +
+                 "route=boot->opening->gear->corridor->transmission->encounter->gameplay " +
+                 $"frames={showcaseRouteFrames} choices=5+2 voices={playedDialogueMedia.Count} " +
+                 $"xp={snapshot.PlayerExperience} music={currentMusicResref}");
+    }
+
     private static DialogueNode? ResolveVisibleNode(DialogueGraph graph, string key,
         HashSet<string> visited, int depth)
     {
@@ -2039,7 +2275,7 @@ public sealed partial class KotorModuleBoot : Node3D
         cameraPivot.Position = source.CameraOffset is { Count: >= 3 }
             ? ToGodot(source.CameraOffset)
             : Vector3.Up * source.Height;
-        xrOrigin.Position = Vector3.Zero;
+        xrGameplayOriginCalibrated = false;
         var cameraDistance = Math.Max(0.1f, cameraStyle.Distance);
         var cameraHeight = cameraStyle.Height;
         cameraArm.SpringLength = Mathf.Sqrt(
@@ -2446,7 +2682,8 @@ public sealed partial class KotorModuleBoot : Node3D
         {
             if (worldNotice == label)
                 worldNotice = null;
-            label.QueueFree();
+            if (GodotObject.IsInstanceValid(label))
+                label.QueueFree();
         }));
     }
 
@@ -2499,7 +2736,9 @@ public sealed partial class KotorModuleBoot : Node3D
         if (variant.CameraOffset is { Count: >= 3 })
         {
             cameraPivot.Position = ToGodot(variant.CameraOffset);
-            xrOrigin.Position = Vector3.Zero;
+            xrGameplayOriginCalibrated = false;
+            if (xrActive && !dialogueCameraActive)
+                RecenterXrGameplayBase();
         }
         PlayPlayerAnimation(requestedAnimation);
         ShowWorldNotice("EQUIPPED", ["Clothing", "Short Sword"]);
@@ -3079,6 +3318,19 @@ public sealed partial class KotorModuleBoot : Node3D
     private static string PlaceableInstanceId(int index) => $"placeable:{index:D4}";
 
     private static string TriggerInstanceId(int index) => $"trigger:{index:D4}";
+
+    private enum ShowcasePhase
+    {
+        Disabled,
+        OpeningDialogue,
+        Gear,
+        Corridor,
+        Transmission,
+        EncounterLeadIn,
+        Encounter,
+        FinalHold,
+        Complete
+    }
 
     private sealed record ModuleManifest(
         string Schema,
