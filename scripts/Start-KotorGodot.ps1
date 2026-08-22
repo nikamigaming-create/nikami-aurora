@@ -31,6 +31,7 @@ param(
     [switch]$LipSyncCloseup,
     [switch]$EquipmentCloseup,
     [switch]$ChairCloseup,
+    [switch]$XrBodyLookDown,
     [switch]$CaptureAndExit
 )
 
@@ -53,8 +54,10 @@ if ([string]::IsNullOrWhiteSpace($Godot)) {
 }
 $resolvedMoviePath = $null
 if (-not [string]::IsNullOrWhiteSpace($MoviePath)) {
-    if (-not $ShowcaseRoute -or -not $OpenXRSimulator) {
-        throw "-MoviePath requires -ShowcaseRoute and -OpenXRSimulator."
+    if (-not $OpenXRSimulator -or
+        (-not $ShowcaseRoute -and -not $TestFirstEncounter)) {
+        throw "-MoviePath requires -OpenXRSimulator and either " +
+              "-ShowcaseRoute or -TestFirstEncounter."
     }
     $extension = [IO.Path]::GetExtension($MoviePath).ToLowerInvariant()
     if ($extension -notin @('.avi', '.ogv')) {
@@ -177,6 +180,12 @@ if ($EquipmentCloseup) {
 if ($ChairCloseup) {
     $env:NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP = "1"
 }
+if ($XrBodyLookDown) {
+    if (-not $OpenXRSimulator) {
+        throw "-XrBodyLookDown requires -OpenXRSimulator."
+    }
+    $env:NIKAMI_AURORA_CAPTURE_XR_BODY_LOOKDOWN = "1"
+}
 
 try {
     & dotnet build (Join-Path $repo "godot\Nikami.Aurora.Godot.csproj") --configuration Debug
@@ -250,6 +259,7 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_XR_BODY_LOOKDOWN -ErrorAction SilentlyContinue
     if ($hadXrRuntimeJson) {
         $env:XR_RUNTIME_JSON = $previousXrRuntimeJson
     }

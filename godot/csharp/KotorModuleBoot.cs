@@ -75,6 +75,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private float xrSpectatorFieldOfView = DefaultGameplayFieldOfView;
     private Transform3D xrGameplayOriginOffset = Transform3D.Identity;
     private bool xrGameplayOriginCalibrated;
+    private bool? xrLocalPlayerHeadVisible;
     private bool cleanExitRequested;
     private Node3D? playerModel;
     private AnimationPlayer? playerAnimationPlayer;
@@ -404,6 +405,10 @@ public sealed partial class KotorModuleBoot : Node3D
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP") == "1")
                 FrameChairCloseup();
+            if (readyFrames == 60 &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_CAPTURE_XR_BODY_LOOKDOWN") == "1")
+                FrameXrBodyLookDown();
             if (showcaseRouteEnabled)
                 AdvanceShowcaseRoute();
         }
@@ -1071,6 +1076,7 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void UpdateXrSpectatorCamera()
     {
+        UpdateXrLocalAvatarVisibility();
         if (xrActive && !dialogueCameraActive)
         {
             if (!xrGameplayOriginCalibrated)
@@ -1081,6 +1087,38 @@ public sealed partial class KotorModuleBoot : Node3D
         if (!xrSpectatorActive || xrSpectatorCamera is null) return;
         xrSpectatorCamera.GlobalTransform = xrCamera.GlobalTransform;
         xrSpectatorCamera.Fov = xrSpectatorFieldOfView;
+    }
+
+    private void UpdateXrLocalAvatarVisibility()
+    {
+        if (playerModel is null) return;
+        var shouldShowHead = !xrActive || dialogueCameraActive;
+        if (xrLocalPlayerHeadVisible == shouldShowHead) return;
+        var allMeshes = FindDescendants<MeshInstance3D>(playerModel).ToArray();
+        // The importer flattens some Odyssey model nodes, so the authored head
+        // hook is not a reliable runtime parent. Mask only the separately named
+        // PMHA head meshes; this leaves PMB body geometry and the weapon intact.
+        var headMeshes = allMeshes.Where(mesh => mesh.Name.ToString().StartsWith(
+            "mesh__PMHA", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var bodyMeshes = allMeshes.Count(mesh => mesh.Name.ToString().StartsWith(
+            "mesh__PMB", StringComparison.OrdinalIgnoreCase));
+        var hasLeftHand = FindDescendants<Node3D>(playerModel).Any(node =>
+            node.Name.ToString().Contains("lhand", StringComparison.OrdinalIgnoreCase));
+        var hasRightHand = FindDescendants<Node3D>(playerModel).Any(node =>
+            node.Name.ToString().Contains("rhand", StringComparison.OrdinalIgnoreCase));
+        if (headMeshes.Length != 8 || bodyMeshes < 3 || !hasLeftHand || !hasRightHand)
+            throw new InvalidDataException(
+                "Local player head/body/hand visibility contract drifted");
+        foreach (var headMesh in headMeshes)
+            headMesh.Visible = shouldShowHead;
+        xrLocalPlayerHeadVisible = shouldShowHead;
+        var weapon = FindDescendants<Node3D>(playerModel).Any(node =>
+            node.Name.ToString().StartsWith(
+                "weapon__", StringComparison.OrdinalIgnoreCase));
+        GD.Print($"NIKAMI_AURORA_XR_LOCAL_AVATAR status=" +
+                 $"{(shouldShowHead ? "cinematic-head-visible" : "gameplay-head-hidden")} " +
+                 $"headMeshes={headMeshes.Length} bodyMeshes={bodyMeshes} " +
+                 $"hands=left,right weapon={(weapon ? "present" : "none")}");
     }
 
     private void RecenterXrGameplayBase()
@@ -1467,6 +1505,8 @@ public sealed partial class KotorModuleBoot : Node3D
             cinematicCamera.Fov = fov;
         }
         dialogueCameraActive = true;
+        xrLocalPlayerHeadVisible = null;
+        UpdateXrLocalAvatarVisibility();
     }
 
     private void ApplyDialogueCamera(DialogueNode node)
@@ -1717,6 +1757,8 @@ public sealed partial class KotorModuleBoot : Node3D
             cameraPivot.Rotation = new Vector3(pitch, 0, 0);
             camera.Fov = gameplayFieldOfView;
         }
+        xrLocalPlayerHeadVisible = null;
+        UpdateXrLocalAvatarVisibility();
         GD.Print("NIKAMI_AURORA_DIALOGUE_CAMERA status=released");
     }
 
@@ -1799,6 +1841,37 @@ public sealed partial class KotorModuleBoot : Node3D
         GD.Print($"NIKAMI_AURORA_PLACEABLE_CAMERA status=active mode=chair-closeup " +
                  $"count={chairs.Length} template=plc_chair2 " +
                  $"fov=55.000 position={eye}");
+    }
+
+    private void FrameXrBodyLookDown()
+    {
+        if (!xrActive || playerModel is null)
+            throw new InvalidDataException(
+                "XR body look-down gate requires an active local XR avatar");
+        dialogueCameraActive = false;
+        var desiredEye = playerBody.GlobalTransform * cameraPivot.Position;
+        var playerForward = -playerBody.GlobalBasis.Z.Normalized();
+        var leftHand = FindDescendants<Node3D>(playerModel).Single(node =>
+            node.Name.ToString().Equals("lhand", StringComparison.OrdinalIgnoreCase));
+        var rightHand = FindDescendants<Node3D>(playerModel).Single(node =>
+            node.Name.ToString().Equals("rhand", StringComparison.OrdinalIgnoreCase));
+        var handMidpoint = (leftHand.GlobalPosition + rightHand.GlobalPosition) * 0.5f;
+        var target = handMidpoint + playerForward * 0.15f;
+        var desiredHead = new Transform3D(Basis.Identity, desiredEye)
+            .LookingAt(target, Vector3.Up);
+        xrGameplayOriginOffset = playerBody.GlobalTransform.AffineInverse() *
+                                 desiredHead * xrCamera.Transform.AffineInverse();
+        xrGameplayOriginCalibrated = true;
+        ApplyXrGameplayBase();
+        // A wide spectator lens shows the same downward HMD pose together with
+        // the avatar's shoulders, arms, hands, and right-hand weapon.
+        xrSpectatorFieldOfView = 90.0f;
+        xrLocalPlayerHeadVisible = null;
+        UpdateXrLocalAvatarVisibility();
+        currentDialogueNodeKey = "xr:body-lookdown";
+        GD.Print($"NIKAMI_AURORA_XR_BODY_VIEW status=ready eye={desiredEye} " +
+                 $"leftHand={leftHand.GlobalPosition} rightHand={rightHand.GlobalPosition} " +
+                 "head=hidden body=visible hands=left,right");
     }
 
     private static T? FindDescendant<T>(Node node) where T : Node
@@ -2186,6 +2259,7 @@ public sealed partial class KotorModuleBoot : Node3D
             traskGlobal != 1 ||
             !snapshot.Equipment.ContainsKey(KotorEquipmentSlot.Armor) ||
             !snapshot.Equipment.ContainsKey(KotorEquipmentSlot.RightHand) ||
+            (xrActive && xrLocalPlayerHeadVisible != false) ||
             showcaseOpeningChoiceCount != 5 || showcaseTransmissionChoiceCount != 2 ||
             !showcaseTransmissionVerified ||
             playedDialogueMedia.Count < 15 ||
@@ -2272,6 +2346,8 @@ public sealed partial class KotorModuleBoot : Node3D
         model.Name = "PlayerModel";
         playerBody.AddChild(model);
         playerModel = model;
+        xrLocalPlayerHeadVisible = null;
+        UpdateXrLocalAvatarVisibility();
         playerAnimationPlayer = FindDescendant<AnimationPlayer>(model)
             ?? throw new InvalidDataException("Player model has no animation player");
         foreach (var animationName in playerAnimationPlayer.GetAnimationList())
@@ -2751,6 +2827,8 @@ public sealed partial class KotorModuleBoot : Node3D
         }
         playerBody.AddChild(model);
         playerModel = model;
+        xrLocalPlayerHeadVisible = null;
+        UpdateXrLocalAvatarVisibility();
         playerAnimationPlayer = animationPlayer;
         currentPlayerAnimation = "";
         if (variant.CameraOffset is { Count: >= 3 })
