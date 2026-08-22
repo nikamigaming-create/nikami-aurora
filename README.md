@@ -5,9 +5,12 @@ installed Aurora-family games and their Odyssey and Eclipse descendants.
 The first two profiles are *Star Wars: Knights of the Old Republic* and
 *Dragon Age: Origins*.
 
-The project is at bootstrap stage. It can identify a target installation,
-validate profile-specific source markers, and produce a SHA-256-bound JSON
-target manifest. It cannot render or play either game yet.
+The project is at early vertical-slice stage. It can identify a target
+installation, validate profile-specific source markers, produce a SHA-256-bound
+target manifest, import the real KOTOR Endar Spire room geometry and textures,
+load that owned-data bundle into Godot, assemble Trask from his installed body,
+head, texture, and weapon resources, and advance through the first authored
+dialogue choices. Full gameplay and script execution remain active milestones.
 
 ## Why a new runtime
 
@@ -57,18 +60,44 @@ that optional overrides, proxy DLLs, or the complete installation are stock.
 The first verified development target is the Steam KOTOR 1.0.3.0 executable:
 `34E6D971C034222A417995D8E1E8FDD9F8781795C9C289BD86C499A439F34C88`.
 
+## Import and run the Endar Spire Godot proof
+
+Install the pinned importer dependencies into Python 3.12, then generate the
+ignored local bundle from a legally installed KOTOR copy:
+
+```powershell
+py -3.12 -m pip install -r requirements-import.txt
+./scripts/Import-KotorModule.ps1 `
+  -GameRoot 'D:\SteamLibrary\steamapps\common\swkotor'
+```
+
+Launch the new Godot runtime:
+
+```powershell
+./scripts/Start-KotorGodot.ps1
+```
+
+The importer writes only to `local/kotor/end_m01aa`, which is excluded from
+Git. The runtime loads 15 authored Endar Spire room records, materializes Trask,
+and exposes the remaining exact creature placements as identified debug markers
+while broader creature model assembly is implemented.
+
 ## Repository map
 
 - `src/Nikami.Aurora.Core` — profile and installation contracts.
 - `src/Nikami.Aurora.Profiles.Kotor` — Odyssey/KOTOR profile.
 - `src/Nikami.Aurora.Profiles.DragonAgeOrigins` — Eclipse/DAO profile.
 - `src/Nikami.Aurora.Cli` — deterministic profile and target tooling.
+- `godot` — shared Godot runtime and the active KOTOR vertical slice.
+- `scripts` — owned-install import and launch commands.
 - `tests/Nikami.Aurora.Acceptance` — dependency-free synthetic acceptance.
 - `docs/ARCHITECTURE.md` — dependency and profile boundaries.
 - `docs/CLEAN_ROOM.md` — evidence and implementation separation.
 - `docs/ROADMAP.md` — KOTOR-first delivery gates and DAO migration.
+- `docs/KOTOR-GODOT-PROOF.md` — exact Endar Spire proof and limitations.
 
 ## Legal
 
 Nikami Aurora is independent and unaffiliated. Users must provide legally
-obtained game installations. See [NOTICE.md](NOTICE.md) and [LICENSE](LICENSE).
+obtained game installations. See [NOTICE.md](NOTICE.md),
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and [LICENSE](LICENSE).
