@@ -1,0 +1,4 @@
+numpy==2.4.6
+Pillow==12.2.0
+pykotor==2.3.9
+trimesh==4.12.2
