@@ -52,6 +52,7 @@ Confirmed in the new runtime:
 
 - source-bound module import;
 - real room geometry and diffuse textures;
+- authored UV2 lightmaps through the Odyssey room shader;
 - exact authored room and object placement data;
 - assembled static Trask model;
 - installed dialogue graph, local TLK text, and selectable replies;
@@ -62,7 +63,7 @@ Confirmed in the new runtime:
 
 Not yet implemented:
 
-- lightmap application and retail lighting parity;
+- final retail lighting gamma/gain parity;
 - skeletal animation and lipsync;
 - voice and area audio playback;
 - player character creation/model assembly;

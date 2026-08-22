@@ -6,6 +6,23 @@ namespace Nikami.Aurora.GodotRuntime;
 
 public sealed partial class KotorModuleBoot : Node3D
 {
+    private static readonly Shader OdysseyLightmapShader = new()
+    {
+        Code = """
+            shader_type spatial;
+            render_mode unshaded;
+            uniform sampler2D albedo_texture : source_color, filter_linear_mipmap_anisotropic;
+            uniform sampler2D lightmap_texture : source_color, filter_linear_mipmap_anisotropic;
+            uniform float lightmap_gain = 2.0;
+            void fragment() {
+                vec4 base = texture(albedo_texture, UV);
+                vec3 lightmap = texture(lightmap_texture, UV2).rgb;
+                ALBEDO = base.rgb * lightmap * lightmap_gain;
+                ALPHA = base.a;
+                if (ALPHA < 0.05) discard;
+            }
+            """
+    };
     private CharacterBody3D playerBody = null!;
     private Camera3D camera = null!;
     private Label status = null!;
@@ -580,6 +597,15 @@ public sealed partial class KotorModuleBoot : Node3D
             for (var surface = 0; surface < instance.Mesh.GetSurfaceCount(); surface++)
             {
                 if (instance.GetActiveMaterial(surface) is not BaseMaterial3D source) continue;
+                if (source.AlbedoTexture is not null && source.EmissionTexture is not null)
+                {
+                    var lightmapped = new ShaderMaterial { Shader = OdysseyLightmapShader };
+                    lightmapped.SetShaderParameter("albedo_texture", source.AlbedoTexture);
+                    lightmapped.SetShaderParameter("lightmap_texture", source.EmissionTexture);
+                    lightmapped.SetShaderParameter("lightmap_gain", 2.0f);
+                    instance.SetSurfaceOverrideMaterial(surface, lightmapped);
+                    continue;
+                }
                 var material = (BaseMaterial3D)source.Duplicate();
                 material.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
                 material.Metallic = 0;

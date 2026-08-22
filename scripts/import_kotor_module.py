@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import math
+import struct
 import sys
 from pathlib import Path
 from typing import Any
@@ -131,6 +132,8 @@ class TextureCache:
 def material_for(mesh: Any, textures: TextureCache, override_texture: str | None = None) -> Any:
     texture_name = str(override_texture or mesh.texture_1 or "").strip()
     image = textures.image(texture_name)
+    lightmap_name = str(mesh.texture_2 or "").strip()
+    lightmap = textures.image(lightmap_name)
     diffuse = mesh.diffuse
     color = [
         max(0, min(255, round(float(diffuse.r) * 255))),
@@ -143,11 +146,51 @@ def material_for(mesh: Any, textures: TextureCache, override_texture: str | None
         # diffuse-only proof, preserve the authored texture without multiplying
         # it by a dark pre-lighting material factor.
         color = [255, 255, 255, 255]
-    return trimesh.visual.material.SimpleMaterial(
-        image=image,
-        diffuse=color,
+    return trimesh.visual.material.PBRMaterial(
         name=texture_name or "untextured",
+        baseColorTexture=image,
+        baseColorFactor=color,
+        emissiveTexture=lightmap,
+        emissiveFactor=[1.0, 1.0, 1.0] if lightmap is not None else None,
+        metallicFactor=0.0,
+        roughnessFactor=1.0,
     )
+
+
+def patch_glb_texture_channels(data: bytes) -> bytes:
+    """Promote trimesh custom UV2 attributes to standard glTF TEXCOORD_1."""
+    if data[:4] != b"glTF":
+        raise RuntimeError("Expected a binary glTF payload")
+    json_length, json_type = struct.unpack_from("<II", data, 12)
+    if json_type != 0x4E4F534A:
+        raise RuntimeError("GLB JSON chunk is missing")
+    json_start = 20
+    json_end = json_start + json_length
+    document = json.loads(data[json_start:json_end].decode("utf-8"))
+    changed = False
+    for mesh in document.get("meshes", []):
+        for primitive in mesh.get("primitives", []):
+            attributes = primitive.get("attributes", {})
+            if "_TEXCOORD_1" in attributes:
+                attributes["TEXCOORD_1"] = attributes.pop("_TEXCOORD_1")
+                changed = True
+    for material in document.get("materials", []):
+        if "emissiveTexture" in material:
+            material["emissiveTexture"]["texCoord"] = 1
+            material["emissiveFactor"] = [1.0, 1.0, 1.0]
+            changed = True
+    if not changed:
+        return data
+    encoded = json.dumps(document, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    encoded += b" " * ((4 - len(encoded) % 4) % 4)
+    remaining = data[json_end:]
+    rebuilt = bytearray()
+    rebuilt.extend(b"glTF")
+    rebuilt.extend(struct.pack("<II", 2, 12 + 8 + len(encoded) + len(remaining)))
+    rebuilt.extend(struct.pack("<II", len(encoded), 0x4E4F534A))
+    rebuilt.extend(encoded)
+    rebuilt.extend(remaining)
+    return bytes(rebuilt)
 
 
 def export_room(
@@ -224,6 +267,10 @@ def export_room(
                     uv=uv,
                     material=material_for(mesh, textures),
                 )
+                vertex_attributes = {}
+                if len(mesh.vertex_uv2) == len(vertices) and str(mesh.texture_2 or "").strip():
+                    vertex_attributes["_TEXCOORD_1"] = np.asarray(
+                        [[float(item.x), float(item.y)] for item in mesh.vertex_uv2], dtype=np.float32)
                 geometry = trimesh.Trimesh(
                     vertices=vertices,
                     faces=faces,
@@ -231,6 +278,7 @@ def export_room(
                     visual=visual,
                     process=False,
                     maintain_order=True,
+                    vertex_attributes=vertex_attributes,
                 )
                 mesh_count += 1
                 vertex_count += len(vertices)
@@ -265,7 +313,7 @@ def export_room(
     }
     if mesh_count > 0:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(scene.export(file_type="glb"))
+        output_path.write_bytes(patch_glb_texture_channels(scene.export(file_type="glb")))
         record["glb"] = output_path.as_posix()
     return record
 
@@ -410,7 +458,7 @@ def export_trask_actor(
         model_records.append(record)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(scene.export(file_type="glb"))
+    output_path.write_bytes(patch_glb_texture_channels(scene.export(file_type="glb")))
     return {
         "glb": f"actors/{output_path.name}",
         "conversation": canonical_resref(utc.conversation),
@@ -515,7 +563,7 @@ def export_opening_door(
     _, model_record = add_actor_model(
         scene, installation, model_name, textures, np.identity(4))
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(scene.export(file_type="glb"))
+    output_path.write_bytes(patch_glb_texture_channels(scene.export(file_type="glb")))
     return {
         "glb": f"doors/{output_path.name}",
         "model": model_name,
