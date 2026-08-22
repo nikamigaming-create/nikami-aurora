@@ -13,16 +13,40 @@ public sealed partial class KotorModuleBoot : Node3D
     {
         Code = """
             shader_type spatial;
-            render_mode unshaded, depth_draw_opaque;
-            uniform sampler2D albedo_texture : source_color, filter_linear_mipmap_anisotropic;
-            uniform sampler2D lightmap_texture : source_color, filter_linear_mipmap_anisotropic;
+            render_mode depth_draw_opaque, diffuse_lambert, specular_disabled;
+            uniform sampler2D albedo_texture : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+            uniform sampler2D lightmap_texture : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
+            uniform vec3 dynamic_ambient;
             void fragment() {
                 vec4 base = texture(albedo_texture, UV);
                 vec3 lightmap = texture(lightmap_texture, UV2).rgb;
-                // Current room GLBs declare these surfaces opaque. Writing
-                // ALPHA at all would move them into Godot's transparent pass
-                // and disable the depth behavior solid furniture requires.
-                ALBEDO = base.rgb * min(vec3(1.0), lightmap);
+                // Odyssey combines its baked atlas with dynamic area lighting.
+                // Keep most of the baked response emissive, while a restrained
+                // diffuse term lets authored point lights and dynamic ambient
+                // reach atlas regions that contain no baked contribution.
+                ALBEDO = base.rgb * 0.55;
+                vec3 baked = min(vec3(1.0), lightmap) * 0.82;
+                EMISSION = base.rgb * max(baked, dynamic_ambient * 0.85);
+                ROUGHNESS = 1.0;
+            }
+            """
+    };
+    private static readonly Shader OdysseyTransparentLightmapShader = new()
+    {
+        Code = """
+            shader_type spatial;
+            render_mode depth_draw_never, cull_disabled, diffuse_lambert, specular_disabled;
+            uniform sampler2D albedo_texture : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+            uniform sampler2D lightmap_texture : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
+            uniform vec3 dynamic_ambient;
+            void fragment() {
+                vec4 base = texture(albedo_texture, UV);
+                vec3 lightmap = texture(lightmap_texture, UV2).rgb;
+                ALBEDO = base.rgb * 0.55;
+                vec3 baked = min(vec3(1.0), lightmap) * 0.82;
+                EMISSION = base.rgb * max(baked, dynamic_ambient * 0.85);
+                ROUGHNESS = 1.0;
+                ALPHA = base.a;
             }
             """
     };
@@ -57,6 +81,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private NumericsVector3 simulationPlayerPosition;
     private float gameplayFieldOfView = DefaultGameplayFieldOfView;
     private AudioStreamPlayer dialogueVoice = null!;
+    private AudioStreamPlayer areaMusic = null!;
     private Godot.Environment runtimeEnvironment = null!;
     private CanvasLayer overlayLayer = null!;
     private Label status = null!;
@@ -82,6 +107,7 @@ public sealed partial class KotorModuleBoot : Node3D
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, CameraRecord> dialogueCameras = [];
     private readonly HashSet<string> reportedUnsupportedScripts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> playedDialogueMedia = new(StringComparer.OrdinalIgnoreCase);
     private KotorGameplaySimulation? gameplaySimulation;
     private int capturedFrames;
     private int captureTargetFrame = 60;
@@ -97,6 +123,10 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool automatedCorridorTrigger;
     private bool automatedCorridorTriggerVerified;
     private bool automatedCorridorTransmissionVerified;
+    private bool automatedFirstEncounterVerified;
+    private bool firstEncounterStarted;
+    private bool firstEncounterCombatReady;
+    private bool cinematicSequenceActive;
     private bool dialogueCameraActive;
     private bool dialogueCameraWasDynamic;
     private float dialogueFieldOfView = 55.0f;
@@ -105,10 +135,20 @@ public sealed partial class KotorModuleBoot : Node3D
     private string dialogueManifestDirectory = "";
     private string openingDialogueConversation = "";
     private DialogueGraph? openingDialogueGraph;
+    private FirstEncounterRecord? firstEncounter;
+    private DialogueGraph? firstEncounterGraph;
+    private FirstEncounterAudioStreams? firstEncounterAudio;
+    private FirstEncounterEffectTextures? firstEncounterEffectTextures;
+    private string currentDialogueConversation = "";
     private DialogueGraph? pendingAutomaticDialogueGraph;
     private string pendingAutomaticDialogueTarget = "";
     private string currentDialogueNodeKey = "";
     private int automaticDialogueTransitionCount;
+    private int encounterAttackSoundCount;
+    private int encounterProjectileCount;
+    private int encounterMuzzleFlashCount;
+    private int encounterImpactCount;
+    private string currentMusicResref = "";
     private string captureDialogueNode = "";
     private ulong inputLockedUntilMsec;
     private string currentVoiceActor = "";
@@ -163,7 +203,7 @@ public sealed partial class KotorModuleBoot : Node3D
         var sprinting = Input.IsKeyPressed(Key.Shift) ||
                         (xrActive && xrLeftHand.IsButtonPressed("primary_click"));
         var intent = KotorMovementIntent.FromAxes(rightIntent, forwardIntent, sprinting);
-        var movementResult = !dialoguePanel.Visible
+        var movementResult = !dialoguePanel.Visible && !cinematicSequenceActive
             ? StepPlayer(intent, (float)delta)
             : new KotorMovementResult(
                 simulationPlayerPosition, true, false, KotorLocomotionMode.Idle);
@@ -187,10 +227,11 @@ public sealed partial class KotorModuleBoot : Node3D
                 interactiveDoors.Count > 0)
             {
                 automatedDoorApplied = true;
-                if (!IsDoorOpen(interactiveDoors[0]))
-                    ToggleDoor(interactiveDoors[0]);
+                var openingDoor = RequireInteractiveDoor("end_door01");
+                if (!IsDoorOpen(openingDoor))
+                    ToggleDoor(openingDoor);
                 else
-                    GD.Print($"NIKAMI_AURORA_DOOR status=already-open tag={interactiveDoors[0].Source.Tag}");
+                    GD.Print($"NIKAMI_AURORA_DOOR status=already-open tag={openingDoor.Source.Tag}");
             }
             if (!automatedLockerApplied && readyFrames >= 30 &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_OPEN_LOCKER") == "1" &&
@@ -225,8 +266,9 @@ public sealed partial class KotorModuleBoot : Node3D
                 interactiveDoors.Count > 0)
             {
                 automatedCorridorTrigger = true;
-                if (!IsDoorOpen(interactiveDoors[0]))
-                    ToggleDoor(interactiveDoors[0]);
+                var openingDoor = RequireInteractiveDoor("end_door01");
+                if (!IsDoorOpen(openingDoor))
+                    ToggleDoor(openingDoor);
                 var start = playerBody.GlobalPosition;
                 var accepted = MovePlayer(-basis.Z * 10.0f);
                 GD.Print($"NIKAMI_AURORA_CORRIDOR_MOVE status={(accepted ? "accepted" : "rejected")} " +
@@ -266,6 +308,43 @@ public sealed partial class KotorModuleBoot : Node3D
                          "nodes=32->33->34->35 automatic=3 " +
                          "globals=END_CARTH_DLG:1,END_TRASK_DLG:11 map=revealed " +
                          "speaker=TRASK_ULGO choices=2");
+            }
+            if (!firstEncounterStarted && readyFrames >= 60 &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_FIRST_ENCOUNTER") == "1")
+                StartFirstEncounter();
+            if (firstEncounterCombatReady && !automatedFirstEncounterVerified &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_FIRST_ENCOUNTER") == "1")
+            {
+                automatedFirstEncounterVerified = true;
+                var snapshot = RequireGameplaySimulation().CaptureSnapshot();
+                var encounterDoor = RequireInteractiveDoor("end_door02");
+                if (!snapshot.GlobalNumbers.TryGetValue("END_TRASK_DLG", out var traskGlobal) ||
+                    traskGlobal != 1 || !IsDoorOpen(encounterDoor) ||
+                    dialoguePanel.Visible || !cinematicSequenceActive ||
+                    encounterAttackSoundCount < 4 ||
+                    encounterProjectileCount < 4 ||
+                    encounterMuzzleFlashCount < 4 ||
+                    encounterImpactCount < 3 ||
+                    firstEncounter is null ||
+                    !IsFirstEncounterEnvironmentReady(firstEncounter) ||
+                    !currentMusicResref.Equals(
+                        "mus_bat_sithbs", StringComparison.OrdinalIgnoreCase) ||
+                    !playedDialogueMedia.Contains("nm01aaroom03000_") ||
+                    !playedDialogueMedia.Contains("nm01aaroom03001_") ||
+                    !currentDialogueNodeKey.Equals(
+                        "encounter:combat-ready", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException(
+                        "First encounter did not reach its combat-ready state");
+                GD.Print("NIKAMI_AURORA_FIRST_ENCOUNTER status=pass " +
+                         "door=end_door02 cameras=26,19,20 dialogue=end_room3 " +
+                         "global=END_TRASK_DLG:1 stage=combat-ready " +
+                         $"voices=2 attacks={encounterAttackSoundCount} " +
+                         $"projectiles={encounterProjectileCount} " +
+                         $"muzzles={encounterMuzzleFlashCount} impacts={encounterImpactCount} " +
+                         $"environment={firstEncounter.EnvironmentPlaceables.Count} " +
+                         $"music={currentMusicResref}");
             }
             var configuredChoice = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_DIALOGUE_CHOICE");
             if (!automatedChoiceApplied && readyFrames >= 20 &&
@@ -454,6 +533,8 @@ public sealed partial class KotorModuleBoot : Node3D
             var loadedRooms = 0;
             var lightmappedOpaqueMaterials = 0;
             var baseOpaqueMaterials = 0;
+            var lightmappedTransparentMaterials = 0;
+            var baseTransparentMaterials = 0;
             foreach (var room in manifest.Rooms)
             {
                 if (string.IsNullOrWhiteSpace(room.Glb)) continue;
@@ -466,9 +547,12 @@ public sealed partial class KotorModuleBoot : Node3D
                     throw new InvalidDataException($"Godot could not import room {room.Model}: {glbPath}");
                 imported.Name = room.Model;
                 imported.Position = ToGodot(room.Position);
-                var materialReport = ConfigureStaticRoomMaterials(imported);
+                var materialReport = ConfigureStaticRoomMaterials(
+                    imported, ToColor(manifest.Lighting.DynamicAmbient));
                 lightmappedOpaqueMaterials += materialReport.LightmappedOpaque;
                 baseOpaqueMaterials += materialReport.BaseOpaque;
+                lightmappedTransparentMaterials += materialReport.LightmappedTransparent;
+                baseTransparentMaterials += materialReport.BaseTransparent;
                 AddChild(imported);
                 loadedRooms++;
                 details.Text = $"Rooms {loadedRooms}/{manifest.Rooms.Count}  •  {room.Model}";
@@ -477,8 +561,10 @@ public sealed partial class KotorModuleBoot : Node3D
             if (lightmappedOpaqueMaterials == 0 || baseOpaqueMaterials == 0)
                 throw new InvalidDataException("Room opacity audit found no configured materials");
             GD.Print($"NIKAMI_AURORA_OPACITY status=pass policy=source-opaque " +
-                     $"lightmapped={lightmappedOpaqueMaterials} base={baseOpaqueMaterials} " +
-                     "alphaWrites=0 depthWrite=opaque");
+                      $"lightmapped={lightmappedOpaqueMaterials} base={baseOpaqueMaterials} " +
+                      $"sourceTransparentLightmapped={lightmappedTransparentMaterials} " +
+                      $"sourceTransparentBase={baseTransparentMaterials} " +
+                      "opaqueAlphaWrites=0 opaqueDepthWrite=opaque");
 
             var authoredLights = LoadAuthoredLights(manifest.Rooms, manifest.Lighting);
             var materializedPlayer = LoadPlayerModel(
@@ -532,6 +618,39 @@ public sealed partial class KotorModuleBoot : Node3D
                     manifestDirectory,
                     System.Environment.GetEnvironmentVariable(
                         "NIKAMI_AURORA_SKIP_OPENING_DIALOGUE") != "1");
+            firstEncounter = manifest.FirstEncounter;
+            if (firstEncounter is not null)
+            {
+                if (firstEncounter.Schema != "nikami-aurora-kotor-first-encounter-v1" ||
+                    firstEncounter.Participants.Count != 3 ||
+                    firstEncounter.EnvironmentPlaceables.Count != 6 ||
+                    firstEncounter.PartyWaypoints.Count != 2 ||
+                    firstEncounter.CameraIds.Any(id => !dialogueCameras.ContainsKey(id)) ||
+                    firstEncounter.Participants.Any(participant =>
+                        !actorModels.ContainsKey(participant.Tag) ||
+                        !actorAnimations.ContainsKey(participant.Tag)) ||
+                    !IsFirstEncounterEnvironmentReady(firstEncounter))
+                    throw new InvalidDataException("First encounter manifest is incomplete");
+                firstEncounterGraph = ReadDialogueGraph(
+                    firstEncounter.SceneObject.Dialogue, manifestDirectory);
+                firstEncounterAudio = LoadFirstEncounterAudio(
+                    firstEncounter.Audio, manifestDirectory);
+                firstEncounterEffectTextures = LoadFirstEncounterEffects(
+                    firstEncounter.Effects, manifestDirectory);
+                areaMusic.Stream = firstEncounterAudio.BackgroundMusic;
+                areaMusic.Play();
+                currentMusicResref = firstEncounter.Audio.BackgroundMusic.Resref;
+                GD.Print($"NIKAMI_AURORA_FIRST_ENCOUNTER status=ready " +
+                         $"door={firstEncounter.DoorTag} " +
+                         $"participants={string.Join(',', firstEncounter.Participants.Select(item => item.Tag))} " +
+                         $"environment={firstEncounter.EnvironmentPlaceables.Count} " +
+                         $"cameras={string.Join(',', firstEncounter.CameraIds)} " +
+                         $"scripts={firstEncounter.Scripts.Count} " +
+                         $"voice=2 sfx={firstEncounter.Audio.BlasterShot.Resref}," +
+                         $"{firstEncounter.Audio.BlasterImpact.Resref} " +
+                         $"music={firstEncounter.Audio.BackgroundMusic.Resref}," +
+                         $"{firstEncounter.Audio.BattleMusic.Resref}");
+            }
             capturedFrames = 0;
             readyFrames = 0;
             moduleReady = true;
@@ -668,6 +787,245 @@ public sealed partial class KotorModuleBoot : Node3D
         dialogueVoice = new AudioStreamPlayer { Name = "DialogueVoice" };
         dialogueVoice.Finished += OnDialogueVoiceFinished;
         AddChild(dialogueVoice);
+        areaMusic = new AudioStreamPlayer
+        {
+            Name = "AreaMusic",
+            VolumeDb = -12.0f
+        };
+        AddChild(areaMusic);
+    }
+
+    private static FirstEncounterAudioStreams LoadFirstEncounterAudio(
+        FirstEncounterAudio source,
+        string manifestDirectory) => new(
+        LoadOwnedAudio(source.BlasterShot, manifestDirectory),
+        LoadOwnedAudio(source.BlasterImpact, manifestDirectory),
+        LoadOwnedAudio(source.BackgroundMusic, manifestDirectory),
+        LoadOwnedAudio(source.BattleMusic, manifestDirectory));
+
+    private static FirstEncounterEffectTextures LoadFirstEncounterEffects(
+        FirstEncounterEffects source,
+        string manifestDirectory)
+    {
+        if (source.Schema != "nikami-aurora-kotor-first-encounter-effects-v1" ||
+            Math.Abs(source.ProjectileSize - 0.09f) > 0.0001f ||
+            Math.Abs(source.MuzzleSize - 0.3f) > 0.0001f ||
+            Math.Abs(source.MuzzleLifetime - 0.02f) > 0.0001f)
+            throw new InvalidDataException("First-encounter effect contract drifted");
+        return new FirstEncounterEffectTextures(
+            LoadOwnedEffectTexture(source.LaserTexture, manifestDirectory),
+            LoadOwnedEffectTexture(source.MuzzleTexture, manifestDirectory),
+            LoadOwnedEffectTexture(source.FlareTexture, manifestDirectory),
+            source.ProjectileSize,
+            source.MuzzleSize,
+            source.MuzzleLifetime);
+    }
+
+    private static Texture2D LoadOwnedEffectTexture(
+        FirstEncounterEffectTexture source,
+        string manifestDirectory)
+    {
+        var root = Path.GetFullPath(manifestDirectory) + Path.DirectorySeparatorChar;
+        var path = Path.GetFullPath(Path.Combine(
+            manifestDirectory, source.Path.Replace('/', Path.DirectorySeparatorChar)));
+        if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"Encounter effect path escapes the bundle: {source.Path}");
+        var bytes = File.ReadAllBytes(path);
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+        if (bytes.Length != source.ByteCount ||
+            !hash.Equals(source.PayloadSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"Encounter effect payload drifted: {source.Resref}");
+        var image = new Godot.Image();
+        if (image.LoadPngFromBuffer(bytes) != Error.Ok || image.IsEmpty())
+            throw new InvalidDataException($"Encounter effect texture is not playable: {source.Resref}");
+        var texture = ImageTexture.CreateFromImage(image);
+        GD.Print($"NIKAMI_AURORA_EFFECT_TEXTURE status=validated resref={source.Resref} " +
+                 $"size={image.GetWidth()}x{image.GetHeight()}");
+        return texture;
+    }
+
+    private static AudioStream LoadOwnedAudio(
+        FirstEncounterAudioSource source,
+        string manifestDirectory)
+    {
+        var root = Path.GetFullPath(manifestDirectory) + Path.DirectorySeparatorChar;
+        var path = Path.GetFullPath(Path.Combine(
+            manifestDirectory, source.Path.Replace('/', Path.DirectorySeparatorChar)));
+        if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"Encounter audio path escapes the bundle: {source.Path}");
+        var bytes = File.ReadAllBytes(path);
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+        if (bytes.Length != source.ByteCount ||
+            !hash.Equals(source.PayloadSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"Encounter audio payload drifted: {source.Resref}");
+        AudioStream stream = source.Format.ToLowerInvariant() switch
+        {
+            "wav" => AudioStreamWav.LoadFromBuffer(bytes, new Godot.Collections.Dictionary()),
+            "mp3" => AudioStreamMP3.LoadFromBuffer(bytes),
+            _ => throw new InvalidDataException(
+                $"Unsupported encounter audio format: {source.Format}")
+        };
+        if (stream.GetLength() <= 0.0)
+            throw new InvalidDataException(
+                $"Encounter audio decoded with no playable duration: {source.Resref}");
+        GD.Print($"NIKAMI_AURORA_AUDIO status=validated resref={source.Resref} " +
+                 $"source={source.SourceEncoding} payload={source.PayloadEncoding} " +
+                 $"duration={stream.GetLength():F3}");
+        return stream;
+    }
+
+    private void PlayOneShot(AudioStream stream, float volumeDb = -3.0f)
+    {
+        var player = new AudioStreamPlayer
+        {
+            Stream = stream,
+            VolumeDb = volumeDb
+        };
+        player.Finished += player.QueueFree;
+        AddChild(player);
+        player.Play();
+    }
+
+    private void FireEncounterBlaster(string attackerTag, string targetTag)
+    {
+        var audio = firstEncounterAudio;
+        var effects = firstEncounterEffectTextures;
+        if (audio is null || effects is null ||
+            !actorModels.TryGetValue(attackerTag, out var attacker) ||
+            !actorModels.TryGetValue(targetTag, out var target))
+            return;
+        var muzzle = FindDescendantBySuffix<Node3D>(attacker, "bullethook")?.GlobalPosition ??
+                     attacker.GlobalPosition + Vector3.Up * 1.25f;
+        var destination = actorTalkOffsets.TryGetValue(targetTag, out var talkOffset)
+            ? target.GlobalTransform * talkOffset
+            : target.GlobalPosition + Vector3.Up * 1.1f;
+        SpawnMuzzleFlash(muzzle);
+        var bolt = new MeshInstance3D
+        {
+            Name = $"BlasterBolt_{encounterProjectileCount:D3}",
+            Mesh = new BoxMesh
+            {
+                Size = new Vector3(
+                    effects.ProjectileSize, effects.ProjectileSize, 0.7f)
+            },
+            MaterialOverride = CreateEffectMaterial(
+                new Color(0.929f, 0.110f, 0.0f, 1.0f), 4.0f,
+                effects.Laser, false)
+        };
+        AddChild(bolt);
+        bolt.GlobalPosition = muzzle;
+        bolt.LookAt(destination, Vector3.Up);
+        encounterProjectileCount++;
+        PlayOneShot(audio.BlasterShot, -2.0f);
+        encounterAttackSoundCount++;
+        var duration = Math.Max(0.08f, muzzle.DistanceTo(destination) / 32.0f);
+        var tween = CreateTween();
+        tween.TweenProperty(bolt, "global_position", destination, duration);
+        tween.TweenCallback(Callable.From(() =>
+        {
+            bolt.QueueFree();
+            SpawnImpactFlash(destination);
+            PlayOneShot(audio.BlasterImpact, -5.0f);
+        }));
+        GD.Print($"NIKAMI_AURORA_PROJECTILE status=fired attacker={attackerTag} " +
+                 $"target={targetTag} from={muzzle} to={destination} duration={duration:F3}");
+    }
+
+    private static StandardMaterial3D CreateEffectMaterial(
+        Color color, float energy, Texture2D? texture, bool billboard) => new()
+        {
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            AlbedoColor = color,
+            AlbedoTexture = texture,
+            EmissionEnabled = true,
+            Emission = color,
+            EmissionTexture = texture,
+            EmissionEnergyMultiplier = energy,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            BlendMode = BaseMaterial3D.BlendModeEnum.Add,
+            DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
+            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+            BillboardMode = billboard
+            ? BaseMaterial3D.BillboardModeEnum.Enabled
+            : BaseMaterial3D.BillboardModeEnum.Disabled,
+            BillboardKeepScale = billboard
+        };
+
+    private void SpawnMuzzleFlash(Vector3 position)
+    {
+        var effects = firstEncounterEffectTextures;
+        if (effects is null) return;
+        var flash = new Node3D
+        {
+            Name = $"MuzzleFlash_{encounterMuzzleFlashCount:D3}"
+        };
+        AddChild(flash);
+        flash.GlobalPosition = position;
+        var authoredFlash = new MeshInstance3D
+        {
+            Name = "AuthoredMuzzleBillboard",
+            Mesh = new QuadMesh
+            {
+                Size = new Vector2(effects.MuzzleSize, effects.MuzzleSize)
+            },
+            MaterialOverride = CreateEffectMaterial(
+                Colors.White, 2.0f, effects.Muzzle, true)
+        };
+        flash.AddChild(authoredFlash);
+        var authoredFlare = new MeshInstance3D
+        {
+            Name = "AuthoredMuzzleFlare",
+            Mesh = new QuadMesh
+            {
+                Size = new Vector2(
+                    effects.MuzzleSize * 0.55f, effects.MuzzleSize * 0.55f)
+            },
+            MaterialOverride = CreateEffectMaterial(
+                new Color(1.0f, 0.612f, 0.0f, 1.0f), 2.5f,
+                effects.Flare, true)
+        };
+        flash.AddChild(authoredFlare);
+        var light = new OmniLight3D
+        {
+            LightColor = new Color(1.0f, 0.28f, 0.04f),
+            LightEnergy = 1.25f,
+            OmniRange = 1.5f
+        };
+        flash.AddChild(light);
+        encounterMuzzleFlashCount++;
+        var tween = CreateTween();
+        tween.TweenProperty(
+            flash, "scale", Vector3.Zero, effects.MuzzleLifetime);
+        tween.TweenCallback(Callable.From(flash.QueueFree));
+    }
+
+    private void SpawnImpactFlash(Vector3 position)
+    {
+        var effects = firstEncounterEffectTextures;
+        if (effects is null) return;
+        var impact = new MeshInstance3D
+        {
+            Name = $"ImpactFlash_{encounterImpactCount:D3}",
+            Mesh = new QuadMesh { Size = new Vector2(0.2f, 0.2f) },
+            MaterialOverride = CreateEffectMaterial(
+                new Color(1.0f, 0.45f, 0.06f, 1.0f), 3.0f,
+                effects.Flare, true)
+        };
+        AddChild(impact);
+        impact.GlobalPosition = position;
+        encounterImpactCount++;
+        var tween = CreateTween();
+        tween.TweenProperty(impact, "scale", Vector3.Zero, 0.18f);
+        tween.TweenCallback(Callable.From(impact.QueueFree));
+    }
+
+    private void SwitchAreaMusic(AudioStream stream, string resref)
+    {
+        areaMusic.Stop();
+        areaMusic.Stream = stream;
+        areaMusic.Play();
+        currentMusicResref = resref;
+        GD.Print($"NIKAMI_AURORA_MUSIC status=playing resref={resref}");
     }
 
     private void TryInitializeOpenXR()
@@ -846,18 +1204,27 @@ public sealed partial class KotorModuleBoot : Node3D
         bool present)
     {
         if (actor.Dialogue is null) return;
-        var path = Path.GetFullPath(Path.Combine(manifestDirectory,
-            actor.Dialogue.Path.Replace('/', Path.DirectorySeparatorChar)));
-        var graph = JsonSerializer.Deserialize<DialogueGraph>(File.ReadAllText(path), JsonOptions())
-                    ?? throw new InvalidDataException($"Dialogue graph is empty: {path}");
-        if (graph.Schema != "nikami-aurora-kotor-dialogue-v1" || graph.Starters.Count == 0)
-            throw new InvalidDataException($"Unsupported dialogue graph: {path}");
+        var graph = ReadDialogueGraph(actor.Dialogue, manifestDirectory);
         dialogueOwnerActor = actor.Template;
         dialogueManifestDirectory = manifestDirectory;
         openingDialogueConversation = actor.Conversation ?? "";
         openingDialogueGraph = graph;
+        currentDialogueConversation = openingDialogueConversation;
         if (present)
             PresentDialogueStarter(graph, graph.OpeningStarter);
+    }
+
+    private static DialogueGraph ReadDialogueGraph(
+        DialogueReference reference,
+        string manifestDirectory)
+    {
+        var path = Path.GetFullPath(Path.Combine(manifestDirectory,
+            reference.Path.Replace('/', Path.DirectorySeparatorChar)));
+        var graph = JsonSerializer.Deserialize<DialogueGraph>(File.ReadAllText(path), JsonOptions())
+                    ?? throw new InvalidDataException($"Dialogue graph is empty: {path}");
+        if (graph.Schema != "nikami-aurora-kotor-dialogue-v1" || graph.Starters.Count == 0)
+            throw new InvalidDataException($"Unsupported dialogue graph: {path}");
+        return graph;
     }
 
     private void PresentDialogueStarter(DialogueGraph graph, int starterIndex)
@@ -868,15 +1235,40 @@ public sealed partial class KotorModuleBoot : Node3D
             graph, graph.Starters[starterIndex].Target, new HashSet<string>(), 0);
     }
 
-    private void PlayActorAnimation(string actor, string requested)
+    private void PlayActorAnimation(string actor, string requested, bool loop = true)
     {
         if (!actorAnimations.TryGetValue(actor, out var player)) return;
         var match = player.GetAnimationList().FirstOrDefault(name =>
             name.ToString().Equals(requested, StringComparison.OrdinalIgnoreCase) ||
             name.ToString().EndsWith('/' + requested, StringComparison.OrdinalIgnoreCase));
         if (match == default) return;
+        var animation = player.GetAnimation(match);
+        if (animation is not null)
+            animation.LoopMode = loop
+                ? Animation.LoopModeEnum.Linear
+                : Animation.LoopModeEnum.None;
         player.Play(match);
         GD.Print($"NIKAMI_AURORA_ACTOR_ANIMATION status=playing actor={actor} animation={match}");
+    }
+
+    private void ApplyDialogueAnimations(DialogueNode node)
+    {
+        foreach (var animation in node.Animations)
+        {
+            if (string.IsNullOrWhiteSpace(animation.AnimationName) ||
+                string.IsNullOrWhiteSpace(animation.Participant))
+                continue;
+            if (animation.Participant.Equals("PLAYER", StringComparison.OrdinalIgnoreCase))
+                PlayPlayerAnimation(animation.AnimationName);
+            else
+                PlayActorAnimation(
+                    animation.Participant,
+                    animation.AnimationName,
+                    animation.Looping && !animation.FireForget);
+            GD.Print($"NIKAMI_AURORA_DIALOGUE_ANIMATION status=applied " +
+                     $"participant={animation.Participant} id={animation.AnimationId} " +
+                     $"name={animation.AnimationName}");
+        }
     }
 
     private void SetPresentationCameraBase(Vector3 position, Vector3 target, Vector3 up, float fov)
@@ -901,19 +1293,9 @@ public sealed partial class KotorModuleBoot : Node3D
     private void ApplyDialogueCamera(DialogueNode node)
     {
         if (node.CameraId is int cameraId && cameraId > 0 &&
-            dialogueCameras.TryGetValue(cameraId, out var source))
+            dialogueCameras.ContainsKey(cameraId))
         {
-            var position = ToGodot(source.Position) + Vector3.Up * source.Height;
-            var forward = ToGodot(source.Forward).Normalized();
-            var up = ToGodot(source.Up).Normalized();
-            if (forward.LengthSquared() < 0.99f || up.LengthSquared() < 0.99f)
-                throw new InvalidDataException($"Authored camera {cameraId} has an invalid basis");
-            var fov = node.CameraFov is > 0 ? node.CameraFov.Value : source.Fov;
-            SetPresentationCameraBase(position, position + forward, up, fov);
-            dialogueCameraWasDynamic = false;
-            lastDynamicDialogueActor = "";
-            GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active mode=static id={cameraId} " +
-                     $"fov={fov:F3} position={position} xr={xrActive}");
+            ApplyStaticDialogueCamera(cameraId, node.CameraFov);
             if (!xrActive && cameraId == 1)
             {
                 var carthTarget = actorModels.TryGetValue("Carth", out var carthModel)
@@ -981,6 +1363,23 @@ public sealed partial class KotorModuleBoot : Node3D
                  $"angle={node.CameraAngle} fov={dialogueFieldOfView:F3} position={eye} xr={xrActive}");
     }
 
+    private void ApplyStaticDialogueCamera(int cameraId, float? overrideFov = null)
+    {
+        if (!dialogueCameras.TryGetValue(cameraId, out var source))
+            throw new InvalidDataException($"Authored camera was not found: {cameraId}");
+        var position = ToGodot(source.Position) + Vector3.Up * source.Height;
+        var forward = ToGodot(source.Forward).Normalized();
+        var up = ToGodot(source.Up).Normalized();
+        if (forward.LengthSquared() < 0.99f || up.LengthSquared() < 0.99f)
+            throw new InvalidDataException($"Authored camera {cameraId} has an invalid basis");
+        var fov = overrideFov is > 0 ? overrideFov.Value : source.Fov;
+        SetPresentationCameraBase(position, position + forward, up, fov);
+        dialogueCameraWasDynamic = false;
+        lastDynamicDialogueActor = "";
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active mode=static id={cameraId} " +
+                 $"fov={fov:F3} position={position} xr={xrActive}");
+    }
+
     private static void FaceModelToward(Node3D model, Vector3 target)
     {
         target.Y = model.GlobalPosition.Y;
@@ -1027,7 +1426,9 @@ public sealed partial class KotorModuleBoot : Node3D
                 throw new InvalidDataException($"Unsupported LIP track: {lipPath}");
         }
         dialogueVoice.Play();
-        GD.Print($"NIKAMI_AURORA_DIALOGUE_AUDIO status=playing actor={actor} sound={node.Sound} " +
+        var mediaResref = string.IsNullOrWhiteSpace(node.Sound) ? node.Voice : node.Sound;
+        playedDialogueMedia.Add(mediaResref);
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_AUDIO status=playing actor={actor} sound={mediaResref} " +
                  $"format={node.Media.AudioFormat} bytes={audioBytes.Length} " +
                  $"duration={stream.GetLength():F3} lipFrames={currentLipTrack?.Frames.Count ?? 0}");
     }
@@ -1257,6 +1658,7 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private static LipRig? BuildLipRig(Node actor, AnimationPlayer animationPlayer)
     {
+        if (!animationPlayer.HasAnimation("talk")) return null;
         var talk = animationPlayer.GetAnimation("talk");
         if (talk is null) return null;
         var skeletons = FindDescendants<Skeleton3D>(actor).ToArray();
@@ -1313,9 +1715,7 @@ public sealed partial class KotorModuleBoot : Node3D
     {
         if (depth > 32 || !visited.Add(key) || !graph.Nodes.TryGetValue(key, out var node))
         {
-            dialoguePanel.Visible = false;
-            StopDialoguePerformance();
-            RestoreGameplayCamera();
+            FinishDialogue();
             return;
         }
         currentDialogueNodeKey = key;
@@ -1323,11 +1723,14 @@ public sealed partial class KotorModuleBoot : Node3D
                  $"kind={node.Kind} speaker={node.Speaker} sound={node.Sound}");
         ExecuteScript(node.Script1);
         ExecuteScript(node.Script2);
+        ApplyDialogueAnimations(node);
         ApplyDialogueCamera(node);
         if (string.IsNullOrWhiteSpace(node.Text))
         {
             if (node.Links.Count > 0)
                 PresentDialogueNode(graph, node.Links[0].Target, visited, depth + 1);
+            else
+                FinishDialogue();
             return;
         }
         var speakerActor = ResolveDialogueActor(node);
@@ -1369,12 +1772,7 @@ public sealed partial class KotorModuleBoot : Node3D
         if (choices.Count == 0)
         {
             var close = CreateChoiceButton("Continue");
-            close.Pressed += () =>
-            {
-                dialoguePanel.Visible = false;
-                StopDialoguePerformance();
-                RestoreGameplayCamera();
-            };
+            close.Pressed += FinishDialogue;
             close.Disabled = dialogueVoice.Playing;
             dialogueChoices.AddChild(close);
             activeChoiceButtons.Add(close);
@@ -1417,15 +1815,25 @@ public sealed partial class KotorModuleBoot : Node3D
         var visible = ResolveVisibleNode(graph, key, new HashSet<string>(), 0);
         if (visible is null)
         {
-            dialoguePanel.Visible = false;
-            StopDialoguePerformance();
-            RestoreGameplayCamera();
+            FinishDialogue();
             return;
         }
         if (visible.Kind == "reply" && visible.Links.Count > 0)
             PresentDialogueNode(graph, visible.Links[0].Target, new HashSet<string>(), 0);
         else
             PresentDialogueNode(graph, key, new HashSet<string>(), 0);
+    }
+
+    private void FinishDialogue()
+    {
+        var completedConversation = currentDialogueConversation;
+        dialoguePanel.Visible = false;
+        StopDialoguePerformance();
+        RestoreGameplayCamera();
+        Input.MouseMode = Input.MouseModeEnum.Captured;
+        currentDialogueConversation = "";
+        if (completedConversation.Equals("end_room3", StringComparison.OrdinalIgnoreCase))
+            FinishFirstEncounter();
     }
 
     private static DialogueNode? ResolveVisibleNode(DialogueGraph graph, string key,
@@ -1685,6 +2093,14 @@ public sealed partial class KotorModuleBoot : Node3D
         return loaded;
     }
 
+    private bool IsFirstEncounterEnvironmentReady(FirstEncounterRecord encounter) =>
+        encounter.EnvironmentPlaceables.All(expected =>
+            materializedPlaceables.Any(actual =>
+                actual.Source.Template.Equals(
+                    expected.Template, StringComparison.OrdinalIgnoreCase) &&
+                (ToGodot(actual.Source.Position) - ToGodot(expected.Position))
+                .LengthSquared() < 0.0001f));
+
     private void UpdateInteractionPrompt()
     {
         if (dialoguePanel.Visible)
@@ -1762,6 +2178,11 @@ public sealed partial class KotorModuleBoot : Node3D
         ApplyGameplayTransition(
             RequireGameplaySimulation().ToggleDoor(door.InstanceId));
     }
+
+    private InteractiveDoor RequireInteractiveDoor(string tag) =>
+        interactiveDoors.FirstOrDefault(candidate =>
+            candidate.Source.Tag.Equals(tag, StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidDataException($"Interactive door was not materialized: {tag}");
 
     private void ExecuteScript(string? resref)
     {
@@ -2053,6 +2474,7 @@ public sealed partial class KotorModuleBoot : Node3D
             dialoguePanel.Visible = false;
             StopDialoguePerformance();
             RestoreGameplayCamera();
+            currentDialogueConversation = request.Conversation;
             PresentDialogueStarter(openingDialogueGraph, request.StarterIndex);
             GD.Print($"NIKAMI_AURORA_DIALOGUE_TRIGGER status=started " +
                      $"conversation={request.Conversation} starter={request.StarterIndex}");
@@ -2061,6 +2483,126 @@ public sealed partial class KotorModuleBoot : Node3D
         {
             GD.PushError($"NIKAMI_AURORA_DIALOGUE_TRIGGER status=fail error={exception}");
         }
+    }
+
+    private async void StartFirstEncounter()
+    {
+        if (firstEncounterStarted) return;
+        firstEncounterStarted = true;
+        try
+        {
+            var encounter = firstEncounter
+                ?? throw new InvalidDataException("First encounter is unavailable");
+            var graph = firstEncounterGraph
+                ?? throw new InvalidDataException("First encounter dialogue is unavailable");
+            cinematicSequenceActive = true;
+            dialoguePanel.Visible = false;
+            StopDialoguePerformance();
+            var door = RequireInteractiveDoor(encounter.DoorTag);
+            if (!IsDoorOpen(door))
+                ToggleDoor(door);
+
+            var playerWaypoint = encounter.PartyWaypoints.Single(item =>
+                item.Tag.Equals("wp_end_room3_1", StringComparison.OrdinalIgnoreCase));
+            var traskWaypoint = encounter.PartyWaypoints.Single(item =>
+                item.Tag.Equals("wp_end_room3_2", StringComparison.OrdinalIgnoreCase));
+            simulationPlayerPosition = ToNumerics(playerWaypoint.Position);
+            playerBody.GlobalPosition = ToGodot(playerWaypoint.Position);
+            yaw = playerWaypoint.Bearing;
+            playerBody.Rotation = new Vector3(0, yaw, 0);
+            cameraPivot.Rotation = new Vector3(pitch, 0, 0);
+            if (!actorModels.TryGetValue("end_trask", out var trask))
+                throw new InvalidDataException("First encounter could not resolve Trask");
+            trask.GlobalPosition = ToGodot(traskWaypoint.Position);
+            trask.Rotation = new Vector3(0, traskWaypoint.Bearing, 0);
+
+            var openingControl = graph.Nodes["entry:0"];
+            ApplyDialogueAnimations(openingControl);
+            ApplyStaticDialogueCamera(26);
+            currentDialogueNodeKey = "encounter:camera26";
+            GD.Print("NIKAMI_AURORA_FIRST_ENCOUNTER status=started " +
+                     "door=end_door02 dialogue=end_room3 camera=26");
+
+            await WaitSeconds(encounter.TimingSeconds.CameraSwitch);
+            ApplyStaticDialogueCamera(19);
+            currentDialogueNodeKey = "encounter:camera19";
+            PlayActorAnimation("end_sith2", "b7a1", false);
+            PlayActorAnimation("end_soldier2", "c3d4", false);
+            FireEncounterBlaster("end_sith2", "end_soldier2");
+
+            await WaitSeconds(encounter.TimingSeconds.SecondAttack);
+            PlayActorAnimation("end_sith3", "b7a1", false);
+            PlayActorAnimation("end_soldier2", "c3d4", false);
+            FireEncounterBlaster("end_sith3", "end_soldier2");
+
+            var elapsedBeforeBattleMusic =
+                encounter.TimingSeconds.CameraSwitch + encounter.TimingSeconds.SecondAttack;
+            await WaitSeconds(Math.Max(
+                0.0f,
+                encounter.TimingSeconds.BattleMusic - elapsedBeforeBattleMusic));
+            var audio = firstEncounterAudio
+                ?? throw new InvalidDataException("First encounter audio is unavailable");
+            SwitchAreaMusic(audio.BattleMusic, encounter.Audio.BattleMusic.Resref);
+            await WaitSeconds(Math.Max(
+                0.0f,
+                encounter.TimingSeconds.FirstControlResume -
+                encounter.TimingSeconds.BattleMusic));
+            var secondControl = graph.Nodes["entry:1"];
+            ApplyDialogueAnimations(secondControl);
+            ApplyStaticDialogueCamera(20);
+            currentDialogueNodeKey = "encounter:camera20";
+            PlayActorAnimation("end_sith2", "b7a1", false);
+            FireEncounterBlaster("end_sith2", "end_soldier2");
+
+            await WaitSeconds(encounter.TimingSeconds.ThirdAttack);
+            PlayActorAnimation("end_soldier2", "die", false);
+            await WaitSeconds(0.5f);
+
+            currentDialogueConversation = encounter.SceneObject.Conversation;
+            currentDialogueNodeKey = "entry:4";
+            PresentDialogueNode(graph, "entry:4", new HashSet<string>(), 0);
+        }
+        catch (Exception exception)
+        {
+            cinematicSequenceActive = false;
+            GD.PushError($"NIKAMI_AURORA_FIRST_ENCOUNTER status=fail error={exception}");
+        }
+    }
+
+    private async System.Threading.Tasks.Task WaitSeconds(float seconds)
+    {
+        if (seconds <= 0) return;
+        await ToSignal(GetTree().CreateTimer(seconds), SceneTreeTimer.SignalName.Timeout);
+    }
+
+    private void FinishFirstEncounter()
+    {
+        cinematicSequenceActive = true;
+        firstEncounterCombatReady = true;
+        if (actorModels.TryGetValue("end_sith2", out var sith2))
+            FaceModelToward(sith2, playerBody.GlobalPosition + Vector3.Up * 1.0f);
+        if (actorModels.TryGetValue("end_sith3", out var sith3))
+            FaceModelToward(sith3, playerBody.GlobalPosition + Vector3.Up * 1.0f);
+        PlayActorAnimation("end_soldier2", "dead");
+        PlayActorAnimation("end_sith2", "b7a1", false);
+        PlayActorAnimation("end_sith3", "b7a1", false);
+        FireEncounterBlaster("end_sith3", "end_trask");
+        ApplyStaticDialogueCamera(20);
+        currentDialogueNodeKey = "encounter:combat-ready";
+        GD.Print("NIKAMI_AURORA_FIRST_ENCOUNTER status=combat-ready " +
+                 "hostiles=end_sith2,end_sith3 soldier=end_soldier2:dead");
+        Callable.From(ReleaseFirstEncounterToGameplay).CallDeferred();
+    }
+
+    private async void ReleaseFirstEncounterToGameplay()
+    {
+        await WaitSeconds(3.0f);
+        cinematicSequenceActive = false;
+        RestoreGameplayCamera();
+        if (firstEncounterAudio is { } audio && firstEncounter is { } encounter)
+            SwitchAreaMusic(audio.BackgroundMusic, encounter.Audio.BackgroundMusic.Resref);
+        currentDialogueNodeKey = "encounter:gameplay-ready";
+        GD.Print("NIKAMI_AURORA_FIRST_ENCOUNTER status=gameplay-ready");
     }
 
     private int LoadAuthoredLights(IEnumerable<RoomRecord> rooms, AreaLightingRecord lighting)
@@ -2095,45 +2637,71 @@ public sealed partial class KotorModuleBoot : Node3D
         return loaded;
     }
 
-    private static StaticMaterialReport ConfigureStaticRoomMaterials(Node node)
+    private static StaticMaterialReport ConfigureStaticRoomMaterials(
+        Node node, Color dynamicAmbient)
     {
         var lightmappedOpaque = 0;
         var baseOpaque = 0;
+        var lightmappedTransparent = 0;
+        var baseTransparent = 0;
         if (node is MeshInstance3D instance && instance.Mesh is not null)
         {
             for (var surface = 0; surface < instance.Mesh.GetSurfaceCount(); surface++)
             {
                 if (instance.GetActiveMaterial(surface) is not BaseMaterial3D source) continue;
+                var sourceTransparent =
+                    source.Transparency != BaseMaterial3D.TransparencyEnum.Disabled;
                 if (source.AlbedoTexture is not null && source.EmissionTexture is not null)
                 {
-                    var lightmapped = new ShaderMaterial { Shader = OdysseyLightmapShader };
+                    var lightmapped = new ShaderMaterial
+                    {
+                        Shader = sourceTransparent
+                            ? OdysseyTransparentLightmapShader
+                            : OdysseyLightmapShader
+                    };
                     lightmapped.SetShaderParameter("albedo_texture", source.AlbedoTexture);
                     lightmapped.SetShaderParameter("lightmap_texture", source.EmissionTexture);
+                    lightmapped.SetShaderParameter("dynamic_ambient", new Vector3(
+                        dynamicAmbient.R, dynamicAmbient.G, dynamicAmbient.B));
                     instance.SetSurfaceOverrideMaterial(surface, lightmapped);
-                    lightmappedOpaque++;
+                    if (sourceTransparent)
+                        lightmappedTransparent++;
+                    else
+                        lightmappedOpaque++;
                     continue;
                 }
                 var material = (BaseMaterial3D)source.Duplicate();
                 material.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
-                material.Transparency = BaseMaterial3D.TransparencyEnum.Disabled;
-                material.DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.OpaqueOnly;
+                material.Transparency = sourceTransparent
+                    ? BaseMaterial3D.TransparencyEnum.Alpha
+                    : BaseMaterial3D.TransparencyEnum.Disabled;
+                material.DepthDrawMode = sourceTransparent
+                    ? BaseMaterial3D.DepthDrawModeEnum.Disabled
+                    : BaseMaterial3D.DepthDrawModeEnum.OpaqueOnly;
                 material.NoDepthTest = false;
                 var albedo = material.AlbedoColor;
-                albedo.A = 1.0f;
+                if (!sourceTransparent)
+                    albedo.A = 1.0f;
                 material.AlbedoColor = albedo;
                 material.Metallic = 0;
                 material.Roughness = 1;
                 instance.SetSurfaceOverrideMaterial(surface, material);
-                baseOpaque++;
+                if (sourceTransparent)
+                    baseTransparent++;
+                else
+                    baseOpaque++;
             }
         }
         foreach (var child in node.GetChildren())
         {
-            var childReport = ConfigureStaticRoomMaterials(child);
+            var childReport = ConfigureStaticRoomMaterials(child, dynamicAmbient);
             lightmappedOpaque += childReport.LightmappedOpaque;
             baseOpaque += childReport.BaseOpaque;
+            lightmappedTransparent += childReport.LightmappedTransparent;
+            baseTransparent += childReport.BaseTransparent;
         }
-        return new StaticMaterialReport(lightmappedOpaque, baseOpaque);
+        return new StaticMaterialReport(
+            lightmappedOpaque, baseOpaque, lightmappedTransparent, baseTransparent);
     }
 
     private void BuildNavigation(IEnumerable<RoomRecord> rooms)
@@ -2419,6 +2987,7 @@ public sealed partial class KotorModuleBoot : Node3D
         IReadOnlyList<PlaceableRecord> Placeables,
         IReadOnlyList<TriggerRecord> Triggers,
         IReadOnlyList<CameraRecord> Cameras,
+        FirstEncounterRecord? FirstEncounter,
         IReadOnlyList<ScriptContractRecord> ScriptContracts,
         CountRecord Counts);
 
@@ -2461,6 +3030,116 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record CameraRecord(int Id, IReadOnlyList<float> Position, float Height, float Fov,
         float PitchDegrees, IReadOnlyList<float> OrientationWxyz, IReadOnlyList<float> Forward,
         IReadOnlyList<float> Up);
+    private sealed record FirstEncounterRecord(
+        string Schema,
+        string DoorTag,
+        FirstEncounterSceneObject SceneObject,
+        IReadOnlyList<FirstEncounterParticipant> Participants,
+        IReadOnlyList<PlaceableRecord> EnvironmentPlaceables,
+        IReadOnlyList<FirstEncounterWaypoint> PartyWaypoints,
+        IReadOnlyList<int> CameraIds,
+        FirstEncounterAnimationIds AnimationIds,
+        FirstEncounterEffects Effects,
+        FirstEncounterTiming TimingSeconds,
+        FirstEncounterAudio Audio,
+        IReadOnlyList<FirstEncounterScript> Scripts);
+    private sealed record FirstEncounterSceneObject(
+        string Template,
+        string Tag,
+        IReadOnlyList<float> Position,
+        float Bearing,
+        string Conversation,
+        string OnUserDefined,
+        string UtpSha256,
+        DialogueReference Dialogue);
+    private sealed record FirstEncounterParticipant(
+        string Template,
+        string Tag,
+        IReadOnlyList<float> Position,
+        float Bearing,
+        string Glb,
+        int FactionId,
+        int HitPoints,
+        int CurrentHitPoints,
+        int MaxHitPoints,
+        bool MinimumOneHitPoint,
+        bool NoPermanentDeath,
+        PlayerAnimationRecord Animation);
+    private sealed record FirstEncounterWaypoint(
+        string Template,
+        string Tag,
+        IReadOnlyList<float> Position,
+        float Bearing);
+    private sealed record FirstEncounterAnimationIds(
+        int Damage,
+        int CutsceneAttack,
+        int TraskFirstLine,
+        int TraskCharge);
+    private sealed record FirstEncounterTiming(
+        float CameraSwitch,
+        float BattleMusic,
+        float FirstControlResume,
+        float SecondAttack,
+        float ThirdAttack);
+    private sealed record FirstEncounterEffects(
+        string Schema,
+        string ProjectileModel,
+        string ProjectileMdlSha256,
+        string ProjectileMdxSha256,
+        string MuzzleModel,
+        string MuzzleMdlSha256,
+        string MuzzleMdxSha256,
+        float ProjectileSize,
+        float MuzzleSize,
+        float MuzzleLifetime,
+        FirstEncounterEffectTexture LaserTexture,
+        FirstEncounterEffectTexture MuzzleTexture,
+        FirstEncounterEffectTexture FlareTexture);
+    private sealed record FirstEncounterEffectTexture(
+        string Resref,
+        string Path,
+        string SourceSha256,
+        int SourceByteCount,
+        string SourceType,
+        string SourceTxi,
+        string PayloadSha256,
+        int ByteCount);
+    private sealed record FirstEncounterAudio(
+        string AmmunitionTypesSha256,
+        string AmbientMusicSha256,
+        int StandardMusicId,
+        int BattleMusicId,
+        int MusicDelayMilliseconds,
+        FirstEncounterAudioSource BlasterShot,
+        FirstEncounterAudioSource BlasterImpact,
+        FirstEncounterAudioSource BackgroundMusic,
+        FirstEncounterAudioSource BattleMusic);
+    private sealed record FirstEncounterAudioSource(
+        string Resref,
+        string Path,
+        string Format,
+        string SourceSha256,
+        int SourceByteCount,
+        string SourceEncoding,
+        string PayloadSha256,
+        int ByteCount,
+        string PayloadEncoding);
+    private sealed record FirstEncounterScript(
+        string Resref,
+        string SourceSha256,
+        int InstructionCount);
+    private sealed record FirstEncounterAudioStreams(
+        AudioStream BlasterShot,
+        AudioStream BlasterImpact,
+        AudioStream BackgroundMusic,
+        AudioStream BattleMusic);
+    private sealed record FirstEncounterEffectTextures(
+        Texture2D Laser,
+        Texture2D Muzzle,
+        Texture2D Flare,
+        float ProjectileSize,
+        float MuzzleSize,
+        float MuzzleLifetime);
     private sealed record CreatureRecord(string Template, string? Tag,
         IReadOnlyList<float> Position, float Bearing,
         string? Glb, string? Conversation, DialogueReference? Dialogue,
@@ -2506,11 +3185,17 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record DialogueGraph(string Schema, int OpeningStarter,
         IReadOnlyList<DialogueLink> Starters, IReadOnlyDictionary<string, DialogueNode> Nodes);
     private sealed record DialogueNode(string Kind, string Text, string Speaker, string Sound,
+        string Voice,
         string Script1, string Script2,
         int CameraAngle, int? CameraId, float? CameraFov, float? CameraHeight,
         IReadOnlyList<DialogueAnimation> Animations, DialogueMedia? Media,
         IReadOnlyList<DialogueLink> Links);
-    private sealed record DialogueAnimation(int AnimationId, string Participant);
+    private sealed record DialogueAnimation(
+        int AnimationId,
+        string AnimationName,
+        bool Looping,
+        bool FireForget,
+        string Participant);
     private sealed record DialogueMedia(string AudioPath, string AudioFormat, string AudioSha256,
         int AudioByteCount, string? LipPath, string? LipSourceSha256, float? LipLength,
         int? LipFrameCount);
@@ -2540,7 +3225,11 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record CountRecord(int Rooms, int Creatures, int Doors, int Waypoints, int Cameras,
         int Placeables, int Triggers, int WalkmeshTriangles, int AuthoredLights);
     private readonly record struct NavigationTriangle(Vector3 A, Vector3 B, Vector3 C);
-    private readonly record struct StaticMaterialReport(int LightmappedOpaque, int BaseOpaque);
+    private readonly record struct StaticMaterialReport(
+        int LightmappedOpaque,
+        int BaseOpaque,
+        int LightmappedTransparent,
+        int BaseTransparent);
     private sealed class InteractiveDoor(
         string instanceId,
         DoorRecord source,

@@ -68,7 +68,7 @@ capture_frame=90
 Runtime audit:
 
 ```text
-NIKAMI_AURORA_OPACITY status=pass policy=source-opaque lightmapped=338 base=164 alphaWrites=0 depthWrite=opaque
+NIKAMI_AURORA_OPACITY status=pass policy=source-opaque lightmapped=333 base=147 sourceTransparentLightmapped=5 sourceTransparentBase=17 opaqueAlphaWrites=0 opaqueDepthWrite=opaque
 ```
 
 ## Regression gates and limits
@@ -82,6 +82,9 @@ Confirmed after the fix:
 - locker inventory and the `0→50→150` XP chain pass; and
 - Oculus OpenXR without an HMD still follows the clean desktop fallback.
 
-Explicit TXI blend/additive/environment-map semantics and genuinely transparent
-room assets remain a separate classifier/import contract. This fix does not
-guess those rules or treat all future Aurora-family materials as opaque.
+The first-encounter slice now separately marks known low-alpha room FX such as
+`LHR_blst02` as blended and non-depth-writing. That narrow classification is
+bound to decoded source alpha coverage; opaque sofa, bunk, wall, and floor
+materials remain unchanged. Complete TXI blend/additive/environment-map
+semantics are still a separate classifier contract, and this rule must not be
+generalized to every future Aurora-family material.

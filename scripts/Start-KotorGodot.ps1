@@ -15,6 +15,7 @@ param(
     [switch]$TestTutorialXpChain,
     [switch]$TestFirstCorridorTrigger,
     [switch]$TestFirstCorridorTransmission,
+    [switch]$TestFirstEncounter,
     [switch]$SkipOpeningDialogue,
     [switch]$OpenXR,
     [switch]$CleanCapture,
@@ -84,6 +85,10 @@ if ($TestFirstCorridorTransmission) {
     $env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRANSMISSION = "1"
     $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
 }
+if ($TestFirstEncounter) {
+    $env:NIKAMI_AURORA_TEST_FIRST_ENCOUNTER = "1"
+    $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
+}
 if (-not [string]::IsNullOrWhiteSpace($TestPlayerAnimation)) {
     $env:NIKAMI_AURORA_TEST_PLAYER_ANIMATION = $TestPlayerAnimation
 }
@@ -136,6 +141,7 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRIGGER -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRANSMISSION -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_ENCOUNTER -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_OPENXR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CLEAN -ErrorAction SilentlyContinue

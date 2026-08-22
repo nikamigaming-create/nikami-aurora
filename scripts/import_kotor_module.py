@@ -5,15 +5,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import math
 import struct
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from kotor_actor_gltf import export_actor
+from kotor_audio import normalize_wav_for_godot
 
 try:
     import numpy as np
@@ -176,6 +179,7 @@ class TextureCache:
     def __init__(self, installation: Installation):
         self.installation = installation
         self.images: dict[str, Image.Image | None] = {}
+        self.alpha_tests: dict[str, float] = {}
 
     def image(self, name: str) -> Image.Image | None:
         key = name.strip().lower()
@@ -187,7 +191,9 @@ class TextureCache:
         texture = self.installation.texture(name)
         if texture is None:
             self.images[key] = None
+            self.alpha_tests[key] = 1.0
             return None
+        self.alpha_tests[key] = float(texture.alpha_test)
         texture.convert(TPCTextureFormat.RGBA)
         mipmap = texture.get()
         image = Image.frombytes("RGBA", (mipmap.width, mipmap.height), bytes(mipmap.data))
@@ -195,12 +201,134 @@ class TextureCache:
         self.images[key] = image
         return image
 
+    def is_source_transparent(self, name: str) -> bool:
+        key = name.strip().lower()
+        if not key or key == "null":
+            return False
+        if key not in self.images:
+            self.image(name)
+        return self.alpha_tests.get(key, 1.0) < 0.5
+
+
+def export_effect_texture(
+    installation: Installation,
+    textures: TextureCache,
+    resref: str,
+    output_root: Path,
+) -> dict[str, Any]:
+    source, txi = installation.texture_resource_result(resref)
+    image = textures.image(resref)
+    if source is None or image is None:
+        raise RuntimeError(f"First-encounter effect texture is missing: {resref}")
+    source_bytes = resource_data(source)
+    encoded = io.BytesIO()
+    image.save(encoded, format="PNG", optimize=False)
+    payload = encoded.getvalue()
+    relative = f"effects/{resref.lower()}.png"
+    path = output_root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    return {
+        "resref": resref,
+        "path": relative,
+        "sourceSha256": sha256_bytes(source_bytes),
+        "sourceByteCount": len(source_bytes),
+        "sourceType": str(source.restype),
+        "sourceTxi": txi,
+        "payloadSha256": sha256_bytes(payload),
+        "byteCount": len(payload),
+    }
+
+
+def export_first_encounter_effects(
+    installation: Installation,
+    output_root: Path,
+    textures: TextureCache,
+) -> dict[str, Any]:
+    projectile, projectile_mdl, projectile_mdx = load_model_pair(
+        installation, "w_laserfire_r")
+    muzzle, muzzle_mdl, muzzle_mdx = load_model_pair(
+        installation, "v_muzflash_01")
+    if (sha256_bytes(projectile_mdl) !=
+            "01DFB4FECFF9286E2E9194324A0EDE63A5FA2C8D4CEAA25F1567EE69682A735C" or
+            sha256_bytes(projectile_mdx) !=
+            "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"):
+        # The MDX digest is installation-bound evidence; fail closed if a
+        # patched source changes the emitter contract we are transferring.
+        raise RuntimeError("First-encounter projectile emitter source drifted")
+    if (sha256_bytes(muzzle_mdl) !=
+            "10501A23FE8DBEF9A03F17929DC88F83AC165DCCC4CBAF70A7E065B5FEDA8A76" or
+            sha256_bytes(muzzle_mdx) !=
+            "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"):
+        raise RuntimeError("First-encounter muzzle emitter source drifted")
+
+    def emitters(model: Any) -> list[Any]:
+        found: list[Any] = []
+
+        def visit(node: Any) -> None:
+            if node.emitter is not None:
+                found.append((node, node.emitter))
+            for child in node.children:
+                visit(child)
+
+        visit(model.root)
+        return found
+
+    def scalar(node: Any, controller_type: MDLControllerType) -> float:
+        values = controller_value(node, controller_type, [float("nan")])
+        if not values or not math.isfinite(values[0]):
+            raise RuntimeError(
+                f"Emitter controller {controller_type.name} is missing on {node.name}")
+        return float(values[0])
+
+    projectile_emitters = emitters(projectile)
+    muzzle_emitters = emitters(muzzle)
+    if len(projectile_emitters) != 1 or len(muzzle_emitters) != 5:
+        raise RuntimeError("First-encounter emitter topology drifted")
+    projectile_node, projectile_emitter = projectile_emitters[0]
+    if (str(projectile_emitter.texture).lower() != "fx_laser_01" or
+            str(projectile_emitter.blend).lower() != "lighten" or
+            str(projectile_emitter.render).lower() != "motion_blur"):
+        raise RuntimeError("First-encounter projectile emitter semantics drifted")
+    muzzle_textures = {str(emitter.texture).lower() for _, emitter in muzzle_emitters}
+    if (muzzle_textures != {"fx_muzflash", "fx_flare02"} or
+            any(str(emitter.blend).lower() != "lighten" for _, emitter in muzzle_emitters)):
+        raise RuntimeError("First-encounter muzzle emitter semantics drifted")
+    projectile_size = scalar(projectile_node, MDLControllerType.SIZESTART)
+    muzzle_size = max(
+        scalar(node, MDLControllerType.SIZESTART) for node, _ in muzzle_emitters)
+    muzzle_lifetime = max(
+        scalar(node, MDLControllerType.LIFEEXP) for node, _ in muzzle_emitters)
+    if (abs(projectile_size - 0.09) > 0.0001 or
+            abs(muzzle_size - 0.3) > 0.0001 or
+            abs(muzzle_lifetime - 0.02) > 0.0001):
+        raise RuntimeError("First-encounter emitter dimensions drifted")
+    return {
+        "schema": "nikami-aurora-kotor-first-encounter-effects-v1",
+        "projectileModel": "w_laserfire_r",
+        "projectileMdlSha256": sha256_bytes(projectile_mdl),
+        "projectileMdxSha256": sha256_bytes(projectile_mdx),
+        "muzzleModel": "v_muzflash_01",
+        "muzzleMdlSha256": sha256_bytes(muzzle_mdl),
+        "muzzleMdxSha256": sha256_bytes(muzzle_mdx),
+        "projectileSize": projectile_size,
+        "muzzleSize": muzzle_size,
+        "muzzleLifetime": muzzle_lifetime,
+        "laserTexture": export_effect_texture(
+            installation, textures, "Fx_laser_01", output_root),
+        "muzzleTexture": export_effect_texture(
+            installation, textures, "fx_muzflash", output_root),
+        "flareTexture": export_effect_texture(
+            installation, textures, "fx_flare02", output_root),
+    }
+
 
 def material_for(mesh: Any, textures: TextureCache, override_texture: str | None = None) -> Any:
     texture_name = str(override_texture or mesh.texture_1 or "").strip()
     image = textures.image(texture_name)
     lightmap_name = str(mesh.texture_2 or "").strip()
     lightmap = textures.image(lightmap_name)
+    source_transparent = image is not None and textures.is_source_transparent(texture_name)
     diffuse = mesh.diffuse
     color = [
         max(0, min(255, round(float(diffuse.r) * 255))),
@@ -221,6 +349,8 @@ def material_for(mesh: Any, textures: TextureCache, override_texture: str | None
         emissiveFactor=[1.0, 1.0, 1.0] if lightmap is not None else None,
         metallicFactor=0.0,
         roughnessFactor=1.0,
+        alphaMode="BLEND" if source_transparent else "OPAQUE",
+        doubleSided=source_transparent,
     )
 
 
@@ -554,8 +684,13 @@ def export_humanoid_actor(
     mdlops: Path,
     animation_cache: Path,
     animation_names: tuple[str, ...],
+    module: str | None = None,
+    animation_supermodels: tuple[str, ...] = ("S_Male02",),
 ) -> dict[str, Any]:
-    utc_resource = installation.resource(utc_resref, ResourceType.UTC)
+    utc_resource = (
+        find_named_module_resource(installation, module, utc_resref, "UTC")
+        if module else installation.resource(utc_resref, ResourceType.UTC)
+    )
     if utc_resource is None:
         raise RuntimeError(f"{utc_resref}.utc could not be resolved")
     utc_bytes = resource_data(utc_resource)
@@ -594,8 +729,21 @@ def export_humanoid_actor(
     right = right_mdl = right_mdx = None
     if right_model:
         right, right_mdl, right_mdx = load_model_pair(installation, right_model)
-    animation_model, animation_source_hash = load_animation_supermodel(
-        installation, mdlops, animation_cache)
+    animation_models = []
+    animation_sources = []
+    for animation_supermodel in animation_supermodels:
+        model, source_hash = load_animation_supermodel(
+            installation, mdlops, animation_cache, animation_supermodel)
+        animation_models.append(model)
+        animation_sources.append({
+            "model": animation_supermodel,
+            "sourceSha256": source_hash,
+        })
+    animations_by_name = {}
+    for model in animation_models:
+        for animation in model.anims:
+            animations_by_name.setdefault(animation.name.lower(), animation)
+    animation_model = SimpleNamespace(anims=list(animations_by_name.values()))
     animation_report = export_actor(
         output_path,
         body_model=body,
@@ -635,9 +783,16 @@ def export_humanoid_actor(
         "tag": str(utc.tag),
         "conversation": canonical_resref(utc.conversation),
         "utcSha256": sha256_bytes(utc_bytes),
+        "factionId": int(utc.faction_id),
+        "hitPoints": int(utc.hp),
+        "currentHitPoints": int(utc.current_hp),
+        "maxHitPoints": int(utc.max_hp),
+        "minimumOneHitPoint": bool(utc.min1_hp),
+        "noPermanentDeath": bool(utc.no_perm_death),
         "models": model_records,
-        "animationSource": "S_Male02",
-        "animationSourceSha256": animation_source_hash,
+        "animationSource": animation_sources[0]["model"],
+        "animationSourceSha256": animation_sources[0]["sourceSha256"],
+        "animationSources": animation_sources,
         "animation": animation_report,
         "talkOffset": talk_offset,
     }
@@ -649,6 +804,7 @@ def export_trask_actor(
     textures: TextureCache,
     mdlops: Path,
     animation_cache: Path,
+    module: str | None = None,
 ) -> dict[str, Any]:
     return export_humanoid_actor(
         installation,
@@ -657,7 +813,8 @@ def export_trask_actor(
         textures,
         mdlops,
         animation_cache,
-        ("pause1", "tlknorm", "walk", "talk"),
+        ("pause1", "tlknorm", "walk", "talk", "getfromgnd", "usecomplp"),
+        module,
     )
 
 
@@ -667,6 +824,7 @@ def export_carth_actor(
     textures: TextureCache,
     mdlops: Path,
     animation_cache: Path,
+    module: str | None = None,
 ) -> dict[str, Any]:
     return export_humanoid_actor(
         installation,
@@ -676,6 +834,7 @@ def export_carth_actor(
         mdlops,
         animation_cache,
         ("pause1", "tlknorm", "walk", "talk"),
+        module,
     )
 
 
@@ -888,6 +1047,10 @@ def export_dialogue(
     dialogue = read_dlg(data)
     talktable = installation.talktable()
     all_nodes = [*dialogue.all_entries(), *dialogue.all_replies()]
+    animations_resource = installation.resource("animations", ResourceType.TwoDA)
+    if animations_resource is None:
+        raise RuntimeError("animations.2da could not be resolved")
+    animations = read_2da(resource_data(animations_resource))
 
     def node_key(node: Any) -> str:
         kind = "entry" if isinstance(node, DLGEntry) else "reply"
@@ -901,15 +1064,23 @@ def export_dialogue(
         return talktable.string(stringref) if stringref >= 0 else ""
 
     def animation_record(animation: Any) -> dict[str, Any]:
+        animation_id = int(animation.animation_id)
         return {
-            "animationId": int(animation.animation_id),
+            "animationId": animation_id,
+            "animationName": str(animations.get_cell(animation_id, "name")),
+            "looping": bool(int(animations.get_cell(animation_id, "looping"))),
+            "fireForget": bool(int(animations.get_cell(animation_id, "fireforget"))),
             "participant": str(animation.participant),
         }
 
+    def media_resref(node: Any) -> str:
+        sound = canonical_resref(getattr(node, "sound", ""))
+        return sound or canonical_resref(getattr(node, "vo_resref", ""))
+
     sound_names = {
-        canonical_resref(getattr(node, "sound", ""))
+        media_resref(node)
         for node in all_nodes
-        if canonical_resref(getattr(node, "sound", ""))
+        if media_resref(node)
     }
     playable_sounds = installation.sounds(
         sound_names,
@@ -987,6 +1158,8 @@ def export_dialogue(
     for node in all_nodes:
         key = node_key(node)
         sound_name = canonical_resref(getattr(node, "sound", ""))
+        voice_name = canonical_resref(getattr(node, "vo_resref", ""))
+        media_name = sound_name or voice_name
         nodes[key] = {
             "kind": "entry" if isinstance(node, DLGEntry) else "reply",
             "listIndex": int(node.list_index),
@@ -994,9 +1167,9 @@ def export_dialogue(
             "text": local_text(node),
             "speaker": str(getattr(node, "speaker", "")),
             "listener": str(getattr(node, "listener", "")),
-            "voice": canonical_resref(getattr(node, "vo_resref", "")),
+            "voice": voice_name,
             "sound": sound_name,
-            "media": media_by_sound.get(sound_name.lower()) if sound_name else None,
+            "media": media_by_sound.get(media_name.lower()) if media_name else None,
             "cameraAngle": int(getattr(node, "camera_angle", 0)),
             "cameraId": getattr(node, "camera_id", None),
             "cameraFov": getattr(node, "camera_fov", None),
@@ -1067,6 +1240,53 @@ def export_dialogue(
                     f"end_trask01 automatic continuation drifted: {entry_key}")
         if [link["target"] for link in nodes["entry:35"]["links"]] != ["reply:50", "reply:46"]:
             raise RuntimeError("end_trask01 journal choices no longer match the corridor contract")
+    if dialogue_name.lower() == "end_room3":
+        expected_controls = {
+            "entry:0": (26, "k_pend_camera", ["c3d4", "c3d4", "c3d4"]),
+            "entry:1": (20, "k_pend_cut1_1", ["c3d4", "c3d4", "c3d4"]),
+        }
+        for key, expected in expected_controls.items():
+            node = nodes[key]
+            actual = (
+                int(node["cameraId"]), node["script1"].lower(),
+                [item["animationName"].lower() for item in node["animations"]],
+            )
+            if actual != expected:
+                raise RuntimeError(f"end_room3 cutscene control drifted: {key}")
+        expected_voice = {
+            "entry:4": (
+                "nm01aaroom03000_", 12960,
+                "3D6A8D62D0DD9BEEBDF6EF5DAD75CD4BF7C4C90182422C112067321CBC87C201",
+                24, "14CC5EB73807302BC824E3097CDAE95D6E2510414F536D2366655235C835676C"),
+            "entry:5": (
+                "nm01aaroom03001_", 6264,
+                "0D6A915951F1BC2877009F0BD017B5C44999E43E8A2D79EF6C908C19BA4BC337",
+                8, "24A4DC81553662FECBD0621E3612A2A79CE9873A8F4BE0DABD8CB0BF4C23E909"),
+        }
+        for key, expected in expected_voice.items():
+            node = nodes[key]
+            media = node["media"] or {}
+            actual = (
+                node["voice"].lower(), media.get("audioByteCount"),
+                media.get("audioSha256"), media.get("lipFrameCount"),
+                media.get("lipSourceSha256"),
+            )
+            if actual != expected:
+                raise RuntimeError(f"end_room3 voice/LIP drifted: {key}")
+        reachable_chain = [
+            ("entry:0", "reply:0", "entry:1"),
+            ("entry:1", "reply:1", "entry:4"),
+            ("entry:4", "reply:4", "entry:5"),
+            ("entry:5", "reply:5", None),
+        ]
+        for entry_key, reply_key, next_key in reachable_chain:
+            entry = nodes[entry_key]
+            reply = nodes[reply_key]
+            if len(entry["links"]) != 1 or entry["links"][0]["target"] != reply_key:
+                raise RuntimeError(f"end_room3 entry link drifted: {entry_key}")
+            if reply["text"].strip() or (next_key is not None and
+                    (not reply["links"] or reply["links"][0]["target"] != next_key)):
+                raise RuntimeError(f"end_room3 control reply drifted: {reply_key}")
     graph = {
         "schema": "nikami-aurora-kotor-dialogue-v1",
         "resref": dialogue_name,
@@ -1086,14 +1306,15 @@ def export_dialogue(
     }
 
 
-def export_opening_door(
+def export_door(
     installation: Installation,
+    module: str,
+    template: str,
     output_path: Path,
     textures: TextureCache,
 ) -> dict[str, Any]:
-    utd_resource = installation.resource("sw_door_test001", ResourceType.UTD)
-    if utd_resource is None:
-        raise RuntimeError("sw_door_test001.utd could not be resolved")
+    utd_resource = find_named_module_resource(
+        installation, module, template, "UTD")
     utd_bytes = resource_data(utd_resource)
     utd = read_utd(utd_bytes)
     order = [SearchLocation.OVERRIDE, SearchLocation.CHITIN]
@@ -1103,8 +1324,8 @@ def export_opening_door(
     genericdoors = read_2da(resource_data(genericdoors_resource))
     model_name = door_tools.get_model(utd, installation, genericdoors=genericdoors)
     if not model_name:
-        raise RuntimeError("Opening door model could not be resolved")
-    scene = trimesh.Scene(base_frame="end_door01")
+        raise RuntimeError(f"Door model could not be resolved: {template}")
+    scene = trimesh.Scene(base_frame=template)
     _, model_record = add_actor_model(
         scene, installation, model_name, textures, np.identity(4))
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1112,9 +1333,13 @@ def export_opening_door(
     return {
         "glb": f"doors/{output_path.name}",
         "model": model_name,
+        "tag": str(utd.tag),
         "conversation": canonical_resref(utd.conversation),
         "onOpen": canonical_resref(utd.on_open),
+        "onOpenFailed": canonical_resref(utd.on_open_failed),
+        "onDeath": canonical_resref(utd.on_death),
         "locked": bool(utd.locked),
+        "plot": bool(utd.plot),
         "keyRequired": bool(utd.key_required),
         "utdSha256": sha256_bytes(utd_bytes),
         "modelSource": model_record,
@@ -1464,6 +1689,22 @@ def export_opening_script_contracts(
     if [ncs_signature(item) for item in map_ncs.instructions] != map_expected:
         raise RuntimeError("k_pend_map no longer reveals the complete module map")
 
+    encounter_dialogue_data, encounter_dialogue_ncs = load_script("k_pend_traskdl49")
+    encounter_dialogue_expected = [
+        ("CPTOPBP", (-120, 4)),
+        ("JSR", ()),
+        ("RETN", ()),
+        ("CPTOPSP", (-4, 4)),
+        ("CONSTS", ("END_TRASK_DLG",)),
+        ("ACTION", (581, 2)),
+        ("MOVSP", (-4,)),
+        ("RETN", ()),
+    ]
+    if (find_instruction_sequence(
+            encounter_dialogue_ncs.instructions, encounter_dialogue_expected) is None or
+            initialized_integer(encounter_dialogue_ncs, -120) != 1):
+        raise RuntimeError("k_pend_traskdl49 no longer sets END_TRASK_DLG value 1")
+
     def xp_contract(resref: str, data: bytes, ncs: Any, required_xp: int,
                     percentage: int) -> dict[str, Any]:
         return {
@@ -1540,6 +1781,15 @@ def export_opening_script_contracts(
             "sourceSha256": sha256_bytes(map_data),
             "instructionCount": len(map_ncs.instructions),
         },
+        {
+            "schema": "nikami-aurora-kotor-script-contract-v1",
+            "resref": "k_pend_traskdl49",
+            "kind": "global-number-set",
+            "sourceSha256": sha256_bytes(encounter_dialogue_data),
+            "instructionCount": len(encounter_dialogue_ncs.instructions),
+            "globalName": "END_TRASK_DLG",
+            "globalValue": 1,
+        },
     ]
 
 
@@ -1594,12 +1844,24 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         installation, module, output_root / "placeables" / "end_locker01.glb", textures)
     opening_chair = export_static_placeable(
         installation, "plc_chair2", output_root / "placeables" / "plc_chair2.glb", textures)
+    encounter_placeable_templates = (
+        "rsldcrps001", "plc_brokndrd", "plc_rsldcrps", "plc_pwrcond")
+    encounter_placeable_exports = {
+        template: export_static_placeable(
+            installation,
+            template,
+            output_root / "placeables" / f"{template}.glb",
+            textures,
+        )
+        for template in encounter_placeable_templates
+    }
     trask_actor = export_trask_actor(
         installation,
         output_root / "actors" / "end_trask.glb",
         textures,
         mdlops,
         output_root / "_cache" / "animations",
+        module,
     )
     carth_actor = export_carth_actor(
         installation,
@@ -1607,7 +1869,29 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         textures,
         mdlops,
         output_root / "_cache" / "animations",
+        module,
     )
+    encounter_animation_names = (
+        "pause1", "walk", "run", "talk", "c3d4", "b7a1", "die", "dead")
+    encounter_actors = {
+        "end_repsol004": export_humanoid_actor(
+            installation, "end_repsol004", output_root / "actors" / "end_sith2.glb",
+            textures, mdlops, output_root / "_cache" / "animations",
+            encounter_animation_names, module,
+            animation_supermodels=("S_Female01", "S_Male02")),
+        "end_repsol005": export_humanoid_actor(
+            installation, "end_repsol005", output_root / "actors" / "end_sith3.glb",
+            textures, mdlops, output_root / "_cache" / "animations",
+            encounter_animation_names, module,
+            animation_supermodels=("S_Female01", "S_Male02")),
+        "n_repsold002": export_humanoid_actor(
+            installation, "n_repsold002", output_root / "actors" / "end_soldier2.glb",
+            textures, mdlops, output_root / "_cache" / "animations",
+            encounter_animation_names, module,
+            animation_supermodels=("S_Female01", "S_Male02")),
+    }
+    encounter_effects = export_first_encounter_effects(
+        installation, output_root, textures)
     player_actor = export_player_actor(
         installation,
         output_root / "actors" / "player.glb",
@@ -1617,15 +1901,24 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         mdlops,
         output_root / "_cache" / "animations",
     )
+    lip_capsule = (
+        Capsule(game_root / "lips" / f"{module}_loc.mod")
+        if (game_root / "lips" / f"{module}_loc.mod").is_file() else None)
     trask_actor["dialogue"] = export_dialogue(
         installation,
         trask_actor["conversation"],
         output_root / "dialogues" / f"{trask_actor['conversation']}.json",
-        Capsule(game_root / "lips" / f"{module}_loc.mod")
-        if (game_root / "lips" / f"{module}_loc.mod").is_file() else None,
+        lip_capsule,
     )
-    opening_door = export_opening_door(
-        installation, output_root / "doors" / "end_door01.glb", textures)
+    encounter_dialogue = export_dialogue(
+        installation, "end_room3", output_root / "dialogues" / "end_room3.json",
+        lip_capsule)
+    opening_door = export_door(
+        installation, module, "sw_door_test001",
+        output_root / "doors" / "end_door01.glb", textures)
+    encounter_door = export_door(
+        installation, module, "end_door02",
+        output_root / "doors" / "end_door02.glb", textures)
     creatures = []
     for creature in git.creatures:
         record = {
@@ -1638,6 +1931,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
             record.update(trask_actor)
         elif record["template"].lower() == "p_carth001":
             record.update(carth_actor)
+        elif record["template"].lower() in encounter_actors:
+            record.update(encounter_actors[record["template"].lower()])
         creatures.append(record)
     doors = []
     for door in git.doors:
@@ -1650,6 +1945,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         }
         if record["tag"].lower() == "end_door01":
             record.update(opening_door)
+        elif record["template"].lower() == "end_door02":
+            record.update(encounter_door)
         doors.append(record)
     placeables = []
     for placeable in git.placeables:
@@ -1663,6 +1960,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
             record.update(opening_locker)
         elif record["template"].lower() == "plc_chair2":
             record.update(opening_chair)
+        elif record["template"].lower() in encounter_placeable_exports:
+            record.update(encounter_placeable_exports[record["template"].lower()])
         placeables.append(record)
     waypoints = [
         {
@@ -1691,6 +1990,219 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
             "forward": forward,
             "up": up,
         })
+
+    def encounter_script_record(
+        resref: str,
+        required_actions: tuple[tuple[int, int], ...],
+        required_strings: tuple[str, ...],
+    ) -> dict[str, Any]:
+        resource = find_named_module_resource(installation, module, resref, "NCS")
+        data = resource_data(resource)
+        ncs = read_ncs(data)
+        actions = [
+            tuple(instruction.args)
+            for instruction in ncs.instructions
+            if instruction.ins_type.name == "ACTION"
+        ]
+        strings = {
+            str(instruction.args[0]).lower()
+            for instruction in ncs.instructions
+            if instruction.ins_type.name == "CONSTS" and instruction.args
+        }
+        if (any(action not in actions for action in required_actions) or
+                any(value.lower() not in strings for value in required_strings)):
+            raise RuntimeError(f"First-encounter script drifted: {resref}")
+        return {
+            "resref": resref,
+            "sourceSha256": sha256_bytes(data),
+            "instructionCount": len(ncs.instructions),
+        }
+
+    encounter_scripts = [
+        encounter_script_record(
+            "k_pend_door18",
+            ((720, 5), (719, 5), (204, 11), (759, 1)),
+            ("wp_end_room3_1", "wp_end_room3_2", "end01_sceneobj0")),
+        encounter_script_record(
+            "k_pend_camera",
+            ((205, 0), (206, 0), (461, 1), (503, 4), (426, 1), (430, 1)),
+            ("end_sith2", "end_sith3", "end_soldier2")),
+        encounter_script_record(
+            "k_pend_cut1_1",
+            ((205, 0), (503, 4)),
+            ("end_sith2", "end_sith3", "end_soldier2")),
+        encounter_script_record(
+            "k_pend_cut1_end",
+            ((716, 2), (412, 2), (37, 2), (431, 1), (425, 1)),
+            ("end_sith2", "end_sith3", "k_pman_npcstart")),
+        encounter_script_record("k_pend_resume", ((206, 0),), ()),
+    ]
+    scene_placement = next(
+        placeable for placeable in git.placeables
+        if canonical_resref(placeable.resref).lower() == "invisible002")
+    scene_utp_resource = find_named_module_resource(
+        installation, module, "invisible002", "UTP")
+    scene_utp_bytes = resource_data(scene_utp_resource)
+    scene_utp = read_utp(scene_utp_bytes)
+    if (str(scene_utp.tag).lower() != "end01_sceneobj01" or
+            canonical_resref(scene_utp.conversation).lower() != "end_room3" or
+            canonical_resref(scene_utp.on_user_defined).lower() != "k_pend_resume"):
+        raise RuntimeError("First-encounter scene object drifted")
+    encounter_waypoint_tags = {"wp_end_room3_1", "wp_end_room3_2"}
+    encounter_waypoints = [
+        waypoint for waypoint in waypoints
+        if waypoint["tag"].lower() in encounter_waypoint_tags
+    ]
+    if len(encounter_waypoints) != 2:
+        raise RuntimeError("First-encounter party waypoints were not resolved")
+    encounter_participant_tags = {"end_sith2", "end_sith3", "end_soldier2"}
+    encounter_participants = [
+        creature for creature in creatures
+        if creature["tag"].lower() in encounter_participant_tags
+    ]
+    if len(encounter_participants) != 3:
+        raise RuntimeError("First-encounter participants were not resolved")
+    encounter_environment_placeables = [
+        placeable for placeable in placeables
+        if placeable["template"].lower() in encounter_placeable_exports and
+        float(placeable["position"][0]) > 38.0 and
+        15.0 < float(placeable["position"][1]) < 40.0
+    ]
+    if (len(encounter_environment_placeables) != 6 or
+            any(not placeable.get("glb") for placeable in encounter_environment_placeables)):
+        raise RuntimeError("First-encounter environment placeables drifted")
+
+    def export_audio(
+        resref: str,
+        data: bytes,
+        audio_format: str,
+        source_data: bytes | None = None,
+        source_encoding: str | None = None,
+        payload_encoding: str | None = None,
+    ) -> dict[str, Any]:
+        if (audio_format == "wav" and not data.startswith(b"RIFF")) or (
+                audio_format == "mp3" and not (
+                    data.startswith(b"ID3") or data[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"))):
+            raise RuntimeError(f"Encounter audio is not playable {audio_format}: {resref}")
+        relative = f"audio/{resref.lower()}.{audio_format}"
+        path = output_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        source = source_data if source_data is not None else data
+        record = {
+            "resref": resref,
+            "path": relative,
+            "format": audio_format,
+            "sourceSha256": sha256_bytes(source),
+            "sourceByteCount": len(source),
+            "sourceEncoding": source_encoding or audio_format,
+            "payloadSha256": sha256_bytes(data),
+            "byteCount": len(data),
+            "payloadEncoding": payload_encoding or audio_format,
+        }
+        return record
+
+    ammunition_resource = installation.resource("ammunitiontypes", ResourceType.TwoDA)
+    ambient_music_resource = installation.resource("ambientmusic", ResourceType.TwoDA)
+    if ammunition_resource is None or ambient_music_resource is None:
+        raise RuntimeError("First-encounter audio tables could not be resolved")
+    ammunition_bytes = resource_data(ammunition_resource)
+    ambient_music_bytes = resource_data(ambient_music_resource)
+    ammunition = read_2da(ammunition_bytes)
+    ambient_music = read_2da(ambient_music_bytes)
+    shot_resref = str(ammunition.get_cell(1, "shotsound0"))
+    impact_resref = str(ammunition.get_cell(1, "impactsound0"))
+    background_resref = str(ambient_music.get_cell(int(git.music_standard_id), "resource"))
+    battle_resref = str(ambient_music.get_cell(int(git.music_battle_id), "resource"))
+    if (shot_resref.lower() != "cb_sh_blast1" or
+            impact_resref.lower() != "cb_ht_blastleth1" or
+            background_resref.lower() != "mus_theme_sith" or
+            battle_resref.lower() != "mus_bat_sithbs"):
+        raise RuntimeError("First-encounter audio table rows drifted")
+    shot_bytes = installation.sound(shot_resref)
+    impact_bytes = installation.sound(impact_resref)
+    if not shot_bytes or not impact_bytes:
+        raise RuntimeError("First-encounter weapon sounds could not be resolved")
+    shot_playable, shot_source_encoding, shot_payload_encoding = (
+        normalize_wav_for_godot(shot_bytes, shot_resref)
+    )
+    impact_playable, impact_source_encoding, impact_payload_encoding = (
+        normalize_wav_for_godot(impact_bytes, impact_resref)
+    )
+    background_path = game_root / "streammusic" / f"{background_resref}.wav"
+    battle_path = game_root / "streammusic" / f"{battle_resref}.wav"
+    if not background_path.is_file() or not battle_path.is_file():
+        raise RuntimeError("First-encounter music files could not be resolved")
+    background_container = background_path.read_bytes()
+    battle_container = battle_path.read_bytes()
+
+    def stream_music_mp3(container: bytes, resref: str) -> bytes:
+        offset = container.find(b"ID3")
+        if offset < 0:
+            raise RuntimeError(f"KOTOR streammusic MP3 header was not found: {resref}")
+        return container[offset:]
+
+    encounter_audio = {
+        "ammunitionTypesSha256": sha256_bytes(ammunition_bytes),
+        "ambientMusicSha256": sha256_bytes(ambient_music_bytes),
+        "standardMusicId": int(git.music_standard_id),
+        "battleMusicId": int(git.music_battle_id),
+        "musicDelayMilliseconds": int(git.music_delay),
+        "blasterShot": export_audio(
+            shot_resref, shot_playable, "wav", shot_bytes,
+            shot_source_encoding, shot_payload_encoding),
+        "blasterImpact": export_audio(
+            impact_resref, impact_playable, "wav", impact_bytes,
+            impact_source_encoding, impact_payload_encoding),
+        "backgroundMusic": export_audio(
+            background_resref,
+            stream_music_mp3(background_container, background_resref),
+            "mp3",
+            background_container,
+            "kotor-wrapped-mp3",
+            "mp3"),
+        "battleMusic": export_audio(
+            battle_resref,
+            stream_music_mp3(battle_container, battle_resref),
+            "mp3",
+            battle_container,
+            "kotor-wrapped-mp3",
+            "mp3"),
+    }
+    first_encounter = {
+        "schema": "nikami-aurora-kotor-first-encounter-v1",
+        "doorTag": "end_door02",
+        "sceneObject": {
+            "template": "invisible002",
+            "tag": str(scene_utp.tag),
+            "position": vector3(scene_placement.position),
+            "bearing": float(scene_placement.bearing),
+            "conversation": canonical_resref(scene_utp.conversation),
+            "onUserDefined": canonical_resref(scene_utp.on_user_defined),
+            "utpSha256": sha256_bytes(scene_utp_bytes),
+            "dialogue": encounter_dialogue,
+        },
+        "participants": encounter_participants,
+        "environmentPlaceables": encounter_environment_placeables,
+        "partyWaypoints": encounter_waypoints,
+        "cameraIds": [26, 19, 20],
+        "animationIds": {
+            "damage": 148,
+            "cutsceneAttack": 239,
+            "traskFirstLine": 40,
+            "traskCharge": 44,
+        },
+        "effects": encounter_effects,
+        "timingSeconds": {
+            "cameraSwitch": 0.15,
+            "battleMusic": 1.5,
+            "firstControlResume": 3.0,
+            "secondAttack": 1.0,
+            "thirdAttack": 1.5,
+        },
+        "audio": encounter_audio,
+        "scripts": encounter_scripts,
+    }
     manifest = {
         "schema": SCHEMA,
         "profileId": "kotor",
@@ -1731,6 +2243,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         "triggers": triggers,
         "waypoints": waypoints,
         "cameras": cameras,
+        "firstEncounter": first_encounter,
         "scriptContracts": script_contracts,
         "counts": {
             "rooms": len(room_records),

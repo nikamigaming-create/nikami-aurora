@@ -76,6 +76,19 @@ For a local visual-QA frame without the proof overlay:
   -CaptureAndExit
 ```
 
+Run the source-bound first Sith encounter and stop on its asserted
+combat-ready frame:
+
+```powershell
+./scripts/Start-KotorGodot.ps1 `
+  -TestFirstEncounter `
+  -CapturePath 'artifacts/kotor-first-encounter-combat-ready.png' `
+  -CaptureDialogueNode 'encounter:combat-ready' `
+  -CaptureFrame 1 `
+  -CleanCapture `
+  -CaptureAndExit
+```
+
 ## Honest boundary
 
 Confirmed in the new runtime:
@@ -122,6 +135,8 @@ Confirmed in the new runtime:
   `PLC_Chair2` model while remaining excluded from interaction targeting;
 - source-opaque lightmapped and base room materials audited into opaque
   depth-writing paths, eliminating floor bleed through opening-room furniture;
+- source-low-alpha blast decals isolated in blended, non-depth-writing
+  materials without weakening opaque floor/furniture coverage;
 - native polygon crossing for `end_trig02`, profile global
   `END_TRASK_DLG 0→10`, Trask event 50, and `end_trask01` starter 8 selection;
 - source-assembled standing Carth with independent head skin, inherited
@@ -141,6 +156,15 @@ Confirmed in the new runtime:
   fallbacks kept local to the tracked grip pose;
 - desktop-hidden controller fallbacks and opt-in debug creature markers, keeping
   proof/release frames free of placeholder geometry;
+- source-bound door 02, Sith pair, Republic combatant, three existing corpse
+  props, broken-door assembly, and two power-conductor placements for the first
+  room-3 fight;
+- cameras 26→19→20, source cutscene attack/damage/death clips, both voiced Trask
+  lines with LIP, `END_TRASK_DLG=1`, and the combat-ready transition;
+- ammunition-table blaster shot/impact audio, ARE standard/battle music, and
+  hash-validated decoding of IMA ADPCM and KOTOR-wrapped MP3 payloads;
+- source-sized `w_laserfire_r` and `v_muzflash_01` projectile/muzzle textures,
+  four launch/muzzle assertions, and at least three completed impact assertions;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
 - walkmesh-constrained player movement;
@@ -152,7 +176,7 @@ Not yet implemented:
 - final renderer transfer-function and light-attenuation parity;
 - dialogue-camera obstruction correction and nondeterministic shot variants;
 - general DLG gesture-ID execution outside this zero-gesture conversation;
-- area, effects, and music playback;
+- general area audio, ambient loops, and effects beyond the first encounter;
 - full character-creation UI and saved arbitrary appearance/equipment;
 - physical-headset runtime-model selection, haptic-delivery calibration, and
   stereo/input acceptance;

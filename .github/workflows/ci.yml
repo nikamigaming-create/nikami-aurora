@@ -16,7 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate KOTOR importer syntax
-        run: python -m py_compile scripts/import_kotor_module.py
+        run: python -m py_compile scripts/import_kotor_module.py scripts/kotor_audio.py
+      - name: Test synthetic KOTOR audio normalization
+        run: python -m unittest tests/test_kotor_audio.py
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |

@@ -64,6 +64,15 @@ real player responses. The tight Trask shot is calibrated against the same
 recorded retail sequence, and facial LIP deltas preserve each unique head's
 authored mouth rest instead of replacing it with the generic supermodel pose.
 
+The next room-3 slice now opens the second lockdown door and stages the first
+Sith firefight through cameras 26, 19, and 20. It materializes the two Sith,
+the Republic target, existing corpse/debris/power-conductor props, source
+cutscene attack/death clips, both Trask voice/LIP lines, blaster shot/impact
+audio, battle music, and source-sized additive projectile/muzzle textures. The
+deterministic combat-ready gate verifies every launch, impact, voice, script
+global, environment placement, and music transition; general combat AI remains
+a later milestone.
+
 XR controller presentation follows a three-level provider chain: portable
 OpenXR runtime models, dynamically available Meta FB models, then tracked
 procedural fallbacks. The same primary-stick and face-button actions feed
@@ -155,8 +164,9 @@ Launch the new Godot runtime:
 
 The importer writes only to `local/kotor/end_m01aa`, which is excluded from
 Git. The runtime loads 15 authored Endar Spire room records, materializes and
-animates Trask, and exposes the remaining exact creature placements as
-identified debug markers while broader creature model assembly is implemented.
+animates Trask, Carth, the deterministic player, and the first Sith encounter,
+and keeps remaining creature debug markers opt-in while broader creature model
+assembly is implemented.
 
 ## Repository map
 
