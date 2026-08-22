@@ -43,6 +43,10 @@ OpenXR `B/Y`. The profile owns slot legality and inventory removal; Godot swaps
 to a source-derived `PMBBM01` skinned player with the sword attached beneath the
 animated right-hand hook while preserving idle/walk/run state.
 
+Opening-room furniture now distinguishes baked room meshes from GIT placeables.
+The installed `PLC_Chair2` model is instanced at all three authored placements;
+because the UTP is not usable, those chairs never steal the footlocker prompt.
+
 XR controller presentation follows a three-level provider chain: portable
 OpenXR runtime models, dynamically available Meta FB models, then tracked
 procedural fallbacks. The same primary-stick and face-button actions feed

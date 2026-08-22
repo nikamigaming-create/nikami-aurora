@@ -1103,12 +1103,51 @@ def export_opening_locker(
         "tag": str(utp.tag),
         "onInventory": canonical_resref(utp.on_inventory),
         "locked": bool(utp.locked),
+        "static": bool(utp.static),
         "useable": bool(utp.useable),
         "hasInventory": bool(utp.has_inventory),
         "inventory": list(item_stacks.values()),
         "animationState": int(utp.animation_state),
         "utpSha256": sha256_bytes(utp_bytes),
         "baseItemsSha256": sha256_bytes(baseitems_bytes),
+        "modelSource": model_record,
+    }
+
+
+def export_static_placeable(
+    installation: Installation,
+    template: str,
+    output_path: Path,
+    textures: TextureCache,
+) -> dict[str, Any]:
+    utp_resource = installation.resource(template, ResourceType.UTP)
+    if utp_resource is None:
+        raise RuntimeError(f"{template}.utp could not be resolved")
+    utp_bytes = resource_data(utp_resource)
+    utp = read_utp(utp_bytes)
+    placeables_resource = installation.resource("placeables", ResourceType.TwoDA)
+    if placeables_resource is None:
+        raise RuntimeError("placeables.2da could not be resolved")
+    placeables = read_2da(resource_data(placeables_resource))
+    model_name = str(placeables.get_cell(int(utp.appearance_id), "modelname"))
+    if not model_name:
+        raise RuntimeError(f"{template} placeable model could not be resolved")
+    scene = trimesh.Scene(base_frame=template)
+    _, model_record = add_actor_model(
+        scene, installation, model_name, textures, np.identity(4))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(patch_glb_texture_channels(scene.export(file_type="glb")))
+    return {
+        "glb": f"placeables/{output_path.name}",
+        "model": model_name,
+        "tag": str(utp.tag),
+        "onInventory": canonical_resref(utp.on_inventory),
+        "locked": bool(utp.locked),
+        "static": bool(utp.static),
+        "useable": bool(utp.useable),
+        "hasInventory": bool(utp.has_inventory),
+        "animationState": int(utp.animation_state),
+        "utpSha256": sha256_bytes(utp_bytes),
         "modelSource": model_record,
     }
 
@@ -1263,6 +1302,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
 
     opening_locker = export_opening_locker(
         installation, module, output_root / "placeables" / "end_locker01.glb", textures)
+    opening_chair = export_static_placeable(
+        installation, "plc_chair2", output_root / "placeables" / "plc_chair2.glb", textures)
     trask_actor = export_trask_actor(
         installation,
         output_root / "actors" / "end_trask.glb",
@@ -1320,6 +1361,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         }
         if record["template"].lower() == "footlker001":
             record.update(opening_locker)
+        elif record["template"].lower() == "plc_chair2":
+            record.update(opening_chair)
         placeables.append(record)
     waypoints = [
         {
