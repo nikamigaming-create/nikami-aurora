@@ -54,6 +54,20 @@ HMD is available):
 ./scripts/Start-KotorGodot.ps1 -OpenXR
 ```
 
+Run the active Meta XR Simulator through an isolated Vulkan spectator path
+without changing the system OpenXR runtime:
+
+```powershell
+./scripts/Start-KotorGodot.ps1 `
+  -OpenXRSimulator `
+  -TestFirstEncounter `
+  -CapturePath 'artifacts/kotor-first-encounter-openxr-spectator.png' `
+  -CaptureDialogueNode 'encounter:combat-ready' `
+  -CaptureFrame 1 `
+  -CleanCapture `
+  -CaptureAndExit
+```
+
 Generate an ignored local proof capture and automatically choose the first
 response:
 
@@ -119,6 +133,10 @@ Confirmed in the new runtime:
   animation speeds;
 - opt-in OpenXR origin/camera path with desktop fallback and HMD-relative
   cinematic camera authority;
+- per-process Meta XR Simulator selection with a Vulkan XR subviewport and
+  non-black HMD-following spectator capture, without registry or UI mutation;
+- tracked-head-relative cinematic recentering with asserted zero positional
+  error and a floor-based gameplay origin that does not double-count eye height;
 - profile-owned native-coordinate movement simulation shared by desktop and XR
   intent, with synthetic speed/facing/dead-zone/door-blocker acceptance;
 - profile-owned transactional experience, door, placeable, and validated-script

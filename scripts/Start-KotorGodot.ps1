@@ -18,6 +18,8 @@ param(
     [switch]$TestFirstEncounter,
     [switch]$SkipOpeningDialogue,
     [switch]$OpenXR,
+    [switch]$OpenXRSimulator,
+    [string]$OpenXRRuntimeJson,
     [switch]$CleanCapture,
     [switch]$LipSyncCloseup,
     [switch]$EquipmentCloseup,
@@ -27,6 +29,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
+$hadXrRuntimeJson = Test-Path Env:XR_RUNTIME_JSON
+$previousXrRuntimeJson = $env:XR_RUNTIME_JSON
 if ([string]::IsNullOrWhiteSpace($Manifest)) {
     $Manifest = Join-Path $repo "local\kotor\end_m01aa\module-manifest.json"
 }
@@ -98,6 +102,26 @@ if ($SkipOpeningDialogue) {
 if ($OpenXR) {
     $env:NIKAMI_AURORA_OPENXR = "1"
 }
+if ($OpenXRSimulator) {
+    $OpenXR = $true
+    if ([string]::IsNullOrWhiteSpace($OpenXRRuntimeJson)) {
+        $simulatorRoot = 'C:\Program Files\MetaXRSimulator'
+        $OpenXRRuntimeJson = Get-ChildItem -LiteralPath $simulatorRoot -Directory `
+            -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName 'meta_openxr_simulator.json' } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+    }
+    if ([string]::IsNullOrWhiteSpace($OpenXRRuntimeJson) -or
+        -not (Test-Path -LiteralPath $OpenXRRuntimeJson -PathType Leaf)) {
+        throw "Meta OpenXR Simulator runtime JSON was not found."
+    }
+    $env:XR_RUNTIME_JSON = (Resolve-Path -LiteralPath $OpenXRRuntimeJson).Path
+    $env:NIKAMI_AURORA_OPENXR = "1"
+    $env:NIKAMI_AURORA_OPENXR_EXPECT_ACTIVE = "1"
+    $env:NIKAMI_AURORA_XR_SPECTATOR = "1"
+}
 if ($CleanCapture) {
     $env:NIKAMI_AURORA_CAPTURE_CLEAN = "1"
 }
@@ -119,6 +143,9 @@ try {
     $godotArguments = @("--path", (Join-Path $repo "godot"))
     if ($OpenXR) {
         $godotArguments += @("--xr-mode", "on")
+    }
+    if ($OpenXRSimulator) {
+        $godotArguments += @("--rendering-method", "mobile")
     }
     & $Godot @godotArguments
     if ($LASTEXITCODE -ne 0) {
@@ -144,8 +171,16 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_ENCOUNTER -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_OPENXR -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_OPENXR_EXPECT_ACTIVE -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_XR_SPECTATOR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CLEAN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP -ErrorAction SilentlyContinue
+    if ($hadXrRuntimeJson) {
+        $env:XR_RUNTIME_JSON = $previousXrRuntimeJson
+    }
+    else {
+        Remove-Item Env:XR_RUNTIME_JSON -ErrorAction SilentlyContinue
+    }
 }
