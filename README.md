@@ -27,10 +27,18 @@ Desktop keys and OpenXR controller axes now map into one immutable movement
 intent. Native-coordinate speed, facing, walkmesh, and closed-door outcomes are
 owned and synthetically tested by `Profiles.Kotor`, not duplicated in Godot.
 
+Opening gameplay state is now profile-owned as well. Locker use, per-placement
+door state, validated script outcomes, and XP transitions produce deterministic
+before/after snapshots and typed events consumed by either desktop or OpenXR
+presentation. Duplicate Odyssey object tags remain independent through stable
+placement IDs.
+
 XR controller presentation follows a three-level provider chain: portable
 OpenXR runtime models, dynamically available Meta FB models, then tracked
 procedural fallbacks. The same primary-stick and face-button actions feed
-gameplay and eventual live model animation.
+gameplay and eventual live model animation. Runtime-model managers are created
+only after OpenXR initializes, so normal desktop and no-HMD fallback boots do
+not depend on an XR extension lifecycle.
 
 ## Why a new runtime
 

@@ -29,6 +29,8 @@ internal static class Program
             passed++;
             KotorMovementRejectsClosedDoor();
             passed++;
+            KotorGameplayOwnsOpeningState();
+            passed++;
             Console.WriteLine($"NIKAMI_AURORA_ACCEPTANCE_PASS tests={passed}");
             return 0;
         }
@@ -169,6 +171,85 @@ internal static class Program
             "closed authored door did not block movement");
         Expect(open.Accepted && open.Moved,
             "open authored door still blocked movement");
+    }
+
+    private static void KotorGameplayOwnsOpeningState()
+    {
+        var contracts = new[]
+        {
+            new KotorScriptContract(
+                "k_pend_chest02",
+                KotorScriptContractKind.PlotExperienceIfPlayerExperience,
+                new string('A', 64),
+                985,
+                RequiredPlayerExperience: 0,
+                PlotLabel: "end_tutorial",
+                PlotPercentage: 5,
+                PlotBaseExperience: 1000,
+                AwardedExperience: 50),
+            new KotorScriptContract(
+                "k_pend_door1xp",
+                KotorScriptContractKind.PlotExperienceIfPlayerExperience,
+                new string('B', 64),
+                753,
+                RequiredPlayerExperience: 50,
+                PlotLabel: "end_tutorial",
+                PlotPercentage: 10,
+                PlotBaseExperience: 1000,
+                AwardedExperience: 100),
+            new KotorScriptContract(
+                "k_pend_traskdl40",
+                KotorScriptContractKind.DialogueOpenDoor,
+                new string('C', 64),
+                25,
+                DoorTag: "end_door01",
+                PauseConversation: true,
+                MoveTargetTag: "",
+                MoveRun: true,
+                MoveRange: 1.0f,
+                ResumeConversation: true)
+        };
+        var simulation = new KotorGameplaySimulation(
+            contracts,
+            [
+                new KotorDoorDefinition("door:0000", "end_door01", "k_pend_door1xp"),
+                new KotorDoorDefinition("door:0001", "end_door01", null)
+            ],
+            [new KotorPlaceableDefinition(
+                "placeable:0000", "end_locker01", "k_pend_chest02")]);
+
+        var locker = simulation.UsePlaceable("PLACEABLE:0000");
+        Expect(locker.Before.PlayerExperience == 0 && locker.After.PlayerExperience == 50,
+            "profile-owned locker transition did not award 0->50 XP");
+        Expect(locker.After.PlaceableStates["placeable:0000"],
+            "profile-owned locker state was not persisted");
+        Expect(locker.Events.OfType<KotorExperienceAwarded>().Single().Awarded == 50,
+            "locker transition did not expose its XP presentation event");
+
+        var repeatedLocker = simulation.UsePlaceable("placeable:0000");
+        Expect(repeatedLocker.After.PlayerExperience == 50 &&
+               repeatedLocker.Events.Single() is KotorPlaceableAlreadyOpened,
+            "repeated locker interaction was not idempotent");
+
+        var dialogue = simulation.ExecuteScript("k_pend_traskdl40");
+        Expect(dialogue.Before.PlayerExperience == 50 && dialogue.After.PlayerExperience == 150,
+            "profile-owned dialogue/door chain did not award 50->150 XP");
+        Expect(dialogue.After.DoorStates["door:0000"],
+            "dialogue contract did not persist the authored door-open state");
+        Expect(!dialogue.After.DoorStates["door:0001"],
+            "duplicate-tag door placements incorrectly shared state");
+        Expect(dialogue.Events.OfType<KotorDoorStateChanged>().Single().Open,
+            "dialogue transition did not expose its door presentation event");
+        Expect(dialogue.Events.OfType<KotorExperienceAwarded>().Single().Awarded == 100,
+            "door OnOpen contract did not expose its XP presentation event");
+        Expect(dialogue.Events.OfType<KotorScriptExecuted>().Single().Contract.Resref ==
+               "k_pend_traskdl40",
+            "dialogue contract execution was not reported");
+
+        var closeDoor = simulation.ToggleDoor("door:0000");
+        Expect(!closeDoor.After.DoorStates["door:0000"] &&
+               closeDoor.After.PlayerExperience == 150,
+            "direct door toggle did not preserve the profile-owned story state");
     }
 
     private static void MaterializeMarkers(string root, GameProfileDescriptor descriptor)

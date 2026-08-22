@@ -61,6 +61,9 @@ and contains 985 instructions.
   opening it executes `OnInventory=k_pend_chest02` and reports XP `0→50`.
 - The deterministic runtime chain executes locker then door contracts and
   asserts the complete XP transition `0→50→150`.
+- Experience, door, and placeable-used values now live in profile-owned
+  before/after snapshots. Godot consumes typed transition events and no longer
+  owns parallel XP or interaction booleans.
 
 Source values, action IDs, plot math, target door, and both XP branches are
 `confirmed`. Party-wide XP propagation, empty-tag movement semantics, action
