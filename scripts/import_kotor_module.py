@@ -635,6 +635,107 @@ def export_trask_actor(
     }
 
 
+def export_player_actor(
+    installation: Installation,
+    output_path: Path,
+    textures: TextureCache,
+    mdlops: Path,
+    animation_cache: Path,
+    appearance_id: int = 137,
+    portrait_id: int = 18,
+) -> dict[str, Any]:
+    appearance_resource = installation.resource("appearance", ResourceType.TwoDA)
+    heads_resource = installation.resource("heads", ResourceType.TwoDA)
+    portraits_resource = installation.resource("portraits", ResourceType.TwoDA)
+    if appearance_resource is None or heads_resource is None or portraits_resource is None:
+        raise RuntimeError("Player appearance tables could not be resolved")
+    appearance_bytes = resource_data(appearance_resource)
+    heads_bytes = resource_data(heads_resource)
+    portraits_bytes = resource_data(portraits_resource)
+    appearance = read_2da(appearance_bytes)
+    heads = read_2da(heads_bytes)
+    portraits = read_2da(portraits_bytes)
+    portrait_appearance = int(portraits.get_cell(portrait_id, "appearancenumber"))
+    if portrait_appearance != appearance_id:
+        raise RuntimeError(
+            f"Portrait {portrait_id} resolves appearance {portrait_appearance}, expected {appearance_id}")
+    body_name = str(appearance.get_cell(appearance_id, "modela"))
+    body_texture_prefix = str(appearance.get_cell(appearance_id, "texa"))
+    body_texture = body_texture_prefix
+    if installation.texture(body_texture) is None:
+        numbered_texture = f"{body_texture_prefix}01"
+        if installation.texture(numbered_texture) is None:
+            raise RuntimeError(
+                f"Player body texture could not be resolved: {body_texture_prefix}")
+        body_texture = numbered_texture
+    head_index = int(appearance.get_cell(appearance_id, "normalhead"))
+    head_name = str(heads.get_cell(head_index, "head"))
+    body, body_mdl, body_mdx = load_model_pair(installation, body_name)
+    head, head_mdl, head_mdx = load_model_pair(installation, head_name)
+    animation_model, animation_source_hash = load_animation_supermodel(
+        installation, mdlops, animation_cache)
+    animation_report = export_actor(
+        output_path,
+        body_model=body,
+        body_name=body_name,
+        body_texture=body_texture,
+        head_model=head,
+        head_name=head_name,
+        head_texture=None,
+        weapon_model=None,
+        weapon_name=None,
+        animation_model=animation_model,
+        animation_names=("pause1", "walk", "run"),
+        material_factory=lambda mesh, override: material_for(mesh, textures, override),
+    )
+    head_hook = find_node_transform(body, "headhook")
+    talk_dummy = find_node_transform(head, "talkdummy")
+    camera_hook = find_node_transform(body, "camerahook")
+    talk_offset = None
+    if head_hook is not None and talk_dummy is not None:
+        talk_transform = head_hook @ talk_dummy
+        talk_offset = [float(item) for item in talk_transform[:3, 3]]
+    return {
+        "schema": "nikami-aurora-kotor-player-v1",
+        "glb": f"actors/{output_path.name}",
+        "portraitId": portrait_id,
+        "appearanceId": appearance_id,
+        "appearanceLabel": str(appearance.get_cell(appearance_id, "label")),
+        "bodyModel": body_name,
+        "bodyTexture": body_texture,
+        "headIndex": head_index,
+        "headModel": head_name,
+        "height": float(appearance.get_cell(appearance_id, "height")),
+        "walkDistance": float(appearance.get_cell(appearance_id, "walkdist")),
+        "runDistance": float(appearance.get_cell(appearance_id, "rundist")),
+        "talkOffset": talk_offset,
+        "cameraOffset": (
+            [float(item) for item in camera_hook[:3, 3]]
+            if camera_hook is not None else None
+        ),
+        "animationSource": "S_Male02",
+        "animationSourceSha256": animation_source_hash,
+        "animation": animation_report,
+        "appearanceTableSha256": sha256_bytes(appearance_bytes),
+        "headsTableSha256": sha256_bytes(heads_bytes),
+        "portraitsTableSha256": sha256_bytes(portraits_bytes),
+        "models": [
+            {
+                "model": body_name,
+                "overrideTexture": body_texture,
+                "mdlSha256": sha256_bytes(body_mdl),
+                "mdxSha256": sha256_bytes(body_mdx),
+            },
+            {
+                "model": head_name,
+                "overrideTexture": None,
+                "mdlSha256": sha256_bytes(head_mdl),
+                "mdxSha256": sha256_bytes(head_mdx),
+            },
+        ],
+    }
+
+
 def export_dialogue(
     installation: Installation,
     dialogue_name: str,
@@ -1017,6 +1118,13 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         mdlops,
         output_root / "_cache" / "animations",
     )
+    player_actor = export_player_actor(
+        installation,
+        output_root / "actors" / "player.glb",
+        textures,
+        mdlops,
+        output_root / "_cache" / "animations",
+    )
     trask_actor["dialogue"] = export_dialogue(
         installation,
         trask_actor["conversation"],
@@ -1115,8 +1223,12 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         "cameraStyle": {
             "id": int(are.camera_style),
             "viewAngle": dialogue_view_angle,
+            "distance": float(camera_styles.get_cell(int(are.camera_style), "distance")),
+            "pitchDegrees": float(camera_styles.get_cell(int(are.camera_style), "pitch")),
+            "height": float(camera_styles.get_cell(int(are.camera_style), "height")),
             "sourceSha256": sha256_bytes(resource_data(camera_style_resource)),
         },
+        "player": player_actor,
         "rooms": room_records,
         "creatures": creatures,
         "doors": doors,

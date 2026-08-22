@@ -6,7 +6,7 @@ namespace Nikami.Aurora.GodotRuntime;
 
 public sealed partial class KotorModuleBoot : Node3D
 {
-    private const float GameplayFieldOfView = 72.0f;
+    private const float DefaultGameplayFieldOfView = 72.0f;
     private static readonly Shader OdysseyLightmapShader = new()
     {
         Code = """
@@ -24,7 +24,19 @@ public sealed partial class KotorModuleBoot : Node3D
             """
     };
     private CharacterBody3D playerBody = null!;
+    private Node3D cameraPivot = null!;
+    private SpringArm3D cameraArm = null!;
     private Camera3D camera = null!;
+    private XROrigin3D xrOrigin = null!;
+    private XRCamera3D xrCamera = null!;
+    private bool xrActive;
+    private Node3D? playerModel;
+    private AnimationPlayer? playerAnimationPlayer;
+    private string currentPlayerAnimation = "";
+    private string forcedPlayerAnimation = "";
+    private float playerWalkSpeed = 1.7f;
+    private float playerRunSpeed = 5.4f;
+    private float gameplayFieldOfView = DefaultGameplayFieldOfView;
     private AudioStreamPlayer dialogueVoice = null!;
     private Godot.Environment runtimeEnvironment = null!;
     private CanvasLayer overlayLayer = null!;
@@ -78,12 +90,15 @@ public sealed partial class KotorModuleBoot : Node3D
     {
         CreateEnvironment();
         CreateCamera();
+        TryInitializeOpenXR();
         CreateAudio();
         CreateOverlay();
         Input.MouseMode = Input.MouseModeEnum.Captured;
         if (int.TryParse(System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_FRAME"),
                 out var configuredCaptureFrame))
             captureTargetFrame = Math.Max(1, configuredCaptureFrame);
+        forcedPlayerAnimation =
+            System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_PLAYER_ANIMATION") ?? "";
 
         var manifestPath = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_MODULE_MANIFEST");
         if (string.IsNullOrWhiteSpace(manifestPath))
@@ -102,11 +117,16 @@ public sealed partial class KotorModuleBoot : Node3D
         if (Input.IsKeyPressed(Key.S)) movement += basis.Z;
         if (Input.IsKeyPressed(Key.A)) movement -= basis.X;
         if (Input.IsKeyPressed(Key.D)) movement += basis.X;
-        if (movement.LengthSquared() > 0.001f)
+        var playerMoved = false;
+        var sprinting = Input.IsKeyPressed(Key.Shift);
+        if (!dialoguePanel.Visible && movement.LengthSquared() > 0.001f)
         {
-            var speed = Input.IsKeyPressed(Key.Shift) ? 12.0f : 5.0f;
-            MovePlayer(movement.Normalized() * speed * (float)delta);
+            var speed = sprinting ? playerRunSpeed : playerWalkSpeed;
+            playerMoved = MovePlayer(movement.Normalized() * speed * (float)delta);
         }
+        PlayPlayerAnimation(!string.IsNullOrWhiteSpace(forcedPlayerAnimation)
+            ? forcedPlayerAnimation
+            : playerMoved ? sprinting ? "run" : "walk" : "pause1");
         UpdateInteractionPrompt();
         UpdateLipSync();
 
@@ -187,9 +207,9 @@ public sealed partial class KotorModuleBoot : Node3D
         if (inputEvent is InputEventMouseMotion motion && Input.MouseMode == Input.MouseModeEnum.Captured)
         {
             yaw -= motion.Relative.X * 0.0025f;
-            pitch = Mathf.Clamp(pitch - motion.Relative.Y * 0.0025f, -1.45f, 1.45f);
+            pitch = Mathf.Clamp(pitch - motion.Relative.Y * 0.0025f, -0.75f, 0.45f);
             playerBody.Rotation = new Vector3(0, yaw, 0);
-            camera.Rotation = new Vector3(pitch, 0, 0);
+            cameraPivot.Rotation = new Vector3(pitch, 0, 0);
         }
         else if (inputEvent is InputEventKey key && key.Pressed && key.Keycode == Key.Escape)
         {
@@ -229,6 +249,8 @@ public sealed partial class KotorModuleBoot : Node3D
             foreach (var sourceCamera in manifest.Cameras)
                 dialogueCameras[sourceCamera.Id] = sourceCamera;
             dialogueFieldOfView = manifest.CameraStyle.ViewAngle;
+            gameplayFieldOfView = manifest.CameraStyle.ViewAngle;
+            camera.Fov = gameplayFieldOfView;
             scriptContracts.Clear();
             foreach (var contract in manifest.ScriptContracts)
             {
@@ -261,6 +283,8 @@ public sealed partial class KotorModuleBoot : Node3D
             }
 
             var authoredLights = LoadAuthoredLights(manifest.Rooms, manifest.Lighting);
+            var materializedPlayer = LoadPlayerModel(
+                manifest.Player, manifest.CameraStyle, manifestDirectory);
             var materializedActors = LoadActorModels(manifest.Creatures, manifestDirectory);
             AddCreatureMarkers(manifest.Creatures);
             var materializedDoors = LoadDoorModels(manifest.Doors, manifestDirectory);
@@ -276,17 +300,17 @@ public sealed partial class KotorModuleBoot : Node3D
             if (trask is not null)
             {
                 var target = ToGodot(trask.Position) + Vector3.Up * 1.2f;
-                var direction = (target - camera.GlobalPosition).Normalized();
+                var direction = (target - playerBody.GlobalPosition).Normalized();
                 yaw = Mathf.Atan2(-direction.X, -direction.Z);
-                pitch = -Mathf.Asin(direction.Y);
                 playerBody.Rotation = new Vector3(0, yaw, 0);
-                camera.Rotation = new Vector3(pitch, 0, 0);
+                cameraPivot.Rotation = new Vector3(pitch, 0, 0);
             }
 
             loadingBackdrop.Visible = false;
             status.Text = $"{manifest.Module.ToUpperInvariant()}  •  ENDAR SPIRE";
             details.Text = $"{manifest.Rooms.Count} authored / {loadedRooms} visual rooms  •  " +
                            $"{materializedActors} actor / {manifest.Counts.Creatures} creature placements  •  " +
+                           $"{materializedPlayer} player avatar  •  " +
                            $"{manifest.Counts.WalkmeshTriangles} nav triangles  •  " +
                            $"{authoredLights}/{manifest.Counts.AuthoredLights} source lights  •  " +
                            $"{materializedDoors} door / {manifest.Counts.Doors} placements  •  " +
@@ -300,7 +324,8 @@ public sealed partial class KotorModuleBoot : Node3D
             GD.Print($"NIKAMI_AURORA_NAV status=ready triangles={navigationTriangles.Count} " +
                      $"entry={playerBody.GlobalPosition}");
             var openingActor = manifest.Creatures.FirstOrDefault(creature => creature.Dialogue is not null);
-            if (openingActor is not null)
+            if (openingActor is not null &&
+                System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_SKIP_OPENING_DIALOGUE") != "1")
                 LoadOpeningDialogue(openingActor, manifestDirectory);
             capturedFrames = 0;
             readyFrames = 0;
@@ -347,15 +372,35 @@ public sealed partial class KotorModuleBoot : Node3D
             Shape = new CapsuleShape3D { Radius = 0.32f, Height = 1.7f }
         };
         playerBody.AddChild(playerCollision);
+        cameraPivot = new Node3D
+        {
+            Name = "CameraPivot",
+            Position = Vector3.Up * 1.25f
+        };
+        playerBody.AddChild(cameraPivot);
+        cameraArm = new SpringArm3D
+        {
+            Name = "CameraArm",
+            SpringLength = 3.2f,
+            Margin = 0.08f
+        };
+        cameraPivot.AddChild(cameraArm);
         camera = new Camera3D
         {
             Current = true,
             Near = 0.05f,
             Far = 1000.0f,
-            Fov = GameplayFieldOfView
+            Fov = DefaultGameplayFieldOfView
         };
-        camera.Position = Vector3.Up * 1.65f;
-        playerBody.AddChild(camera);
+        cameraArm.AddChild(camera);
+        xrOrigin = new XROrigin3D { Name = "XROrigin" };
+        playerBody.AddChild(xrOrigin);
+        xrCamera = new XRCamera3D
+        {
+            Name = "XRCamera",
+            Current = false
+        };
+        xrOrigin.AddChild(xrCamera);
     }
 
     private void CreateAudio()
@@ -363,6 +408,30 @@ public sealed partial class KotorModuleBoot : Node3D
         dialogueVoice = new AudioStreamPlayer { Name = "DialogueVoice" };
         dialogueVoice.Finished += OnDialogueVoiceFinished;
         AddChild(dialogueVoice);
+    }
+
+    private void TryInitializeOpenXR()
+    {
+        if (System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_OPENXR") != "1")
+        {
+            GD.Print("NIKAMI_AURORA_OPENXR status=disabled");
+            return;
+        }
+        var openXr = XRServer.FindInterface("OpenXR");
+        if (openXr is null || (!openXr.IsInitialized() && !openXr.Initialize()))
+        {
+            GD.PushWarning("NIKAMI_AURORA_OPENXR status=unavailable fallback=desktop");
+            return;
+        }
+        xrActive = true;
+        xrOrigin.Current = true;
+        xrOrigin.WorldScale = 1.0f;
+        camera.Current = false;
+        xrCamera.Current = true;
+        GetViewport().UseXR = true;
+        DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
+        GD.Print("NIKAMI_AURORA_OPENXR status=ready worldScale=1.000 " +
+                 "authority=hmd-relative-to-game-camera");
     }
 
     private void CreateOverlay()
@@ -489,6 +558,24 @@ public sealed partial class KotorModuleBoot : Node3D
         GD.Print($"NIKAMI_AURORA_ACTOR_ANIMATION status=playing actor={actor} animation={match}");
     }
 
+    private void SetPresentationCameraBase(Vector3 position, Vector3 target, Vector3 up, float fov)
+    {
+        if (xrActive)
+        {
+            xrOrigin.TopLevel = true;
+            xrOrigin.GlobalPosition = position;
+            xrOrigin.LookAt(target, up);
+        }
+        else
+        {
+            camera.TopLevel = true;
+            camera.GlobalPosition = position;
+            camera.LookAt(target, up);
+            camera.Fov = fov;
+        }
+        dialogueCameraActive = true;
+    }
+
     private void ApplyDialogueCamera(DialogueNode node)
     {
         if (node.CameraId is int cameraId && cameraId > 0 &&
@@ -499,13 +586,10 @@ public sealed partial class KotorModuleBoot : Node3D
             var up = ToGodot(source.Up).Normalized();
             if (forward.LengthSquared() < 0.99f || up.LengthSquared() < 0.99f)
                 throw new InvalidDataException($"Authored camera {cameraId} has an invalid basis");
-            camera.TopLevel = true;
-            camera.GlobalPosition = position;
-            camera.LookAt(position + forward, up);
-            camera.Fov = node.CameraFov is > 0 ? node.CameraFov.Value : source.Fov;
-            dialogueCameraActive = true;
+            var fov = node.CameraFov is > 0 ? node.CameraFov.Value : source.Fov;
+            SetPresentationCameraBase(position, position + forward, up, fov);
             GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active mode=static id={cameraId} " +
-                     $"fov={camera.Fov:F3} position={position}");
+                     $"fov={fov:F3} position={position} xr={xrActive}");
             return;
         }
         var speakerActor = ResolveDialogueActor(node);
@@ -528,13 +612,9 @@ public sealed partial class KotorModuleBoot : Node3D
         var center = 0.5f * (listenerPosition + speakerPosition);
         var eye = center - offset * direction + offset * side + 0.1f * Vector3.Up;
         var target = speakerPosition - 0.1f * distance * side + 0.1f * Vector3.Up;
-        camera.TopLevel = true;
-        camera.GlobalPosition = eye;
-        camera.LookAt(target, Vector3.Up);
-        camera.Fov = dialogueFieldOfView;
-        dialogueCameraActive = true;
+        SetPresentationCameraBase(eye, target, Vector3.Up, dialogueFieldOfView);
         GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active mode=speaker actor={speakerActor} " +
-                 $"fov={camera.Fov:F3} position={eye}");
+                 $"fov={dialogueFieldOfView:F3} position={eye} xr={xrActive}");
     }
 
     private string? ResolveDialogueActor(DialogueNode node)
@@ -647,10 +727,19 @@ public sealed partial class KotorModuleBoot : Node3D
     {
         if (!dialogueCameraActive) return;
         dialogueCameraActive = false;
-        camera.TopLevel = false;
-        camera.Position = Vector3.Up * 1.65f;
-        camera.Rotation = new Vector3(pitch, 0, 0);
-        camera.Fov = GameplayFieldOfView;
+        if (xrActive)
+        {
+            xrOrigin.TopLevel = false;
+            xrOrigin.Position = cameraPivot.Position;
+            xrOrigin.Rotation = Vector3.Zero;
+        }
+        else
+        {
+            camera.TopLevel = false;
+            camera.Transform = Transform3D.Identity;
+            cameraPivot.Rotation = new Vector3(pitch, 0, 0);
+            camera.Fov = gameplayFieldOfView;
+        }
         GD.Print("NIKAMI_AURORA_DIALOGUE_CAMERA status=released");
     }
 
@@ -662,13 +751,9 @@ public sealed partial class KotorModuleBoot : Node3D
             : model.GlobalPosition + Vector3.Up * 1.6f;
         var forward = -model.GlobalTransform.Basis.Z.Normalized();
         var eye = target + forward * 1.35f + Vector3.Up * 0.03f;
-        camera.TopLevel = true;
-        camera.GlobalPosition = eye;
-        camera.LookAt(target, Vector3.Up);
-        camera.Fov = 40.0f;
-        dialogueCameraActive = true;
+        SetPresentationCameraBase(eye, target, Vector3.Up, 40.0f);
         GD.Print($"NIKAMI_AURORA_DIALOGUE_CAMERA status=active mode=lip-closeup actor={actor} " +
-                 $"fov={camera.Fov:F3} position={eye}");
+                 $"fov=40.000 position={eye} xr={xrActive}");
     }
 
     private static T? FindDescendant<T>(Node node) where T : Node
@@ -891,6 +976,79 @@ public sealed partial class KotorModuleBoot : Node3D
             };
             AddChild(marker);
         }
+    }
+
+    private int LoadPlayerModel(PlayerRecord source, CameraStyleRecord cameraStyle,
+        string manifestDirectory)
+    {
+        if (source.Schema != "nikami-aurora-kotor-player-v1" ||
+            string.IsNullOrWhiteSpace(source.Glb))
+            throw new InvalidDataException("Player manifest is missing or unsupported");
+        var path = Path.GetFullPath(Path.Combine(manifestDirectory,
+            source.Glb.Replace('/', Path.DirectorySeparatorChar)));
+        var document = new GltfDocument();
+        var state = new GltfState();
+        if (document.AppendFromFile(path, state) != Error.Ok ||
+            document.GenerateScene(state) is not Node3D model)
+            throw new InvalidDataException($"Godot could not import player model: {path}");
+        model.Name = "PlayerModel";
+        playerBody.AddChild(model);
+        playerModel = model;
+        playerAnimationPlayer = FindDescendant<AnimationPlayer>(model)
+            ?? throw new InvalidDataException("Player model has no animation player");
+        foreach (var animationName in playerAnimationPlayer.GetAnimationList())
+        {
+            var animation = playerAnimationPlayer.GetAnimation(animationName);
+            if (animation is not null)
+                animation.LoopMode = Animation.LoopModeEnum.Linear;
+        }
+        var walkName = FindAnimationName(playerAnimationPlayer, "walk");
+        var runName = FindAnimationName(playerAnimationPlayer, "run");
+        var walkAnimation = playerAnimationPlayer.GetAnimation(walkName);
+        var runAnimation = playerAnimationPlayer.GetAnimation(runName);
+        if (walkAnimation is null || runAnimation is null)
+            throw new InvalidDataException("Player movement animations are missing");
+        playerWalkSpeed = source.WalkDistance / (float)walkAnimation.GetLength();
+        playerRunSpeed = source.RunDistance / (float)runAnimation.GetLength();
+        cameraPivot.Position = source.CameraOffset is { Count: >= 3 }
+            ? ToGodot(source.CameraOffset)
+            : Vector3.Up * source.Height;
+        xrOrigin.Position = cameraPivot.Position;
+        var cameraDistance = Math.Max(0.1f, cameraStyle.Distance);
+        var cameraHeight = cameraStyle.Height;
+        cameraArm.SpringLength = Mathf.Sqrt(
+            cameraDistance * cameraDistance + cameraHeight * cameraHeight);
+        pitch = -Mathf.Atan2(cameraHeight, cameraDistance);
+        cameraPivot.Rotation = new Vector3(pitch, 0, 0);
+        PlayPlayerAnimation("pause1");
+        GD.Print($"NIKAMI_AURORA_PLAYER status=ready appearance={source.AppearanceId} " +
+                 $"label={source.AppearanceLabel} body={source.BodyModel} head={source.HeadModel} " +
+                 $"skins={source.Animation.SkinCount} animations={string.Join(',', source.Animation.Animations)} " +
+                 $"walkSpeed={playerWalkSpeed:F3} runSpeed={playerRunSpeed:F3} " +
+                 $"cameraDistance={cameraDistance:F3} cameraHeight={cameraHeight:F3} " +
+                 $"sourcePitch={cameraStyle.PitchDegrees:F3}");
+        return 1;
+    }
+
+    private static StringName FindAnimationName(AnimationPlayer player, string requested)
+    {
+        var match = player.GetAnimationList().FirstOrDefault(name =>
+            name.ToString().Equals(requested, StringComparison.OrdinalIgnoreCase) ||
+            name.ToString().EndsWith('/' + requested, StringComparison.OrdinalIgnoreCase));
+        if (match == default)
+            throw new InvalidDataException($"Animation is missing: {requested}");
+        return match;
+    }
+
+    private void PlayPlayerAnimation(string requested)
+    {
+        if (playerAnimationPlayer is null ||
+            currentPlayerAnimation.Equals(requested, StringComparison.OrdinalIgnoreCase))
+            return;
+        var match = FindAnimationName(playerAnimationPlayer, requested);
+        playerAnimationPlayer.Play(match, customBlend: 0.12);
+        currentPlayerAnimation = requested;
+        GD.Print($"NIKAMI_AURORA_PLAYER_ANIMATION status=playing animation={match}");
     }
 
     private int LoadActorModels(IEnumerable<CreatureRecord> creatures, string manifestDirectory)
@@ -1268,6 +1426,7 @@ public sealed partial class KotorModuleBoot : Node3D
         TargetRecord Target,
         AreaLightingRecord Lighting,
         CameraStyleRecord CameraStyle,
+        PlayerRecord Player,
         IReadOnlyList<RoomRecord> Rooms,
         IReadOnlyList<CreatureRecord> Creatures,
         IReadOnlyList<DoorRecord> Doors,
@@ -1280,7 +1439,15 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record TargetRecord(string ExecutableSha256);
     private sealed record AreaLightingRecord(IReadOnlyList<float> DynamicAmbient, bool Shadows,
         int ShadowOpacity, string SourceSha256);
-    private sealed record CameraStyleRecord(int Id, float ViewAngle, string SourceSha256);
+    private sealed record CameraStyleRecord(int Id, float ViewAngle, float Distance,
+        float PitchDegrees, float Height, string SourceSha256);
+    private sealed record PlayerRecord(string Schema, string Glb, int PortraitId,
+        int AppearanceId, string AppearanceLabel, string BodyModel, string BodyTexture,
+        int HeadIndex, string HeadModel, float Height, float WalkDistance, float RunDistance,
+        IReadOnlyList<float>? TalkOffset, IReadOnlyList<float>? CameraOffset,
+        PlayerAnimationRecord Animation);
+    private sealed record PlayerAnimationRecord(int MeshCount, int VertexCount, int TriangleCount,
+        int SkinCount, int HeadSkinCount, IReadOnlyList<string> Animations);
     private sealed record RoomRecord(string Model, string? Glb, IReadOnlyList<float> Position,
         IReadOnlyList<IReadOnlyList<IReadOnlyList<float>>>? WalkmeshTriangles,
         IReadOnlyList<LightRecord>? Lights);
