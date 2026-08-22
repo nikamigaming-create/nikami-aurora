@@ -226,7 +226,26 @@ internal static class Program
                     "28CC82593A0133962B6D2AEC0BA1C1C6B0182918756ECDE533B9112D23F3029A",
                     1301,
                     "FCAA7779E5DA5D86C570ECDF6EB0AE488B571CA308816A955D288E5A659F38EB",
-                    763))
+                    763)),
+            new KotorScriptContract(
+                "k_pend_cadlg_inc",
+                KotorScriptContractKind.GlobalNumberAdd,
+                "9A3AE15D07F4A1B81A2774553CAA7271403A73829AE76E8CF40518C880A5E360",
+                14,
+                GlobalName: "END_CARTH_DLG",
+                GlobalValue: 1),
+            new KotorScriptContract(
+                "k_pend_traskdl47",
+                KotorScriptContractKind.GlobalNumberSet,
+                "66E79D8A179FC49721AC367822B393287E4E60034FD0F506767E6CE70E8C7D09",
+                751,
+                GlobalName: "END_TRASK_DLG",
+                GlobalValue: 11),
+            new KotorScriptContract(
+                "k_pend_map",
+                KotorScriptContractKind.RevealMap,
+                "3AE3A04CBA861141A7F12D729DFED129442FDEB424CEEC253EB37B2C4E30DD2A",
+                8)
         };
         const string baseItemsSha256 =
             "E9D031FAF0A5D3D4E9CCF33AEE5233FDA8F781A58B30FA722E7CF12B78C85C95";
@@ -348,6 +367,22 @@ internal static class Program
             new System.Numerics.Vector3(4.5f, 0, 0));
         Expect(repeatedTrigger.Events.Count == 0,
             "one-shot corridor trigger fired more than once");
+
+        var carthLine = simulation.ExecuteScript("k_pend_cadlg_inc");
+        Expect(carthLine.After.GlobalNumbers["END_CARTH_DLG"] == 1,
+            "Carth transmission did not increment its source global");
+        var traskResponse = simulation.ExecuteScript("k_pend_traskdl47");
+        Expect(traskResponse.After.GlobalNumbers["END_TRASK_DLG"] == 11,
+            "Trask response did not advance its source global");
+        var unavailableCrossModuleScript = simulation.ExecuteScript("k_pend_carth11");
+        Expect(unavailableCrossModuleScript.Events.OfType<KotorScriptUnsupported>().Single().Resref ==
+               "k_pend_carth11" &&
+               unavailableCrossModuleScript.After.GlobalNumbers["END_TRASK_DLG"] == 11,
+            "module-scoped dialogue execution imported a cross-module script");
+        var revealedMap = simulation.ExecuteScript("k_pend_map");
+        Expect(revealedMap.After.MapRevealed &&
+               revealedMap.Events.OfType<KotorMapRevealed>().Single().After,
+            "journal line did not reveal the module map");
 
         var dialogue = simulation.ExecuteScript("k_pend_traskdl40");
         Expect(dialogue.Before.PlayerExperience == 50 && dialogue.After.PlayerExperience == 150,

@@ -15,6 +15,15 @@ public sealed partial class KotorLipModifier : SkeletonModifier3D
     {
         animation = source;
         tracks = bindings;
+        foreach (var track in tracks)
+        {
+            if (track.PositionTrack >= 0)
+                track.SourceNeutralPosition =
+                    animation.PositionTrackInterpolate(track.PositionTrack, 0.0);
+            if (track.RotationTrack >= 0)
+                track.SourceNeutralRotation = NormalizeOrIdentity(
+                    animation.RotationTrackInterpolate(track.RotationTrack, 0.0));
+        }
         Influence = 1.0f;
         Active = false;
     }
@@ -27,7 +36,13 @@ public sealed partial class KotorLipModifier : SkeletonModifier3D
         Active = true;
     }
 
-    public void StopSample() => Active = false;
+    public void SetNeutral()
+    {
+        leftShape = 0;
+        rightShape = 0;
+        factor = 0.0f;
+        Active = true;
+    }
 
     public override void _ProcessModificationWithDelta(double delta)
     {
@@ -49,7 +64,7 @@ public sealed partial class KotorLipModifier : SkeletonModifier3D
             {
                 var left = animation.PositionTrackInterpolate(track.PositionTrack, leftTime);
                 var right = animation.PositionTrackInterpolate(track.PositionTrack, rightTime);
-                position = left.Lerp(right, factor);
+                position += left.Lerp(right, factor) - track.SourceNeutralPosition;
             }
             var rotation = rest.Basis.GetRotationQuaternion();
             if (track.RotationTrack >= 0)
@@ -58,7 +73,9 @@ public sealed partial class KotorLipModifier : SkeletonModifier3D
                     animation.RotationTrackInterpolate(track.RotationTrack, leftTime));
                 var right = NormalizeOrIdentity(
                     animation.RotationTrackInterpolate(track.RotationTrack, rightTime));
-                rotation = left.Slerp(right, factor).Normalized();
+                var sample = left.Slerp(right, factor).Normalized();
+                var deltaRotation = track.SourceNeutralRotation.Inverse() * sample;
+                rotation = (rotation * deltaRotation).Normalized();
             }
             var localPose = new Transform3D(new Basis(rotation), position);
             var parentIndex = skeleton.GetBoneParent(track.BoneIndex);
@@ -81,5 +98,7 @@ public sealed partial class KotorLipModifier : SkeletonModifier3D
         public int BoneIndex { get; } = boneIndex;
         public int PositionTrack { get; set; } = -1;
         public int RotationTrack { get; set; } = -1;
+        public Vector3 SourceNeutralPosition { get; set; }
+        public Quaternion SourceNeutralRotation { get; set; } = Quaternion.Identity;
     }
 }

@@ -46,10 +46,10 @@ Export report:
 
 ```text
 meshes=12 vertices=2432 triangles=2837 skins=5 headSkins=2
-animations=pause1,walk,run
+animations=pause1,walk,run,talk
 ```
 
-Godot rejects a variant without all three required clips, a body/head skin, or
+Godot rejects a variant without all listed required clips, a body/head skin, or
 UTI/base-items hashes matching the inventory definitions that produced the
 equipment state.
 
@@ -68,7 +68,8 @@ same loadout is idempotent.
 
 Godot selects the source-bound variant from the resulting profile snapshot,
 preserves the active `pause1`/`walk`/`run` locomotion state, updates the installed
-camera hook, and never decides slot legality itself.
+camera hook, holds the unique-head facial rest through the source `talk` shape-0
+overlay, and never decides slot legality itself.
 
 ## Runtime and visual gates
 
@@ -77,6 +78,7 @@ Confirmed in the owned Endar runtime:
 - equipped idle with `pause1` active and no T-pose;
 - equipped `run` active across an accepted exact 1.5-meter move;
 - Clothing texture/body and head skin remain intact;
+- the desktop-hidden OpenXR fallback cannot project across the player face;
 - the Short Sword hilt is enclosed by the animated right glove and the blade
   begins at that hilt, with no floating or duplicated weapon; and
 - a compact world-space `EQUIPPED` notice replaces the loot notice rather than

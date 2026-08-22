@@ -34,9 +34,12 @@ Each tracked `XRController3D` owns a grip-local model container with:
    exposes it; and
 3. a colored procedural fallback.
 
-The procedural model remains visible until a runtime provider has produced a
-child model, and only one representation is visible per controller. No guessed
-rotation or translation is applied between the runtime model and grip pose.
+The procedural model is hidden at construction. Only after OpenXR successfully
+initializes does it become visible until a runtime provider has produced a child
+model, and only one representation is visible per controller. This prevents the
+untracked right-hand fallback box from rendering at the XR origin during
+desktop play. No guessed rotation or translation is applied between the runtime
+model and grip pose.
 Both portable and Meta render-model extensions are requested; Meta support
 remains optional because the fallback is always present.
 
@@ -53,8 +56,8 @@ therefore cannot enter the render-model extension lifecycle.
 - OpenXR creates an instance against Oculus runtime 1.207.0.
 - With no connected HMD, initialization fails with
   `XR_ERROR_FORM_FACTOR_UNAVAILABLE` and desktop play remains functional.
-- Grip/fallback hierarchy construction, runtime-provider deferral, clean
-  desktop boot, and no-HMD fallback are `confirmed`.
+- Grip/fallback hierarchy construction, runtime-provider deferral, hidden
+  desktop controllers, clean desktop boot, and no-HMD fallback are `confirmed`.
 
 Physical six-degree tracking, runtime model selection, trigger/grip/button/stick
 animation calibration, focus-loss recovery, controller/hand switching, haptic

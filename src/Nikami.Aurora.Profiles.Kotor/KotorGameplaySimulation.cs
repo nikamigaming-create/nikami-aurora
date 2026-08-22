@@ -7,7 +7,10 @@ public enum KotorScriptContractKind
 {
     PlotExperienceIfPlayerExperience,
     DialogueOpenDoor,
-    TriggerDialogue
+    TriggerDialogue,
+    GlobalNumberAdd,
+    GlobalNumberSet,
+    RevealMap
 }
 
 public sealed record KotorTriggerDialogueBehavior(
@@ -76,13 +79,18 @@ public sealed record KotorScriptContract(
     bool? MoveRun = null,
     float? MoveRange = null,
     bool? ResumeConversation = null,
-    KotorTriggerDialogueBehavior? TriggerDialogue = null)
+    KotorTriggerDialogueBehavior? TriggerDialogue = null,
+    string? GlobalName = null,
+    int? GlobalValue = null)
 {
     public string KindName => Kind switch
     {
         KotorScriptContractKind.PlotExperienceIfPlayerExperience => "plot-xp-if-player-xp",
         KotorScriptContractKind.DialogueOpenDoor => "dialogue-open-door",
         KotorScriptContractKind.TriggerDialogue => "trigger-dialogue",
+        KotorScriptContractKind.GlobalNumberAdd => "global-number-add",
+        KotorScriptContractKind.GlobalNumberSet => "global-number-set",
+        KotorScriptContractKind.RevealMap => "reveal-map",
         _ => throw new InvalidOperationException($"Unsupported KOTOR script-contract kind: {Kind}")
     };
 
@@ -124,6 +132,17 @@ public sealed record KotorScriptContract(
                     throw new ArgumentException(
                         "Trigger-dialogue behavior cannot be empty", nameof(TriggerDialogue));
                 TriggerDialogue.Validate();
+                break;
+            case KotorScriptContractKind.GlobalNumberAdd:
+            case KotorScriptContractKind.GlobalNumberSet:
+                if (string.IsNullOrWhiteSpace(GlobalName))
+                    throw new ArgumentException(
+                        "Global-number script name cannot be empty", nameof(GlobalName));
+                if (GlobalValue is null)
+                    throw new ArgumentException(
+                        "Global-number script value cannot be empty", nameof(GlobalValue));
+                break;
+            case KotorScriptContractKind.RevealMap:
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(Kind));
@@ -237,7 +256,8 @@ public sealed record KotorGameplaySnapshot(
     IReadOnlyDictionary<string, int> PlayerInventory,
     IReadOnlyDictionary<KotorEquipmentSlot, string> Equipment,
     IReadOnlyDictionary<string, bool> TriggerStates,
-    IReadOnlyDictionary<string, int> GlobalNumbers);
+    IReadOnlyDictionary<string, int> GlobalNumbers,
+    bool MapRevealed);
 
 public abstract record KotorGameplayEvent;
 
@@ -266,6 +286,8 @@ public sealed record KotorGlobalNumberChanged(
     string Name,
     int Before,
     int After) : KotorGameplayEvent;
+
+public sealed record KotorMapRevealed(bool Before, bool After) : KotorGameplayEvent;
 
 public sealed record KotorDialogueRequested(
     string ActorTag,
@@ -312,6 +334,7 @@ public sealed class KotorGameplaySimulation
     private readonly Dictionary<string, int> globalNumbers =
         new(StringComparer.OrdinalIgnoreCase);
     private int playerExperience;
+    private bool mapRevealed;
 
     public KotorGameplaySimulation(
         IEnumerable<KotorScriptContract> scripts,
@@ -366,7 +389,8 @@ public sealed class KotorGameplaySimulation
         new ReadOnlyDictionary<KotorEquipmentSlot, string>(
             new Dictionary<KotorEquipmentSlot, string>(equipment)),
         ReadOnlyCopy(triggerStates),
-        ReadOnlyCopy(globalNumbers));
+        ReadOnlyCopy(globalNumbers),
+        mapRevealed);
 
     public bool IsDoorOpen(string instanceId) =>
         GetState(doorStates, instanceId, "door instance");
@@ -528,6 +552,13 @@ public sealed class KotorGameplaySimulation
                 case KotorScriptContractKind.TriggerDialogue:
                     ExecuteTriggerDialogue(contract, events);
                     break;
+                case KotorScriptContractKind.GlobalNumberAdd:
+                case KotorScriptContractKind.GlobalNumberSet:
+                    ExecuteGlobalNumber(contract, events);
+                    break;
+                case KotorScriptContractKind.RevealMap:
+                    ExecuteRevealMap(contract, events);
+                    break;
                 default:
                     throw new InvalidOperationException(
                         $"Unsupported script-contract kind {contract.Kind} for {contract.Resref}");
@@ -593,6 +624,35 @@ public sealed class KotorGameplaySimulation
             behavior.UserEvent,
             behavior.InputLockSeconds,
             behavior.DelaySeconds));
+        events.Add(new KotorScriptExecuted(contract));
+    }
+
+    private void ExecuteGlobalNumber(
+        KotorScriptContract contract,
+        List<KotorGameplayEvent> events)
+    {
+        var name = contract.GlobalName
+            ?? throw new InvalidOperationException(
+                $"Global-number contract is incomplete: {contract.Resref}");
+        var value = contract.GlobalValue
+            ?? throw new InvalidOperationException(
+                $"Global-number contract is incomplete: {contract.Resref}");
+        globalNumbers.TryGetValue(name, out var before);
+        var after = contract.Kind == KotorScriptContractKind.GlobalNumberAdd
+            ? checked(before + value)
+            : value;
+        globalNumbers[name] = after;
+        events.Add(new KotorGlobalNumberChanged(name, before, after));
+        events.Add(new KotorScriptExecuted(contract));
+    }
+
+    private void ExecuteRevealMap(
+        KotorScriptContract contract,
+        List<KotorGameplayEvent> events)
+    {
+        var before = mapRevealed;
+        mapRevealed = true;
+        events.Add(new KotorMapRevealed(before, mapRevealed));
         events.Add(new KotorScriptExecuted(contract));
     }
 
