@@ -22,6 +22,9 @@ param(
     [switch]$OpenXR,
     [switch]$OpenXRSimulator,
     [string]$OpenXRRuntimeJson,
+    [string]$MoviePath,
+    [ValidateRange(1, 240)]
+    [int]$MovieFps = 60,
     [switch]$CleanCapture,
     [switch]$LipSyncCloseup,
     [switch]$EquipmentCloseup,
@@ -45,6 +48,28 @@ if ([string]::IsNullOrWhiteSpace($Godot)) {
         throw "Godot 4.6.3 .NET was not found on PATH. Pass -Godot explicitly."
     }
     $Godot = $command.Source
+}
+$godotConsole = Join-Path (Split-Path -Parent $Godot) `
+    (([IO.Path]::GetFileNameWithoutExtension($Godot) -replace '_console$', '') + '_console.exe')
+if (Test-Path -LiteralPath $godotConsole -PathType Leaf) {
+    $Godot = $godotConsole
+}
+
+$resolvedMoviePath = $null
+if (-not [string]::IsNullOrWhiteSpace($MoviePath)) {
+    if (-not $ShowcaseRoute -or -not $OpenXRSimulator) {
+        throw "-MoviePath requires -ShowcaseRoute and -OpenXRSimulator."
+    }
+    $extension = [IO.Path]::GetExtension($MoviePath).ToLowerInvariant()
+    if ($extension -notin @('.avi', '.ogv')) {
+        throw "Godot Movie Maker output must use .avi or .ogv."
+    }
+    $resolvedMoviePath = [IO.Path]::GetFullPath($MoviePath)
+    $movieDirectory = Split-Path -Parent $resolvedMoviePath
+    if (-not [string]::IsNullOrWhiteSpace($movieDirectory)) {
+        New-Item -ItemType Directory -Path $movieDirectory -Force | Out-Null
+    }
+    $env:NIKAMI_AURORA_SHOWCASE_EXIT_ON_COMPLETE = "1"
 }
 
 $env:NIKAMI_AURORA_MODULE_MANIFEST = (Resolve-Path -LiteralPath $Manifest).Path
@@ -157,6 +182,12 @@ try {
     }
     if ($OpenXRSimulator) {
         $godotArguments += @("--rendering-method", "mobile")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($resolvedMoviePath)) {
+        $godotArguments += @(
+            "--write-movie", $resolvedMoviePath,
+            "--fixed-fps", $MovieFps.ToString([Globalization.CultureInfo]::InvariantCulture)
+        )
     }
     & $Godot @godotArguments
     if ($LASTEXITCODE -ne 0) {

@@ -81,6 +81,12 @@ transmission, and reaches then releases the first Sith fight. Completion asserts
 15 voices, seven choices, XP/equipment/map/global state, both doors, music, and
 all first-encounter effects before exposing a capture/movie stage key.
 
+The final development recording path is equally fail-closed: one wrapper runs
+Godot Movie Maker against the active OpenXR spectator, validates route telemetry
+and 1280×720 audio/video streams, converts a checked temporary intermediate to
+H.264/AAC MP4, deletes the temporary directory, and refuses to overwrite an
+existing output. Generated movies remain ignored local artifacts.
+
 XR controller presentation follows a three-level provider chain: portable
 OpenXR runtime models, dynamically available Meta FB models, then tracked
 procedural fallbacks. The same primary-stick and face-button actions feed
