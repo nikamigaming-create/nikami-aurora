@@ -10,11 +10,13 @@ param(
     [string]$TestPlayerAnimation,
     [switch]$OpenFirstDoor,
     [switch]$OpenFirstLocker,
+    [switch]$EquipOpeningGear,
     [switch]$TestTutorialXpChain,
     [switch]$SkipOpeningDialogue,
     [switch]$OpenXR,
     [switch]$CleanCapture,
     [switch]$LipSyncCloseup,
+    [switch]$EquipmentCloseup,
     [switch]$CaptureAndExit
 )
 
@@ -60,6 +62,9 @@ if ($OpenFirstDoor) {
 if ($OpenFirstLocker) {
     $env:NIKAMI_AURORA_TEST_OPEN_LOCKER = "1"
 }
+if ($EquipOpeningGear) {
+    $env:NIKAMI_AURORA_TEST_EQUIP_OPENING_GEAR = "1"
+}
 if ($TestTutorialXpChain) {
     $env:NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN = "1"
 }
@@ -77,6 +82,9 @@ if ($CleanCapture) {
 }
 if ($LipSyncCloseup) {
     $env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP = "1"
+}
+if ($EquipmentCloseup) {
+    $env:NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP = "1"
 }
 
 try {
@@ -104,9 +112,11 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_TEST_PLAYER_ANIMATION -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_OPEN_DOOR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_OPEN_LOCKER -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_EQUIP_OPENING_GEAR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_OPENXR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CLEAN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP -ErrorAction SilentlyContinue
 }

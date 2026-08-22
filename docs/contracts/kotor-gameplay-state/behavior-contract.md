@@ -20,7 +20,8 @@ validated behavioral contracts exported from the owned installation.
 - player experience;
 - per-placement door state;
 - per-placement placeable-used state;
-- player item quantities transferred from validated container definitions; and
+- player item quantities transferred from validated container definitions;
+- equipped-item resrefs in validated Odyssey slot masks; and
 - execution outcome for each validated script contract.
 
 Godot sends interaction or script requests to the profile and consumes typed
@@ -65,6 +66,6 @@ NIKAMI_AURORA_NCS_CHAIN status=pass xp=0->50->150
 ```
 
 This is a validated action-table slice, not a claim of a general NCS VM.
-Selective inventory UI, item use, equipment, party propagation, global
-variables, saves, action-queue timing, and complete script coverage remain
-future contracts.
+Selective inventory UI, item use, general equipment/unequip coverage, party
+propagation, global variables, saves, action-queue timing, and complete script
+coverage remain future contracts.

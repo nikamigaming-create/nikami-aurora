@@ -639,6 +639,8 @@ def export_trask_actor(
 def export_player_actor(
     installation: Installation,
     output_path: Path,
+    equipped_output_path: Path,
+    equipment_items: list[dict[str, Any]],
     textures: TextureCache,
     mdlops: Path,
     animation_cache: Path,
@@ -689,6 +691,51 @@ def export_player_actor(
         animation_names=("pause1", "walk", "run"),
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
     )
+
+    armor_items = [item for item in equipment_items if int(item["equipableSlots"]) & 0x00002]
+    right_hand_items = [
+        item for item in equipment_items
+        if int(item["equipableSlots"]) & 0x00010 and item["defaultModel"]
+    ]
+    if len(armor_items) != 1 or len(right_hand_items) != 1:
+        raise RuntimeError(
+            "Opening locker must resolve exactly one armor and one right-hand item")
+    armor_item = armor_items[0]
+    right_hand_item = right_hand_items[0]
+    body_variation = str(armor_item["bodyVar"]).lower()
+    if len(body_variation) != 1 or not body_variation.isalpha():
+        raise RuntimeError(
+            f"Opening clothing body variation is invalid: {armor_item['bodyVar']}")
+    equipped_body_name = str(appearance.get_cell(
+        appearance_id, f"model{body_variation}"))
+    equipped_texture_prefix = str(appearance.get_cell(
+        appearance_id, f"tex{body_variation}"))
+    equipped_texture = (
+        f"{equipped_texture_prefix}{int(armor_item['textureVariation']):02d}")
+    if installation.texture(equipped_texture) is None:
+        equipped_texture = f"{equipped_texture_prefix}01"
+        if installation.texture(equipped_texture) is None:
+            raise RuntimeError(
+                f"Opening clothing texture could not be resolved: {equipped_texture_prefix}")
+    weapon_model_name = str(right_hand_item["defaultModel"]).replace(
+        "001", f"{int(right_hand_item['modelVariation']):03d}")
+    equipped_body, equipped_body_mdl, equipped_body_mdx = load_model_pair(
+        installation, equipped_body_name)
+    weapon, weapon_mdl, weapon_mdx = load_model_pair(installation, weapon_model_name)
+    equipped_animation_report = export_actor(
+        equipped_output_path,
+        body_model=equipped_body,
+        body_name=equipped_body_name,
+        body_texture=equipped_texture,
+        head_model=head,
+        head_name=head_name,
+        head_texture=None,
+        weapon_model=weapon,
+        weapon_name=weapon_model_name,
+        animation_model=animation_model,
+        animation_names=("pause1", "walk", "run"),
+        material_factory=lambda mesh, override: material_for(mesh, textures, override),
+    )
     head_hook = find_node_transform(body, "headhook")
     talk_dummy = find_node_transform(head, "talkdummy")
     camera_hook = find_node_transform(body, "camerahook")
@@ -696,6 +743,12 @@ def export_player_actor(
     if head_hook is not None and talk_dummy is not None:
         talk_transform = head_hook @ talk_dummy
         talk_offset = [float(item) for item in talk_transform[:3, 3]]
+    equipped_head_hook = find_node_transform(equipped_body, "headhook")
+    equipped_camera_hook = find_node_transform(equipped_body, "camerahook")
+    equipped_talk_offset = None
+    if equipped_head_hook is not None and talk_dummy is not None:
+        equipped_talk_transform = equipped_head_hook @ talk_dummy
+        equipped_talk_offset = [float(item) for item in equipped_talk_transform[:3, 3]]
     return {
         "schema": "nikami-aurora-kotor-player-v1",
         "glb": f"actors/{output_path.name}",
@@ -733,6 +786,48 @@ def export_player_actor(
                 "mdlSha256": sha256_bytes(head_mdl),
                 "mdxSha256": sha256_bytes(head_mdx),
             },
+        ],
+        "equipmentVariants": [
+            {
+                "schema": "nikami-aurora-kotor-player-equipment-v1",
+                "id": "opening-clothing-short-sword",
+                "glb": f"actors/{equipped_output_path.name}",
+                "armorResref": armor_item["resref"],
+                "rightHandResref": right_hand_item["resref"],
+                "bodyModel": equipped_body_name,
+                "bodyTexture": equipped_texture,
+                "headModel": head_name,
+                "weaponModel": weapon_model_name,
+                "talkOffset": equipped_talk_offset,
+                "cameraOffset": (
+                    [float(item) for item in equipped_camera_hook[:3, 3]]
+                    if equipped_camera_hook is not None else None
+                ),
+                "animation": equipped_animation_report,
+                "armorUtiSha256": armor_item["utiSha256"],
+                "rightHandUtiSha256": right_hand_item["utiSha256"],
+                "baseItemsSha256": armor_item["baseItemsSha256"],
+                "models": [
+                    {
+                        "model": equipped_body_name,
+                        "overrideTexture": equipped_texture,
+                        "mdlSha256": sha256_bytes(equipped_body_mdl),
+                        "mdxSha256": sha256_bytes(equipped_body_mdx),
+                    },
+                    {
+                        "model": head_name,
+                        "overrideTexture": None,
+                        "mdlSha256": sha256_bytes(head_mdl),
+                        "mdxSha256": sha256_bytes(head_mdx),
+                    },
+                    {
+                        "model": weapon_model_name,
+                        "overrideTexture": None,
+                        "mdlSha256": sha256_bytes(weapon_mdl),
+                        "mdxSha256": sha256_bytes(weapon_mdx),
+                    },
+                ],
+            }
         ],
     }
 
@@ -989,7 +1084,9 @@ def export_opening_locker(
                 "modelType": int(base_cell("modeltype") or "0"),
                 "defaultModel": base_cell("defaultmodel"),
                 "defaultIcon": base_cell("defaulticon"),
+                "bodyVar": base_cell("bodyvar"),
                 "utiSha256": sha256_bytes(uti_bytes),
+                "baseItemsSha256": sha256_bytes(baseitems_bytes),
             }
         if key not in item_stacks:
             item_stacks[key] = {
@@ -1164,6 +1261,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         record["position"] = vector3(room.position)
         room_records.append(record)
 
+    opening_locker = export_opening_locker(
+        installation, module, output_root / "placeables" / "end_locker01.glb", textures)
     trask_actor = export_trask_actor(
         installation,
         output_root / "actors" / "end_trask.glb",
@@ -1174,6 +1273,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
     player_actor = export_player_actor(
         installation,
         output_root / "actors" / "player.glb",
+        output_root / "actors" / "player-opening-equipped.glb",
+        opening_locker["inventory"],
         textures,
         mdlops,
         output_root / "_cache" / "animations",
@@ -1187,8 +1288,6 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
     )
     opening_door = export_opening_door(
         installation, output_root / "doors" / "end_door01.glb", textures)
-    opening_locker = export_opening_locker(
-        installation, module, output_root / "placeables" / "end_locker01.glb", textures)
     creatures = []
     for creature in git.creatures:
         record = {

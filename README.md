@@ -38,6 +38,11 @@ the exact two Medpacs, Clothing, and Short Sword into that profile snapshot once
 A compact world-space loot readout is shared by desktop and OpenXR; an active XR
 controller receives the same event through the versioned haptic action.
 
+The opening Clothing and Short Sword can now be equipped through desktop `Q` or
+OpenXR `B/Y`. The profile owns slot legality and inventory removal; Godot swaps
+to a source-derived `PMBBM01` skinned player with the sword attached beneath the
+animated right-hand hook while preserving idle/walk/run state.
+
 XR controller presentation follows a three-level provider chain: portable
 OpenXR runtime models, dynamically available Meta FB models, then tracked
 procedural fallbacks. The same primary-stick and face-button actions feed

@@ -45,6 +45,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool xrActive;
     private Node3D? playerModel;
     private AnimationPlayer? playerAnimationPlayer;
+    private PlayerEquipmentVariantRecord? openingEquipmentVariant;
+    private string playerManifestDirectory = "";
     private string currentPlayerAnimation = "";
     private string forcedPlayerAnimation = "";
     private float playerWalkSpeed = 1.7f;
@@ -63,6 +65,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private Label dialogueText = null!;
     private VBoxContainer dialogueChoices = null!;
     private Label interactionPrompt = null!;
+    private Label3D? worldNotice;
     private readonly List<Button> activeChoiceButtons = [];
     private readonly List<NavigationTriangle> navigationTriangles = [];
     private readonly List<InteractiveDoor> interactiveDoors = [];
@@ -87,6 +90,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool automatedDoorApplied;
     private bool automatedLockerApplied;
     private bool automatedTutorialXpChain;
+    private bool automatedEquipmentApplied;
     private bool dialogueCameraActive;
     private float dialogueFieldOfView = 55.0f;
     private string dialogueOwnerActor = "";
@@ -190,6 +194,13 @@ public sealed partial class KotorModuleBoot : Node3D
                         $"Tutorial XP chain ended at {finalExperience}, expected 150");
                 GD.Print("NIKAMI_AURORA_NCS_CHAIN status=pass xp=0->50->150");
             }
+            if (!automatedEquipmentApplied && readyFrames >= 45 &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_EQUIP_OPENING_GEAR") == "1")
+            {
+                automatedEquipmentApplied = true;
+                EquipOpeningGear(null);
+            }
             var configuredChoice = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_DIALOGUE_CHOICE");
             if (!automatedChoiceApplied && readyFrames >= 20 &&
                 int.TryParse(configuredChoice, out var choice) &&
@@ -216,6 +227,10 @@ public sealed partial class KotorModuleBoot : Node3D
             if (readyFrames == 40 &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP") == "1")
                 FrameLipSyncCloseup(dialogueOwnerActor);
+            if (readyFrames == 60 &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP") == "1")
+                FramePlayerEquipmentCloseup();
         }
 
         var capturePath = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE");
@@ -249,6 +264,10 @@ public sealed partial class KotorModuleBoot : Node3D
         {
             HandleInteraction(null);
         }
+        else if (inputEvent is InputEventKey equip && equip.Pressed && equip.Keycode == Key.Q)
+        {
+            EquipOpeningGear(null);
+        }
     }
 
     private void OnXrButtonPressed(XRController3D controller, string name)
@@ -256,6 +275,10 @@ public sealed partial class KotorModuleBoot : Node3D
         if (name.EndsWith("ax_button", StringComparison.OrdinalIgnoreCase))
         {
             HandleInteraction(controller);
+        }
+        else if (name.EndsWith("by_button", StringComparison.OrdinalIgnoreCase))
+        {
+            EquipOpeningGear(controller);
         }
         else if (name.EndsWith("recenter", StringComparison.OrdinalIgnoreCase))
         {
@@ -276,6 +299,43 @@ public sealed partial class KotorModuleBoot : Node3D
                 UsePlaceable(placeable);
             else if (door is not null)
                 ToggleDoor(door);
+        }
+        finally
+        {
+            activeInteractionController = null;
+        }
+    }
+
+    private void EquipOpeningGear(XRController3D? controller)
+    {
+        if (dialoguePanel.Visible) return;
+        var variant = openingEquipmentVariant;
+        if (variant is null || gameplaySimulation is null) return;
+        var snapshot = gameplaySimulation.CaptureSnapshot();
+        if (snapshot.Equipment.TryGetValue(KotorEquipmentSlot.Armor, out var armor) &&
+            armor.Equals(variant.ArmorResref, StringComparison.OrdinalIgnoreCase) &&
+            snapshot.Equipment.TryGetValue(KotorEquipmentSlot.RightHand, out var rightHand) &&
+            rightHand.Equals(variant.RightHandResref, StringComparison.OrdinalIgnoreCase))
+        {
+            GD.Print("NIKAMI_AURORA_EQUIPMENT status=already-equipped " +
+                     $"armor={armor} rightHand={rightHand}");
+            return;
+        }
+        if (!snapshot.PlayerInventory.ContainsKey(variant.ArmorResref) ||
+            !snapshot.PlayerInventory.ContainsKey(variant.RightHandResref))
+        {
+            GD.Print("NIKAMI_AURORA_EQUIPMENT status=unavailable " +
+                     $"armor={variant.ArmorResref} rightHand={variant.RightHandResref}");
+            return;
+        }
+
+        activeInteractionController = controller;
+        try
+        {
+            ApplyGameplayTransition(gameplaySimulation.EquipItems([
+                new KotorEquipRequest(variant.ArmorResref, KotorEquipmentSlot.Armor),
+                new KotorEquipRequest(variant.RightHandResref, KotorEquipmentSlot.RightHand)
+            ]));
         }
         finally
         {
@@ -612,7 +672,8 @@ public sealed partial class KotorModuleBoot : Node3D
 
         var controls = new Label
         {
-            Text = "WASD move  •  mouse look  •  Shift sprint  •  E interact  •  Esc release mouse",
+            Text = "WASD move  •  mouse look  •  Shift sprint  •  E interact  •  " +
+                   "Q equip opening gear  •  Esc release mouse",
             Position = new Vector2(36, 680),
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
@@ -902,6 +963,41 @@ public sealed partial class KotorModuleBoot : Node3D
                  $"fov=40.000 position={eye} xr={xrActive}");
     }
 
+    private void FramePlayerEquipmentCloseup()
+    {
+        if (playerModel is null) return;
+        if (worldNotice is not null && GodotObject.IsInstanceValid(worldNotice))
+        {
+            worldNotice.QueueFree();
+            worldNotice = null;
+        }
+        var target = playerModel.GlobalPosition + Vector3.Up * 1.0f;
+        var forward = -playerModel.GlobalTransform.Basis.Z.Normalized();
+        var right = playerModel.GlobalTransform.Basis.X.Normalized();
+        var eye = target + forward * 1.05f + right * 0.75f + Vector3.Up * 0.05f;
+        if (xrActive)
+        {
+            SetPresentationCameraBase(eye, target, Vector3.Up, 45.0f);
+        }
+        else
+        {
+            camera.Current = false;
+            var inspectionCamera = new Camera3D
+            {
+                Name = "EquipmentInspectionCamera",
+                Current = true,
+                Near = 0.05f,
+                Far = 1000.0f,
+                Fov = 45.0f
+            };
+            AddChild(inspectionCamera);
+            inspectionCamera.GlobalPosition = eye;
+            inspectionCamera.LookAt(target, Vector3.Up);
+        }
+        GD.Print($"NIKAMI_AURORA_PLAYER_CAMERA status=active mode=equipment-closeup " +
+                 $"fov=45.000 position={eye} xr={xrActive}");
+    }
+
     private static T? FindDescendant<T>(Node node) where T : Node
     {
         if (node is T match) return match;
@@ -1130,6 +1226,13 @@ public sealed partial class KotorModuleBoot : Node3D
         if (source.Schema != "nikami-aurora-kotor-player-v1" ||
             string.IsNullOrWhiteSpace(source.Glb))
             throw new InvalidDataException("Player manifest is missing or unsupported");
+        playerManifestDirectory = manifestDirectory;
+        openingEquipmentVariant = source.EquipmentVariants?.SingleOrDefault(variant =>
+            variant.Id.Equals("opening-clothing-short-sword", StringComparison.OrdinalIgnoreCase));
+        if (openingEquipmentVariant is not null &&
+            openingEquipmentVariant.Schema != "nikami-aurora-kotor-player-equipment-v1")
+            throw new InvalidDataException(
+                $"Unsupported player equipment variant: {openingEquipmentVariant.Schema}");
         var path = Path.GetFullPath(Path.Combine(manifestDirectory,
             source.Glb.Replace('/', Path.DirectorySeparatorChar)));
         var document = new GltfDocument();
@@ -1391,6 +1494,7 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void ApplyGameplayTransition(KotorGameplayTransition transition)
     {
+        var equipmentChanged = false;
         foreach (var gameplayEvent in transition.Events)
         {
             switch (gameplayEvent)
@@ -1408,6 +1512,12 @@ public sealed partial class KotorModuleBoot : Node3D
                     break;
                 case KotorItemsTransferred transferred:
                     PresentItemsTransferred(transferred);
+                    break;
+                case KotorEquipmentChanged equipped:
+                    equipmentChanged = true;
+                    GD.Print($"NIKAMI_AURORA_EQUIPMENT status=equipped " +
+                             $"slot={equipped.Slot} item={equipped.Item.Resref} " +
+                             $"previous={equipped.PreviousResref}");
                     break;
                 case KotorExperienceAwarded experience:
                     PresentExperienceAward(experience);
@@ -1430,6 +1540,8 @@ public sealed partial class KotorModuleBoot : Node3D
                         $"Unsupported KOTOR gameplay event: {gameplayEvent.GetType().Name}");
             }
         }
+        if (equipmentChanged)
+            PresentEquipment(transition.After);
     }
 
     private void PresentDoorState(KotorDoorStateChanged state)
@@ -1472,11 +1584,23 @@ public sealed partial class KotorModuleBoot : Node3D
         GD.Print($"NIKAMI_AURORA_INVENTORY status=transferred " +
                  $"source={placeable.InstanceId} items={summary}");
 
+        ShowWorldNotice("LOOT ACQUIRED", transferred.Items.Select(stack =>
+            $"{stack.Quantity}x  {stack.Item.DisplayName}").Concat(
+            ["Q / B-Y  EQUIP GEAR"]));
+
+        if (xrActive)
+            (activeInteractionController ?? xrRightHand)
+                .TriggerHapticPulse("haptic", 0.0, 0.35, 0.08, 0.0);
+    }
+
+    private void ShowWorldNotice(string title, IEnumerable<string> lines)
+    {
+        if (worldNotice is not null && GodotObject.IsInstanceValid(worldNotice))
+            worldNotice.QueueFree();
         var label = new Label3D
         {
-            Name = "LootAcquired",
-            Text = "LOOT ACQUIRED\n" + string.Join("\n", transferred.Items.Select(stack =>
-                $"{stack.Quantity}x  {stack.Item.DisplayName}")),
+            Name = "WorldNotice",
+            Text = title + '\n' + string.Join("\n", lines),
             Billboard = BaseMaterial3D.BillboardModeEnum.Enabled,
             DoubleSided = true,
             NoDepthTest = true,
@@ -1487,6 +1611,7 @@ public sealed partial class KotorModuleBoot : Node3D
             Modulate = new Color(0.45f, 0.88f, 1.0f),
             OutlineModulate = new Color(0.01f, 0.02f, 0.04f, 0.95f)
         };
+        worldNotice = label;
         AddChild(label);
         var activeView = xrActive ? (Node3D)xrCamera : camera;
         var viewForward = -activeView.GlobalTransform.Basis.Z.Normalized();
@@ -1496,11 +1621,71 @@ public sealed partial class KotorModuleBoot : Node3D
         var tween = CreateTween();
         tween.TweenInterval(3.0);
         tween.TweenProperty(label, "modulate:a", 0.0f, 0.8);
-        tween.TweenCallback(Callable.From(label.QueueFree));
+        tween.TweenCallback(Callable.From(() =>
+        {
+            if (worldNotice == label)
+                worldNotice = null;
+            label.QueueFree();
+        }));
+    }
 
+    private void PresentEquipment(KotorGameplaySnapshot snapshot)
+    {
+        var variant = openingEquipmentVariant
+            ?? throw new InvalidDataException("Opening player equipment variant is unavailable");
+        if (!snapshot.Equipment.TryGetValue(KotorEquipmentSlot.Armor, out var armor) ||
+            !armor.Equals(variant.ArmorResref, StringComparison.OrdinalIgnoreCase) ||
+            !snapshot.Equipment.TryGetValue(KotorEquipmentSlot.RightHand, out var rightHand) ||
+            !rightHand.Equals(variant.RightHandResref, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("No player model matches the profile equipment snapshot");
+
+        var path = Path.GetFullPath(Path.Combine(playerManifestDirectory,
+            variant.Glb.Replace('/', Path.DirectorySeparatorChar)));
+        var document = new GltfDocument();
+        var state = new GltfState();
+        if (document.AppendFromFile(path, state) != Error.Ok ||
+            document.GenerateScene(state) is not Node3D model)
+            throw new InvalidDataException($"Godot could not import equipped player model: {path}");
+        model.Name = "PlayerModelEquipped";
+        var animationPlayer = FindDescendant<AnimationPlayer>(model)
+            ?? throw new InvalidDataException("Equipped player model has no animation player");
+        foreach (var animationName in animationPlayer.GetAnimationList())
+        {
+            var animation = animationPlayer.GetAnimation(animationName);
+            if (animation is not null)
+                animation.LoopMode = Animation.LoopModeEnum.Linear;
+        }
+        foreach (var expected in variant.Animation.Animations)
+            _ = FindAnimationName(animationPlayer, expected);
+
+        var requestedAnimation = string.IsNullOrWhiteSpace(currentPlayerAnimation)
+            ? "pause1"
+            : currentPlayerAnimation;
+        if (playerModel is not null)
+        {
+            playerModel.Visible = false;
+            playerModel.QueueFree();
+        }
+        playerBody.AddChild(model);
+        playerModel = model;
+        playerAnimationPlayer = animationPlayer;
+        currentPlayerAnimation = "";
+        if (variant.CameraOffset is { Count: >= 3 })
+        {
+            cameraPivot.Position = ToGodot(variant.CameraOffset);
+            xrOrigin.Position = cameraPivot.Position;
+        }
+        PlayPlayerAnimation(requestedAnimation);
+        ShowWorldNotice("EQUIPPED", ["Clothing", "Short Sword"]);
         if (xrActive)
             (activeInteractionController ?? xrRightHand)
-                .TriggerHapticPulse("haptic", 0.0, 0.35, 0.08, 0.0);
+                .TriggerHapticPulse("haptic", 0.0, 0.5, 0.12, 0.0);
+        GD.Print($"NIKAMI_AURORA_PLAYER_EQUIPMENT status=ready variant={variant.Id} " +
+                 $"body={variant.BodyModel} texture={variant.BodyTexture} " +
+                 $"head={variant.HeadModel} weapon={variant.WeaponModel} " +
+                 $"skins={variant.Animation.SkinCount} " +
+                 $"headSkins={variant.Animation.HeadSkinCount} " +
+                 $"animations={string.Join(',', variant.Animation.Animations)}");
     }
 
     private static void PresentExperienceAward(KotorExperienceAwarded experience)
@@ -1679,6 +1864,7 @@ public sealed partial class KotorModuleBoot : Node3D
         ModuleManifest manifest,
         int initialPlayerExperience)
     {
+        ValidatePlayerEquipmentVariants(manifest);
         var contracts = manifest.ScriptContracts.Select(contract =>
         {
             if (contract.Schema != "nikami-aurora-kotor-script-contract-v1")
@@ -1741,6 +1927,43 @@ public sealed partial class KotorModuleBoot : Node3D
             contracts, doors, placeables, initialPlayerExperience);
     }
 
+    private static void ValidatePlayerEquipmentVariants(ModuleManifest manifest)
+    {
+        var itemSources = manifest.Placeables.SelectMany(placeable =>
+            (placeable.Inventory ?? []).Select(item =>
+                (Item: item, BaseItemsSha256: placeable.BaseItemsSha256)));
+        foreach (var variant in manifest.Player.EquipmentVariants ?? [])
+        {
+            if (variant.Schema != "nikami-aurora-kotor-player-equipment-v1" ||
+                string.IsNullOrWhiteSpace(variant.Glb) ||
+                variant.Animation.SkinCount <= 0 ||
+                variant.Animation.HeadSkinCount <= 0 ||
+                !variant.Animation.Animations.Contains("pause1", StringComparer.OrdinalIgnoreCase) ||
+                !variant.Animation.Animations.Contains("walk", StringComparer.OrdinalIgnoreCase) ||
+                !variant.Animation.Animations.Contains("run", StringComparer.OrdinalIgnoreCase))
+                throw new InvalidDataException($"Player equipment variant is incomplete: {variant.Id}");
+            var armor = itemSources.SingleOrDefault(source =>
+                source.Item.Resref.Equals(
+                    variant.ArmorResref, StringComparison.OrdinalIgnoreCase));
+            var rightHand = itemSources.SingleOrDefault(source =>
+                source.Item.Resref.Equals(
+                    variant.RightHandResref, StringComparison.OrdinalIgnoreCase));
+            if (armor.Item is null || rightHand.Item is null ||
+                !armor.Item.UtiSha256.Equals(
+                    variant.ArmorUtiSha256, StringComparison.OrdinalIgnoreCase) ||
+                !rightHand.Item.UtiSha256.Equals(
+                    variant.RightHandUtiSha256, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(
+                    armor.BaseItemsSha256, variant.BaseItemsSha256,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(
+                    rightHand.BaseItemsSha256, variant.BaseItemsSha256,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(
+                    $"Player equipment variant sources drifted: {variant.Id}");
+        }
+    }
+
     private static string DoorInstanceId(int index) => $"door:{index:D4}";
 
     private static string PlaceableInstanceId(int index) => $"placeable:{index:D4}";
@@ -1771,9 +1994,26 @@ public sealed partial class KotorModuleBoot : Node3D
         int AppearanceId, string AppearanceLabel, string BodyModel, string BodyTexture,
         int HeadIndex, string HeadModel, float Height, float WalkDistance, float RunDistance,
         IReadOnlyList<float>? TalkOffset, IReadOnlyList<float>? CameraOffset,
-        PlayerAnimationRecord Animation);
+        PlayerAnimationRecord Animation,
+        IReadOnlyList<PlayerEquipmentVariantRecord>? EquipmentVariants);
     private sealed record PlayerAnimationRecord(int MeshCount, int VertexCount, int TriangleCount,
         int SkinCount, int HeadSkinCount, IReadOnlyList<string> Animations);
+    private sealed record PlayerEquipmentVariantRecord(
+        string Schema,
+        string Id,
+        string Glb,
+        string ArmorResref,
+        string RightHandResref,
+        string BodyModel,
+        string BodyTexture,
+        string HeadModel,
+        string WeaponModel,
+        IReadOnlyList<float>? TalkOffset,
+        IReadOnlyList<float>? CameraOffset,
+        PlayerAnimationRecord Animation,
+        string ArmorUtiSha256,
+        string RightHandUtiSha256,
+        string BaseItemsSha256);
     private sealed record RoomRecord(string Model, string? Glb, IReadOnlyList<float> Position,
         IReadOnlyList<IReadOnlyList<IReadOnlyList<float>>>? WalkmeshTriangles,
         IReadOnlyList<LightRecord>? Lights);
