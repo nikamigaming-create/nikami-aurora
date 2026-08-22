@@ -39,6 +39,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private readonly List<Button> activeChoiceButtons = [];
     private readonly List<NavigationTriangle> navigationTriangles = [];
     private readonly List<InteractiveDoor> interactiveDoors = [];
+    private readonly List<InteractivePlaceable> interactivePlaceables = [];
     private readonly Dictionary<string, AnimationPlayer> actorAnimations =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Node3D> actorModels =
@@ -48,6 +49,9 @@ public sealed partial class KotorModuleBoot : Node3D
     private readonly Dictionary<string, LipRig> actorLipRigs =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, CameraRecord> dialogueCameras = [];
+    private readonly Dictionary<string, ScriptContractRecord> scriptContracts =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> reportedUnsupportedScripts = new(StringComparer.OrdinalIgnoreCase);
     private int capturedFrames;
     private int captureTargetFrame = 60;
     private int readyFrames;
@@ -55,6 +59,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool automatedChoiceApplied;
     private bool automatedMoveApplied;
     private bool automatedDoorApplied;
+    private bool automatedLockerApplied;
+    private bool automatedTutorialXpChain;
     private bool dialogueCameraActive;
     private float dialogueFieldOfView = 55.0f;
     private string dialogueOwnerActor = "";
@@ -66,6 +72,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private string lastDialogueSpeaker = "TRASK ULGO";
     private float yaw;
     private float pitch;
+    private int playerExperience;
 
     public override void _Ready()
     {
@@ -111,7 +118,29 @@ public sealed partial class KotorModuleBoot : Node3D
                 interactiveDoors.Count > 0)
             {
                 automatedDoorApplied = true;
-                ToggleDoor(interactiveDoors[0]);
+                if (!interactiveDoors[0].Open)
+                    ToggleDoor(interactiveDoors[0]);
+                else
+                    GD.Print($"NIKAMI_AURORA_DOOR status=already-open tag={interactiveDoors[0].Source.Tag}");
+            }
+            if (!automatedLockerApplied && readyFrames >= 30 &&
+                System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_OPEN_LOCKER") == "1" &&
+                interactivePlaceables.Count > 0)
+            {
+                automatedLockerApplied = true;
+                UsePlaceable(interactivePlaceables[0]);
+            }
+            if (!automatedTutorialXpChain && readyFrames >= 30 &&
+                System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN") == "1" &&
+                interactivePlaceables.Count > 0)
+            {
+                automatedTutorialXpChain = true;
+                UsePlaceable(interactivePlaceables[0]);
+                ExecuteScript("k_pend_door1xp");
+                if (playerExperience != 150)
+                    throw new InvalidDataException(
+                        $"Tutorial XP chain ended at {playerExperience}, expected 150");
+                GD.Print("NIKAMI_AURORA_NCS_CHAIN status=pass xp=0->50->150");
             }
             var configuredChoice = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_DIALOGUE_CHOICE");
             if (!automatedChoiceApplied && readyFrames >= 20 &&
@@ -170,8 +199,11 @@ public sealed partial class KotorModuleBoot : Node3D
         }
         else if (inputEvent is InputEventKey interact && interact.Pressed && interact.Keycode == Key.E)
         {
+            var placeable = NearestPlaceable(2.6f);
             var door = NearestDoor(2.6f);
-            if (door is not null && !dialoguePanel.Visible)
+            if (placeable is not null && !dialoguePanel.Visible)
+                UsePlaceable(placeable);
+            else if (door is not null && !dialoguePanel.Visible)
                 ToggleDoor(door);
         }
     }
@@ -197,6 +229,16 @@ public sealed partial class KotorModuleBoot : Node3D
             foreach (var sourceCamera in manifest.Cameras)
                 dialogueCameras[sourceCamera.Id] = sourceCamera;
             dialogueFieldOfView = manifest.CameraStyle.ViewAngle;
+            scriptContracts.Clear();
+            foreach (var contract in manifest.ScriptContracts)
+            {
+                if (contract.Schema != "nikami-aurora-kotor-script-contract-v1")
+                    throw new InvalidDataException($"Unsupported script contract: {contract.Resref}");
+                scriptContracts[contract.Resref] = contract;
+            }
+            if (int.TryParse(System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_PLAYER_XP"),
+                    out var configuredPlayerXp))
+                playerExperience = Math.Max(0, configuredPlayerXp);
             ApplyAreaLighting(manifest.Lighting);
             var loadedRooms = 0;
             foreach (var room in manifest.Rooms)
@@ -222,6 +264,7 @@ public sealed partial class KotorModuleBoot : Node3D
             var materializedActors = LoadActorModels(manifest.Creatures, manifestDirectory);
             AddCreatureMarkers(manifest.Creatures);
             var materializedDoors = LoadDoorModels(manifest.Doors, manifestDirectory);
+            var materializedPlaceables = LoadPlaceableModels(manifest.Placeables, manifestDirectory);
             BuildNavigation(manifest.Rooms);
             var entry = ToGodot(manifest.Entry.Position);
             if (!TryProjectToWalkmesh(entry, out var entryGround))
@@ -247,6 +290,7 @@ public sealed partial class KotorModuleBoot : Node3D
                            $"{manifest.Counts.WalkmeshTriangles} nav triangles  •  " +
                            $"{authoredLights}/{manifest.Counts.AuthoredLights} source lights  •  " +
                            $"{materializedDoors} door / {manifest.Counts.Doors} placements  •  " +
+                           $"{materializedPlaceables} placeable / {manifest.Counts.Placeables} placements  •  " +
                            $"source {manifest.Target.ExecutableSha256[..12]}";
             GD.Print($"NIKAMI_AURORA_KOTOR_BOOT status=pass module={manifest.Module} " +
                      $"rooms={loadedRooms} authoredRooms={manifest.Rooms.Count} creatures={manifest.Counts.Creatures} " +
@@ -723,6 +767,8 @@ public sealed partial class KotorModuleBoot : Node3D
             RestoreGameplayCamera();
             return;
         }
+        ExecuteScript(node.Script1);
+        ExecuteScript(node.Script2);
         ApplyDialogueCamera(node);
         if (string.IsNullOrWhiteSpace(node.Text))
         {
@@ -924,6 +970,31 @@ public sealed partial class KotorModuleBoot : Node3D
         return interactiveDoors.Count;
     }
 
+    private int LoadPlaceableModels(IEnumerable<PlaceableRecord> placeables, string manifestDirectory)
+    {
+        interactivePlaceables.Clear();
+        foreach (var placeable in placeables)
+        {
+            if (string.IsNullOrWhiteSpace(placeable.Glb)) continue;
+            var path = Path.GetFullPath(Path.Combine(manifestDirectory,
+                placeable.Glb.Replace('/', Path.DirectorySeparatorChar)));
+            var document = new GltfDocument();
+            var state = new GltfState();
+            if (document.AppendFromFile(path, state) != Error.Ok ||
+                document.GenerateScene(state) is not Node3D model)
+                throw new InvalidDataException(
+                    $"Godot could not import placeable {placeable.Tag}: {path}");
+            model.Name = $"Placeable_{placeable.Tag}";
+            model.Position = ToGodot(placeable.Position);
+            model.Rotation = new Vector3(0, placeable.Bearing, 0);
+            AddChild(model);
+            interactivePlaceables.Add(new InteractivePlaceable(placeable, model));
+            GD.Print($"NIKAMI_AURORA_PLACEABLE status=ready tag={placeable.Tag} " +
+                     $"model={placeable.Model} nativeOnInventory={placeable.OnInventory}");
+        }
+        return interactivePlaceables.Count;
+    }
+
     private void UpdateInteractionPrompt()
     {
         if (dialoguePanel.Visible)
@@ -931,10 +1002,48 @@ public sealed partial class KotorModuleBoot : Node3D
             interactionPrompt.Visible = false;
             return;
         }
+        var placeable = NearestPlaceable(2.6f);
+        if (placeable is not null)
+        {
+            interactionPrompt.Visible = true;
+            interactionPrompt.Text = placeable.Opened
+                ? "LOCKER OPENED"
+                : "E  OPEN FOOTLOCKER";
+            return;
+        }
         var door = NearestDoor(2.6f);
         interactionPrompt.Visible = door is not null;
         if (door is not null)
             interactionPrompt.Text = door.Open ? "E  CLOSE LOCKDOWN DOOR" : "E  OPEN LOCKDOWN DOOR";
+    }
+
+    private InteractivePlaceable? NearestPlaceable(float maximumDistance)
+    {
+        InteractivePlaceable? nearest = null;
+        var best = maximumDistance;
+        foreach (var placeable in interactivePlaceables)
+        {
+            var delta = placeable.Model.Position - playerBody.GlobalPosition;
+            delta.Y = 0;
+            var distance = delta.Length();
+            if (distance >= best) continue;
+            best = distance;
+            nearest = placeable;
+        }
+        return nearest;
+    }
+
+    private void UsePlaceable(InteractivePlaceable placeable)
+    {
+        if (placeable.Opened)
+        {
+            GD.Print($"NIKAMI_AURORA_PLACEABLE status=already-open tag={placeable.Source.Tag}");
+            return;
+        }
+        placeable.Opened = true;
+        GD.Print($"NIKAMI_AURORA_PLACEABLE status=opened tag={placeable.Source.Tag} " +
+                 $"model={placeable.Source.Model} nativeOnInventory={placeable.Source.OnInventory}");
+        ExecuteScript(placeable.Source.OnInventory);
     }
 
     private InteractiveDoor? NearestDoor(float maximumDistance)
@@ -962,6 +1071,61 @@ public sealed partial class KotorModuleBoot : Node3D
         GD.Print($"NIKAMI_AURORA_DOOR status={(door.Open ? "opened" : "closed")} " +
                  $"tag={door.Source.Tag} model={door.Source.Model} conversation={door.Source.Conversation} " +
                  $"nativeOnOpen={door.Source.OnOpen}");
+        if (door.Open)
+            ExecuteScript(door.Source.OnOpen);
+    }
+
+    private void ExecuteScript(string? resref)
+    {
+        if (string.IsNullOrWhiteSpace(resref)) return;
+        if (!scriptContracts.TryGetValue(resref, out var contract))
+        {
+            if (reportedUnsupportedScripts.Add(resref))
+                GD.Print($"NIKAMI_AURORA_NCS status=unsupported script={resref}");
+            return;
+        }
+        switch (contract.Kind)
+        {
+            case "dialogue-open-door":
+                {
+                    var door = interactiveDoors.FirstOrDefault(candidate =>
+                        candidate.Source.Tag.Equals(contract.DoorTag, StringComparison.OrdinalIgnoreCase));
+                    if (door is null)
+                        throw new InvalidDataException(
+                            $"Script {resref} could not resolve door tag {contract.DoorTag}");
+                    if (!door.Open)
+                        ToggleDoor(door);
+                    GD.Print($"NIKAMI_AURORA_NCS status=executed script={resref} kind={contract.Kind} " +
+                             $"door={door.Source.Tag} pause={contract.PauseConversation} " +
+                             $"moveTarget={contract.MoveTargetTag} run={contract.MoveRun} " +
+                             $"range={contract.MoveRange:F3} resume={contract.ResumeConversation}");
+                    break;
+                }
+            case "plot-xp-if-player-xp":
+                {
+                    var required = contract.RequiredPlayerXp
+                        ?? throw new InvalidDataException($"Script {resref} has no XP precondition");
+                    var awarded = contract.AwardedXp
+                        ?? throw new InvalidDataException($"Script {resref} has no XP award");
+                    if (playerExperience == required)
+                    {
+                        var before = playerExperience;
+                        playerExperience += awarded;
+                        GD.Print($"NIKAMI_AURORA_NCS status=executed script={resref} kind={contract.Kind} " +
+                                 $"plot={contract.PlotLabel} percentage={contract.PlotPercentage} " +
+                                 $"base={contract.PlotBaseXp} awarded={awarded} xp={before}->{playerExperience}");
+                    }
+                    else
+                    {
+                        GD.Print($"NIKAMI_AURORA_NCS status=skipped script={resref} kind={contract.Kind} " +
+                                 $"requiredXp={required} actualXp={playerExperience}");
+                    }
+                    break;
+                }
+            default:
+                throw new InvalidDataException(
+                    $"Unsupported script contract kind {contract.Kind} for {resref}");
+        }
     }
 
     private int LoadAuthoredLights(IEnumerable<RoomRecord> rooms, AreaLightingRecord lighting)
@@ -1107,7 +1271,9 @@ public sealed partial class KotorModuleBoot : Node3D
         IReadOnlyList<RoomRecord> Rooms,
         IReadOnlyList<CreatureRecord> Creatures,
         IReadOnlyList<DoorRecord> Doors,
+        IReadOnlyList<PlaceableRecord> Placeables,
         IReadOnlyList<CameraRecord> Cameras,
+        IReadOnlyList<ScriptContractRecord> ScriptContracts,
         CountRecord Counts);
 
     private sealed record EntryRecord(IReadOnlyList<float> Position, float DirectionRadians);
@@ -1130,11 +1296,15 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record DoorRecord(string Template, string Tag, IReadOnlyList<float> Position, float Bearing,
         string LinkedToModule, string? Glb, string? Model, string? Conversation, string? OnOpen,
         bool Locked, bool KeyRequired);
+    private sealed record PlaceableRecord(string Template, string Tag,
+        IReadOnlyList<float> Position, float Bearing, string? Glb, string? Model,
+        string? OnInventory, bool Locked, bool Useable, bool HasInventory, int AnimationState);
     private sealed record DialogueReference(string Path, string SourceSha256, int StarterCount,
         int NodeCount, int OpeningStarter);
     private sealed record DialogueGraph(string Schema, int OpeningStarter,
         IReadOnlyList<DialogueLink> Starters, IReadOnlyDictionary<string, DialogueNode> Nodes);
     private sealed record DialogueNode(string Kind, string Text, string Speaker, string Sound,
+        string Script1, string Script2,
         int CameraAngle, int? CameraId, float? CameraFov, float? CameraHeight,
         IReadOnlyList<DialogueAnimation> Animations, DialogueMedia? Media,
         IReadOnlyList<DialogueLink> Links);
@@ -1145,6 +1315,11 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record LipTrack(string Schema, string Resref, string SourceSha256, float Length,
         IReadOnlyList<LipFrame> Frames);
     private sealed record LipFrame(float Time, int Shape);
+    private sealed record ScriptContractRecord(string Schema, string Resref, string Kind,
+        string SourceSha256, int InstructionCount, string? DoorTag, int? RequiredPlayerXp,
+        string? PlotLabel, int? PlotPercentage, int? PlotBaseXp, int? AwardedXp,
+        bool? PauseConversation, string? MoveTargetTag, bool? MoveRun, float? MoveRange,
+        bool? ResumeConversation);
     private sealed class LipRig(KotorLipModifier modifier, Animation animation,
         IReadOnlyList<KotorLipModifier.TrackBinding> tracks)
     {
@@ -1165,5 +1340,11 @@ public sealed partial class KotorModuleBoot : Node3D
         public Node3D Model { get; } = model;
         public Vector3 ClosedPosition { get; } = closedPosition;
         public bool Open { get; set; }
+    }
+    private sealed class InteractivePlaceable(PlaceableRecord source, Node3D model)
+    {
+        public PlaceableRecord Source { get; } = source;
+        public Node3D Model { get; } = model;
+        public bool Opened { get; set; }
     }
 }

@@ -30,6 +30,10 @@ the installed rules tables to assemble:
 - the 16-shape `talk` facial clip from `S_Male02`;
 - dialogue graph `end_trask01`.
 
+`end_trask01` contains zero explicit DLG gesture records, so the authored
+opening performance is the default `tlknorm` body loop with voice-bound `talk`
+facial overlay. No additional gesture is fabricated.
+
 The Godot dialogue view starts at the installed opening branch and displays the
 locally resolved TLK line and player responses. A deterministic test selection
 of the first response advances to Trask's next authored entry.
@@ -80,6 +84,13 @@ Confirmed in the new runtime:
 - 50 installed dialogue voice/LIP pairs resolved into the ignored bundle;
 - MP3 voice playback, 16-shape LIP interpolation on seven facial bones, and
   return to `pause1` when a line ends;
+- bytecode-validated contracts for `k_pend_traskdl40`, `k_pend_door1xp`, and
+  the opening locker XP slice in `k_pend_chest02`;
+- automatic `end_door01` opening from the DLG control script;
+- exact plot-XP gating: locker `0→50`, then door `50→150` using the
+  `end_tutorial` row from `plot.2da`;
+- exact `end_locker01` UTP placement and `PLC_FootLker` model with bounded `E`
+  interaction and `OnInventory=k_pend_chest02` execution;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
 - walkmesh-constrained player movement;
@@ -90,15 +101,16 @@ Not yet implemented:
 
 - final renderer transfer-function and light-attenuation parity;
 - dialogue-camera obstruction correction and nondeterministic shot variants;
-- per-line DLG gesture-ID execution;
+- general DLG gesture-ID execution outside this zero-gesture conversation;
 - area, effects, and music playback;
 - player character creation/model assembly;
-- NCS condition/action execution and plot state;
+- general NCS VM execution and complete plot/party state;
 - retail door animation and the installed `k_pend_door1xp` NCS behavior;
 - combat, inventory, saves, and area transitions.
 
-The current door-opening presentation is a temporary Godot tween. It is not
-claimed as retail animation or native script parity.
+The current door-opening presentation remains a temporary Godot tween. Script
+targeting and XP effects are source-backed; the door animation and the script's
+move/pause/resume scheduling are not yet claimed as retail parity.
 
 Generated GLBs, localized dialogue text, screenshots, and all other game data
 remain under ignored local directories and are never published.

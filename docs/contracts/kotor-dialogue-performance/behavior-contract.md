@@ -63,5 +63,6 @@ Runtime telemetry confirms:
 Resource selection, timing frames, face-bone binding, full-line completion, and
 cleanup are `confirmed`. Exact MP3 decoder latency and retail facial blend order
 are `probable` until compared against a hash-bound retail frame/audio trace.
-Per-node gesture IDs and script-forced multi-speaker interruption remain pending
-experiments.
+The verified opening DLG has zero explicit animation records, so default talk is
+the source-backed behavior here. Gesture-ID mapping in other conversations and
+script-forced multi-speaker interruption remain pending experiments.

@@ -15,7 +15,8 @@ color, room light nodes, static cameras, and dialogue framing drive the opening
 presentation. Installed dialogue voice and LIP tracks drive source-timed body
 talk and facial animation. Movement is constrained to the installed room
 walkmeshes and the first authored lockdown door is materialized and interactive.
-Full combat and script execution remain active milestones.
+Validated NCS contracts now execute the opening dialogue-door and plot-XP
+branches. Full combat and general script execution remain active milestones.
 
 ## Why a new runtime
 

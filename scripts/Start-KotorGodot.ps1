@@ -6,7 +6,10 @@ param(
     [int]$CaptureFrame = 60,
     [int]$DialogueChoice = -1,
     [double]$TestMoveMeters = 0,
+    [int]$TestPlayerXp = -1,
     [switch]$OpenFirstDoor,
+    [switch]$OpenFirstLocker,
+    [switch]$TestTutorialXpChain,
     [switch]$CleanCapture,
     [switch]$LipSyncCloseup,
     [switch]$CaptureAndExit
@@ -44,8 +47,18 @@ if ($TestMoveMeters -ne 0) {
     $env:NIKAMI_AURORA_TEST_MOVE_METERS = $TestMoveMeters.ToString(
         [Globalization.CultureInfo]::InvariantCulture)
 }
+if ($TestPlayerXp -ge 0) {
+    $env:NIKAMI_AURORA_TEST_PLAYER_XP = $TestPlayerXp.ToString(
+        [Globalization.CultureInfo]::InvariantCulture)
+}
 if ($OpenFirstDoor) {
     $env:NIKAMI_AURORA_TEST_OPEN_DOOR = "1"
+}
+if ($OpenFirstLocker) {
+    $env:NIKAMI_AURORA_TEST_OPEN_LOCKER = "1"
+}
+if ($TestTutorialXpChain) {
+    $env:NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN = "1"
 }
 if ($CleanCapture) {
     $env:NIKAMI_AURORA_CAPTURE_CLEAN = "1"
@@ -71,7 +84,10 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_EXIT -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_DIALOGUE_CHOICE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_MOVE_METERS -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_PLAYER_XP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_OPEN_DOOR -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_OPEN_LOCKER -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CLEAN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP -ErrorAction SilentlyContinue
 }

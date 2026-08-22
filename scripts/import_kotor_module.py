@@ -25,6 +25,7 @@ try:
     from pykotor.resource.formats.lyt import read_lyt
     from pykotor.resource.formats.mdl import read_mdl
     from pykotor.resource.formats.mdl.mdl_types import MDLControllerType
+    from pykotor.resource.formats.ncs import read_ncs
     from pykotor.resource.formats.tpc import TPCTextureFormat
     from pykotor.resource.formats.twoda import read_2da
     from pykotor.resource.generics.are import read_are
@@ -33,6 +34,7 @@ try:
     from pykotor.resource.generics.ifo import read_ifo
     from pykotor.resource.generics.utc import read_utc
     from pykotor.resource.generics.utd import read_utd
+    from pykotor.resource.generics.utp import read_utp
     from pykotor.resource.type import ResourceType
     from pykotor.tools import creature as creature_tools
     from pykotor.tools import door as door_tools
@@ -90,6 +92,17 @@ def find_module_resource(installation: Installation, module: str, restype: str) 
             if resource_type_name(resource) == restype:
                 return resource
     raise RuntimeError(f"{restype} resource was not found for module {module}")
+
+
+def find_named_module_resource(
+    installation: Installation, module: str, resname: str, restype: str
+) -> Any:
+    for filename in (f"{module}.rim", f"{module}_s.rim"):
+        for resource in installation.module_resources(filename):
+            if (resource_name(resource).lower() == resname.lower() and
+                    resource_type_name(resource) == restype):
+                return resource
+    raise RuntimeError(f"{resname}.{restype.lower()} was not found in module {module}")
 
 
 def vector3(value: Any) -> list[float]:
@@ -813,6 +826,144 @@ def export_opening_door(
     }
 
 
+def export_opening_locker(
+    installation: Installation,
+    module: str,
+    output_path: Path,
+    textures: TextureCache,
+) -> dict[str, Any]:
+    utp_resource = find_named_module_resource(
+        installation, module, "footlker001", "UTP")
+    utp_bytes = resource_data(utp_resource)
+    utp = read_utp(utp_bytes)
+    placeables_resource = installation.resource("placeables", ResourceType.TwoDA)
+    if placeables_resource is None:
+        raise RuntimeError("placeables.2da could not be resolved")
+    placeables = read_2da(resource_data(placeables_resource))
+    model_name = str(placeables.get_cell(int(utp.appearance_id), "modelname"))
+    if not model_name:
+        raise RuntimeError("Opening locker model could not be resolved")
+    scene = trimesh.Scene(base_frame="end_locker01")
+    _, model_record = add_actor_model(
+        scene, installation, model_name, textures, np.identity(4))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(patch_glb_texture_channels(scene.export(file_type="glb")))
+    return {
+        "glb": f"placeables/{output_path.name}",
+        "model": model_name,
+        "tag": str(utp.tag),
+        "onInventory": canonical_resref(utp.on_inventory),
+        "locked": bool(utp.locked),
+        "useable": bool(utp.useable),
+        "hasInventory": bool(utp.has_inventory),
+        "animationState": int(utp.animation_state),
+        "utpSha256": sha256_bytes(utp_bytes),
+        "modelSource": model_record,
+    }
+
+
+def ncs_signature(instruction: Any) -> tuple[str, tuple[Any, ...]]:
+    return instruction.ins_type.name, tuple(instruction.args)
+
+
+def find_instruction_sequence(
+    instructions: list[Any], expected: list[tuple[str, tuple[Any, ...]]]
+) -> int | None:
+    signatures = [ncs_signature(instruction) for instruction in instructions]
+    for start in range(len(signatures) - len(expected) + 1):
+        if signatures[start:start + len(expected)] == expected:
+            return start
+    return None
+
+
+def export_opening_script_contracts(installation: Installation, plot_table: Any) -> list[dict[str, Any]]:
+    plot_rows = {
+        str(plot_table.get_cell(index, "label")).lower(): int(plot_table.get_cell(index, "xp"))
+        for index in range(plot_table.get_height())
+    }
+    plot_label = "end_tutorial"
+    plot_base_xp = plot_rows[plot_label]
+
+    def load_script(resref: str) -> tuple[bytes, Any]:
+        resource = installation.resource(resref, ResourceType.NCS)
+        if resource is None:
+            raise RuntimeError(f"Opening NCS resource was not found: {resref}")
+        data = resource_data(resource)
+        return data, read_ncs(data)
+
+    door_data, door_ncs = load_script("k_pend_door1xp")
+    door_expected = [
+        ("ACTION", (548, 0)),
+        ("ACTION", (395, 1)),
+        ("CONSTI", (50,)),
+        ("EQUALII", ()),
+        ("JZ", ()),
+        ("CONSTI", (10,)),
+        ("CONSTS", (plot_label,)),
+        ("ACTION", (714, 2)),
+    ]
+    if find_instruction_sequence(door_ncs.instructions, door_expected) is None:
+        raise RuntimeError("k_pend_door1xp no longer matches the verified XP contract")
+
+    chest_data, chest_ncs = load_script("k_pend_chest02")
+    chest_expected = [
+        ("ACTION", (548, 0)),
+        ("ACTION", (395, 1)),
+        ("CONSTI", (0,)),
+        ("EQUALII", ()),
+        ("JZ", ()),
+        ("CONSTI", (5,)),
+        ("CONSTS", (plot_label,)),
+        ("ACTION", (714, 2)),
+    ]
+    if find_instruction_sequence(chest_ncs.instructions, chest_expected) is None:
+        raise RuntimeError("k_pend_chest02 no longer matches the verified XP contract")
+
+    dialogue_data, dialogue_ncs = load_script("k_pend_traskdl40")
+    dialogue_actions = [
+        tuple(instruction.args)
+        for instruction in dialogue_ncs.instructions
+        if instruction.ins_type.name == "ACTION"
+    ]
+    if dialogue_actions != [
+        (200, 2), (43, 1), (6, 2), (205, 0), (200, 2), (22, 3), (206, 0)
+    ]:
+        raise RuntimeError("k_pend_traskdl40 no longer matches the verified door sequence")
+
+    def xp_contract(resref: str, data: bytes, ncs: Any, required_xp: int,
+                    percentage: int) -> dict[str, Any]:
+        return {
+            "schema": "nikami-aurora-kotor-script-contract-v1",
+            "resref": resref,
+            "kind": "plot-xp-if-player-xp",
+            "sourceSha256": sha256_bytes(data),
+            "instructionCount": len(ncs.instructions),
+            "requiredPlayerXp": required_xp,
+            "plotLabel": plot_label,
+            "plotPercentage": percentage,
+            "plotBaseXp": plot_base_xp,
+            "awardedXp": plot_base_xp * percentage // 100,
+        }
+
+    return [
+        xp_contract("k_pend_chest02", chest_data, chest_ncs, 0, 5),
+        xp_contract("k_pend_door1xp", door_data, door_ncs, 50, 10),
+        {
+            "schema": "nikami-aurora-kotor-script-contract-v1",
+            "resref": "k_pend_traskdl40",
+            "kind": "dialogue-open-door",
+            "sourceSha256": sha256_bytes(dialogue_data),
+            "instructionCount": len(dialogue_ncs.instructions),
+            "doorTag": "end_door01",
+            "pauseConversation": True,
+            "moveTargetTag": "",
+            "moveRun": True,
+            "moveRange": 1.0,
+            "resumeConversation": True,
+        },
+    ]
+
+
 def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path) -> Path:
     executable = game_root / "swkotor.exe"
     if not executable.is_file():
@@ -834,6 +985,11 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         raise RuntimeError("camerastyle.2da could not be resolved")
     camera_styles = read_2da(resource_data(camera_style_resource))
     dialogue_view_angle = float(camera_styles.get_cell(int(are.camera_style), "viewangle"))
+    plot_resource = installation.resource("plot", ResourceType.TwoDA)
+    if plot_resource is None:
+        raise RuntimeError("plot.2da could not be resolved")
+    plot_table = read_2da(resource_data(plot_resource))
+    script_contracts = export_opening_script_contracts(installation, plot_table)
     area_resref = canonical_resref(ifo.area_name)
     lyt_resource = installation.resource(area_resref, ResourceType.LYT)
     if lyt_resource is None:
@@ -870,6 +1026,8 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
     )
     opening_door = export_opening_door(
         installation, output_root / "doors" / "end_door01.glb", textures)
+    opening_locker = export_opening_locker(
+        installation, module, output_root / "placeables" / "end_locker01.glb", textures)
     creatures = []
     for creature in git.creatures:
         record = {
@@ -892,6 +1050,17 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         if record["tag"].lower() == "end_door01":
             record.update(opening_door)
         doors.append(record)
+    placeables = []
+    for placeable in git.placeables:
+        record = {
+            "template": canonical_resref(placeable.resref),
+            "tag": str(placeable.tag),
+            "position": vector3(placeable.position),
+            "bearing": float(placeable.bearing),
+        }
+        if record["template"].lower() == "footlker001":
+            record.update(opening_locker)
+        placeables.append(record)
     waypoints = [
         {
             "template": canonical_resref(waypoint.resref),
@@ -951,8 +1120,10 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         "rooms": room_records,
         "creatures": creatures,
         "doors": doors,
+        "placeables": placeables,
         "waypoints": waypoints,
         "cameras": cameras,
+        "scriptContracts": script_contracts,
         "counts": {
             "rooms": len(room_records),
             "creatures": len(creatures),
