@@ -75,6 +75,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private float xrSpectatorFieldOfView = DefaultGameplayFieldOfView;
     private Transform3D xrGameplayOriginOffset = Transform3D.Identity;
     private bool xrGameplayOriginCalibrated;
+    private bool cleanExitRequested;
     private Node3D? playerModel;
     private AnimationPlayer? playerAnimationPlayer;
     private PlayerEquipmentVariantRecord? openingEquipmentVariant;
@@ -430,7 +431,7 @@ public sealed partial class KotorModuleBoot : Node3D
                      $"source={(xrSpectatorActive ? "xr-spectator" : "root")} " +
                      $"path={capturePath}");
             if (System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_EXIT") == "1")
-                GetTree().Quit(error == Error.Ok ? 0 : 1);
+                RequestCleanExit(error == Error.Ok ? 0 : 1);
         }
     }
 
@@ -571,6 +572,7 @@ public sealed partial class KotorModuleBoot : Node3D
             var baseOpaqueMaterials = 0;
             var lightmappedTransparentMaterials = 0;
             var baseTransparentMaterials = 0;
+            var sourceAdditiveMaterials = 0;
             foreach (var room in manifest.Rooms)
             {
                 if (string.IsNullOrWhiteSpace(room.Glb)) continue;
@@ -589,17 +591,20 @@ public sealed partial class KotorModuleBoot : Node3D
                 baseOpaqueMaterials += materialReport.BaseOpaque;
                 lightmappedTransparentMaterials += materialReport.LightmappedTransparent;
                 baseTransparentMaterials += materialReport.BaseTransparent;
+                sourceAdditiveMaterials += materialReport.SourceAdditive;
                 AddChild(imported);
                 loadedRooms++;
                 details.Text = $"Rooms {loadedRooms}/{manifest.Rooms.Count}  •  {room.Model}";
                 await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             }
-            if (lightmappedOpaqueMaterials == 0 || baseOpaqueMaterials == 0)
+            if (lightmappedOpaqueMaterials == 0 || baseOpaqueMaterials == 0 ||
+                sourceAdditiveMaterials == 0)
                 throw new InvalidDataException("Room opacity audit found no configured materials");
             GD.Print($"NIKAMI_AURORA_OPACITY status=pass policy=source-opaque " +
                       $"lightmapped={lightmappedOpaqueMaterials} base={baseOpaqueMaterials} " +
                       $"sourceTransparentLightmapped={lightmappedTransparentMaterials} " +
                       $"sourceTransparentBase={baseTransparentMaterials} " +
+                      $"sourceAdditive={sourceAdditiveMaterials} " +
                       "opaqueAlphaWrites=0 opaqueDepthWrite=opaque");
 
             var authoredLights = LoadAuthoredLights(manifest.Rooms, manifest.Lighting);
@@ -1127,6 +1132,21 @@ public sealed partial class KotorModuleBoot : Node3D
         return false;
     }
 
+    private async void RequestCleanExit(int exitCode)
+    {
+        if (cleanExitRequested) return;
+        cleanExitRequested = true;
+        if (xrActive)
+        {
+            await ToSignal(
+                RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+            xrActive = false;
+            GD.Print("NIKAMI_AURORA_OPENXR status=shutdown-requested " +
+                     "boundary=frame-post-draw");
+        }
+        GetTree().Quit(exitCode);
+    }
+
     private void TryInitializeOpenXR()
     {
         if (System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_OPENXR") != "1")
@@ -1142,7 +1162,7 @@ public sealed partial class KotorModuleBoot : Node3D
                     "NIKAMI_AURORA_OPENXR_EXPECT_ACTIVE") == "1")
             {
                 GD.PushError("NIKAMI_AURORA_OPENXR status=fail expected=active");
-                GetTree().Quit(2);
+                RequestCleanExit(2);
             }
             return;
         }
@@ -2093,7 +2113,7 @@ public sealed partial class KotorModuleBoot : Node3D
                 currentDialogueNodeKey = "showcase:complete";
                 if (System.Environment.GetEnvironmentVariable(
                         "NIKAMI_AURORA_SHOWCASE_EXIT_ON_COMPLETE") == "1")
-                    Callable.From(() => GetTree().Quit(0)).CallDeferred();
+                    Callable.From(() => RequestCleanExit(0)).CallDeferred();
                 break;
             case ShowcasePhase.Disabled:
             case ShowcasePhase.Complete:
@@ -2990,15 +3010,21 @@ public sealed partial class KotorModuleBoot : Node3D
         var baseOpaque = 0;
         var lightmappedTransparent = 0;
         var baseTransparent = 0;
+        var sourceAdditiveCount = 0;
         if (node is MeshInstance3D instance && instance.Mesh is not null)
         {
             for (var surface = 0; surface < instance.Mesh.GetSurfaceCount(); surface++)
             {
                 if (instance.GetActiveMaterial(surface) is not BaseMaterial3D source) continue;
+                var sourceAdditive = source.ResourceName.ToString().EndsWith(
+                    "__aurora_additive", StringComparison.OrdinalIgnoreCase);
                 var sourceTransparent =
                     source.Transparency != BaseMaterial3D.TransparencyEnum.Disabled;
                 if (source.AlbedoTexture is not null && source.EmissionTexture is not null)
                 {
+                    if (sourceAdditive)
+                        throw new InvalidDataException(
+                            "Additive lightmapped room material is unsupported");
                     var lightmapped = new ShaderMaterial
                     {
                         Shader = sourceTransparent
@@ -3021,6 +3047,9 @@ public sealed partial class KotorModuleBoot : Node3D
                 material.Transparency = sourceTransparent
                     ? BaseMaterial3D.TransparencyEnum.Alpha
                     : BaseMaterial3D.TransparencyEnum.Disabled;
+                material.BlendMode = sourceAdditive
+                    ? BaseMaterial3D.BlendModeEnum.Add
+                    : BaseMaterial3D.BlendModeEnum.Mix;
                 material.DepthDrawMode = sourceTransparent
                     ? BaseMaterial3D.DepthDrawModeEnum.Disabled
                     : BaseMaterial3D.DepthDrawModeEnum.OpaqueOnly;
@@ -3036,6 +3065,8 @@ public sealed partial class KotorModuleBoot : Node3D
                     baseTransparent++;
                 else
                     baseOpaque++;
+                if (sourceAdditive)
+                    sourceAdditiveCount++;
             }
         }
         foreach (var child in node.GetChildren())
@@ -3045,9 +3076,11 @@ public sealed partial class KotorModuleBoot : Node3D
             baseOpaque += childReport.BaseOpaque;
             lightmappedTransparent += childReport.LightmappedTransparent;
             baseTransparent += childReport.BaseTransparent;
+            sourceAdditiveCount += childReport.SourceAdditive;
         }
         return new StaticMaterialReport(
-            lightmappedOpaque, baseOpaque, lightmappedTransparent, baseTransparent);
+            lightmappedOpaque, baseOpaque, lightmappedTransparent, baseTransparent,
+            sourceAdditiveCount);
     }
 
     private void BuildNavigation(IEnumerable<RoomRecord> rooms)
@@ -3588,7 +3621,8 @@ public sealed partial class KotorModuleBoot : Node3D
         int LightmappedOpaque,
         int BaseOpaque,
         int LightmappedTransparent,
-        int BaseTransparent);
+        int BaseTransparent,
+        int SourceAdditive);
     private sealed class InteractiveDoor(
         string instanceId,
         DoorRecord source,

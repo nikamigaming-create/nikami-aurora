@@ -180,6 +180,7 @@ class TextureCache:
         self.installation = installation
         self.images: dict[str, Image.Image | None] = {}
         self.alpha_tests: dict[str, float] = {}
+        self.txi: dict[str, str] = {}
 
     def image(self, name: str) -> Image.Image | None:
         key = name.strip().lower()
@@ -192,8 +193,10 @@ class TextureCache:
         if texture is None:
             self.images[key] = None
             self.alpha_tests[key] = 1.0
+            self.txi[key] = ""
             return None
         self.alpha_tests[key] = float(texture.alpha_test)
+        self.txi[key] = str(texture.txi or "")
         texture.convert(TPCTextureFormat.RGBA)
         mipmap = texture.get()
         image = Image.frombytes("RGBA", (mipmap.width, mipmap.height), bytes(mipmap.data))
@@ -207,7 +210,18 @@ class TextureCache:
             return False
         if key not in self.images:
             self.image(name)
-        return self.alpha_tests.get(key, 1.0) < 0.5
+        return self.alpha_tests.get(key, 1.0) < 0.5 or self.is_source_additive(name)
+
+    def is_source_additive(self, name: str) -> bool:
+        key = name.strip().lower()
+        if not key or key == "null":
+            return False
+        if key not in self.images:
+            self.image(name)
+        directives = {
+            line.strip().lower() for line in self.txi.get(key, "").splitlines()
+        }
+        return "blending 1" in directives or "blending additive" in directives
 
 
 def export_effect_texture(
@@ -328,6 +342,7 @@ def material_for(mesh: Any, textures: TextureCache, override_texture: str | None
     image = textures.image(texture_name)
     lightmap_name = str(mesh.texture_2 or "").strip()
     lightmap = textures.image(lightmap_name)
+    source_additive = image is not None and textures.is_source_additive(texture_name)
     source_transparent = image is not None and textures.is_source_transparent(texture_name)
     diffuse = mesh.diffuse
     color = [
@@ -342,7 +357,8 @@ def material_for(mesh: Any, textures: TextureCache, override_texture: str | None
         # it by a dark pre-lighting material factor.
         color = [255, 255, 255, 255]
     return trimesh.visual.material.PBRMaterial(
-        name=texture_name or "untextured",
+        name=(texture_name + "__aurora_additive") if source_additive else
+        (texture_name or "untextured"),
         baseColorTexture=image,
         baseColorFactor=color,
         emissiveTexture=lightmap,

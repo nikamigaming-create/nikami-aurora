@@ -33,4 +33,5 @@ openxr/default_action_map="res://openxr_action_map.tres"
 openxr/startup_alert=false
 openxr/extensions/render_model=true
 openxr/extensions/meta/render_model=true
+openxr/extensions/spatial_entity/enabled=false
 shaders/enabled=true

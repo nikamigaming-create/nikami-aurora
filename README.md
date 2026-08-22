@@ -51,6 +51,11 @@ Source-opaque room furniture now stays in Godot's opaque depth-writing path.
 The lightmap shader no longer turns generic diffuse alpha into transparency, so
 the opening sofas and bunks correctly occlude the floor behind them.
 
+Explicit source TXI additive overlays now use a separate non-depth-writing
+material path. This makes black `LHR_dust01` window texels non-occluding and
+restores the owned `LSP_stars02` exterior sphere without weakening furniture
+opacity or treating arbitrary texture alpha as transparency.
+
 Crossing the authored first-corridor trigger now sets profile global
 `END_TRASK_DLG=10`, signals Trask event 50, and starts the installed Carth radio
 transmission at DLG starter 8. Carth is source-assembled and standing under the
