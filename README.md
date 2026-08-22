@@ -51,6 +51,12 @@ Source-opaque room furniture now stays in Godot's opaque depth-writing path.
 The lightmap shader no longer turns generic diffuse alpha into transparency, so
 the opening sofas and bunks correctly occlude the floor behind them.
 
+Crossing the authored first-corridor trigger now sets profile global
+`END_TRASK_DLG=10`, signals Trask event 50, and starts the installed Carth radio
+transmission at DLG starter 8. Carth is source-assembled and standing under the
+retail-matched static camera; desktop cinematics use an independent camera that
+the gameplay SpringArm cannot overwrite.
+
 XR controller presentation follows a three-level provider chain: portable
 OpenXR runtime models, dynamically available Meta FB models, then tracked
 procedural fallbacks. The same primary-stick and face-button actions feed

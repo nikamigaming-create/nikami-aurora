@@ -207,7 +207,26 @@ internal static class Program
                 MoveTargetTag: "",
                 MoveRun: true,
                 MoveRange: 1.0f,
-                ResumeConversation: true)
+                ResumeConversation: true),
+            new KotorScriptContract(
+                "k_pend_trig02",
+                KotorScriptContractKind.TriggerDialogue,
+                "99C7AF5868DAEADD96C6027BF7912B6904855990308BAAFFFD6DFBF732AB67BA",
+                991,
+                TriggerDialogue: new KotorTriggerDialogueBehavior(
+                    "end_trig02",
+                    "END_TRASK_DLG",
+                    10,
+                    "end_trask",
+                    50,
+                    0.5f,
+                    0.1f,
+                    "end_trask01",
+                    8,
+                    "28CC82593A0133962B6D2AEC0BA1C1C6B0182918756ECDE533B9112D23F3029A",
+                    1301,
+                    "FCAA7779E5DA5D86C570ECDF6EB0AE488B571CA308816A955D288E5A659F38EB",
+                    763))
         };
         const string baseItemsSha256 =
             "E9D031FAF0A5D3D4E9CCF33AEE5233FDA8F781A58B30FA722E7CF12B78C85C95";
@@ -239,7 +258,17 @@ internal static class Program
                     new KotorItemStack(medpac, 2, false, false),
                     new KotorItemStack(clothing, 1, false, false),
                     new KotorItemStack(shortSword, 1, false, false)
-                ])]);
+                ])],
+            triggers: [new KotorTriggerDefinition(
+                "trigger:0000",
+                "end_trig02",
+                [
+                    new System.Numerics.Vector3(4, -1, 0),
+                    new System.Numerics.Vector3(5, -1, 0),
+                    new System.Numerics.Vector3(5, 1, 0),
+                    new System.Numerics.Vector3(4, 1, 0)
+                ],
+                "k_pend_trig02")]);
 
         var locker = simulation.UsePlaceable("PLACEABLE:0000");
         Expect(locker.Before.PlayerExperience == 0 && locker.After.PlayerExperience == 50,
@@ -299,6 +328,26 @@ internal static class Program
         Expect(repeatedEquip.Events.Count == 0 &&
                repeatedEquip.After.Equipment.Count == 2,
             "repeated equipment transaction was not idempotent");
+
+        var corridorTrigger = simulation.UpdateTriggers(
+            new System.Numerics.Vector3(0, 0, 0),
+            new System.Numerics.Vector3(6, 0, 0));
+        Expect(corridorTrigger.After.TriggerStates["trigger:0000"],
+            "profile did not persist the crossed corridor trigger");
+        Expect(corridorTrigger.After.GlobalNumbers["END_TRASK_DLG"] == 10,
+            "corridor trigger did not set its validated dialogue global");
+        var dialogueRequest = corridorTrigger.Events.OfType<KotorDialogueRequested>().Single();
+        Expect(dialogueRequest.ActorTag == "end_trask" &&
+               dialogueRequest.Conversation == "end_trask01" &&
+               dialogueRequest.StarterIndex == 8 && dialogueRequest.UserEvent == 50 &&
+               Math.Abs(dialogueRequest.InputLockSeconds - 0.5f) < 0.00001f &&
+               Math.Abs(dialogueRequest.DelaySeconds - 0.1f) < 0.00001f,
+            "corridor trigger dialogue request drifted from the bytecode contract");
+        var repeatedTrigger = simulation.UpdateTriggers(
+            new System.Numerics.Vector3(6, 0, 0),
+            new System.Numerics.Vector3(4.5f, 0, 0));
+        Expect(repeatedTrigger.Events.Count == 0,
+            "one-shot corridor trigger fired more than once");
 
         var dialogue = simulation.ExecuteScript("k_pend_traskdl40");
         Expect(dialogue.Before.PlayerExperience == 50 && dialogue.After.PlayerExperience == 150,

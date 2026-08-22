@@ -66,3 +66,8 @@ are `probable` until compared against a hash-bound retail frame/audio trace.
 The verified opening DLG has zero explicit animation records, so default talk is
 the source-backed behavior here. Gesture-ID mapping in other conversations and
 script-forced multi-speaker interruption remain pending experiments.
+
+The first-corridor Carth transmission now adds a second confirmed participant:
+source tag `Carth` resolves an assembled six-skin actor, `tlknorm`, the installed
+45,144-byte voice, and a 58-frame LIP track. Recorded retail comparison confirms
+Carth stands for this line and corroborates the static camera composition.

@@ -12,6 +12,7 @@ param(
     [switch]$OpenFirstLocker,
     [switch]$EquipOpeningGear,
     [switch]$TestTutorialXpChain,
+    [switch]$TestFirstCorridorTrigger,
     [switch]$SkipOpeningDialogue,
     [switch]$OpenXR,
     [switch]$CleanCapture,
@@ -69,6 +70,10 @@ if ($EquipOpeningGear) {
 if ($TestTutorialXpChain) {
     $env:NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN = "1"
 }
+if ($TestFirstCorridorTrigger) {
+    $env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRIGGER = "1"
+    $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
+}
 if (-not [string]::IsNullOrWhiteSpace($TestPlayerAnimation)) {
     $env:NIKAMI_AURORA_TEST_PLAYER_ANIMATION = $TestPlayerAnimation
 }
@@ -118,6 +123,7 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_TEST_OPEN_LOCKER -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_EQUIP_OPENING_GEAR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRIGGER -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_OPENXR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CLEAN -ErrorAction SilentlyContinue
