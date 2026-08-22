@@ -13,7 +13,7 @@ Profiles.Kotor        Profiles.DragonAgeOrigins
         ^                         ^
         +------------+------------+
                      |
-             Runtime.Godot (future)
+               Runtime.Godot
 ```
 
 - `Core` depends only on the .NET base class library.

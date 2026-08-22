@@ -39,6 +39,8 @@ claims.
 
 - Complete the Endar Spire opening with evidence-backed gameplay behavior.
 - Add desktop, controller, and OpenXR acceptance paths.
+- Ship a self-contained launcher whose only required user input is the legally
+  installed game folder; importer tooling remains internal to the release.
 
 ## Gate 6 — dual-profile proof
 

@@ -5,6 +5,8 @@ build-time or runtime dependencies under their own licenses:
 
 - Godot Engine and Godot .NET SDK — MIT License.
 - PyKotor — GNU Lesser General Public License v3.0 or later.
+- MDLOps — GNU General Public License v3.0 or later; invoked as an optional,
+  machine-local model decompiler and never linked or vendored.
 - trimesh — MIT License.
 - NumPy — BSD 3-Clause License.
 - Pillow — HPND License.

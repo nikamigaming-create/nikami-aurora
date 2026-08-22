@@ -9,10 +9,12 @@ The project is at early vertical-slice stage. It can identify a target
 installation, validate profile-specific source markers, produce a SHA-256-bound
 target manifest, import the real KOTOR Endar Spire room geometry and textures,
 load that owned-data bundle into Godot, assemble Trask from his installed body,
-head, texture, and weapon resources, and advance through the first authored
-dialogue choices. Movement is constrained to the installed room walkmeshes and
-the first authored lockdown door is materialized and interactive. Full combat
-and script execution remain active milestones.
+head, texture, weapon, skin weights, and inherited animations, and advance
+through the first authored dialogue choices. Authored lightmaps, area ambient
+color, and room light nodes drive the opening presentation. Movement is
+constrained to the installed room walkmeshes and the first authored lockdown
+door is materialized and interactive. Full combat and script execution remain
+active milestones.
 
 ## Why a new runtime
 
@@ -24,12 +26,27 @@ Nikami Aurora gives that work a clean multi-game architecture:
 - `Core` owns engine-independent contracts and deterministic state.
 - `Profiles` own each game's formats, resource precedence, script ABI, rules,
   world assembly, and presentation adapters.
-- A future Godot runtime will own rendering, input, audio, UI, and OpenXR.
+- The Godot runtime owns rendering, input, audio, UI, and future OpenXR paths.
 - Retail hooks remain evidence oracles; implementation crosses the boundary
   only through documented behavioral contracts and synthetic tests.
 
 No proprietary game assets, extracted resources, or executables belong in
 this repository.
+
+## Release experience
+
+The end-user contract is deliberately small:
+
+1. Download one Nikami Aurora release.
+2. Choose a supported game and point Aurora at its legally installed folder.
+3. Aurora validates that installation and creates a machine-local cache.
+4. Press Play; later launches reuse or incrementally refresh that cache.
+
+Python, MDLOps, the Godot editor, repository checkout, and command-line import
+steps are development dependencies. They must be bundled or replaced inside a
+release and must not become end-user setup requirements. Game assets are never
+included in Nikami Aurora releases or uploaded from the user's machine. See
+[`docs/RELEASE-UX.md`](docs/RELEASE-UX.md) for the packaging gate.
 
 ## Quick start
 
@@ -69,6 +86,7 @@ ignored local bundle from a legally installed KOTOR copy:
 
 ```powershell
 py -3.12 -m pip install -r requirements-import.txt
+./scripts/Bootstrap-MDLOps.ps1
 ./scripts/Import-KotorModule.ps1 `
   -GameRoot 'D:\SteamLibrary\steamapps\common\swkotor'
 ```
@@ -80,9 +98,9 @@ Launch the new Godot runtime:
 ```
 
 The importer writes only to `local/kotor/end_m01aa`, which is excluded from
-Git. The runtime loads 15 authored Endar Spire room records, materializes Trask,
-and exposes the remaining exact creature placements as identified debug markers
-while broader creature model assembly is implemented.
+Git. The runtime loads 15 authored Endar Spire room records, materializes and
+animates Trask, and exposes the remaining exact creature placements as
+identified debug markers while broader creature model assembly is implemented.
 
 ## Repository map
 

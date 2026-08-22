@@ -7,6 +7,8 @@ param(
 
     [string]$OutputRoot,
 
+    [string]$MdlOps,
+
     [string]$Python = "py"
 )
 
@@ -18,6 +20,12 @@ if ([string]::IsNullOrWhiteSpace($GameRoot)) {
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repo "local\kotor\$Module"
 }
+if ([string]::IsNullOrWhiteSpace($MdlOps)) {
+    $MdlOps = Join-Path $repo "local\tools\mdlops\mdlops.exe"
+}
+if (-not (Test-Path -LiteralPath $MdlOps -PathType Leaf)) {
+    throw "MDLOps not found: $MdlOps. Run scripts/Bootstrap-MDLOps.ps1 first."
+}
 
 $arguments = @()
 if ((Split-Path -Leaf $Python) -ieq "py" -or (Split-Path -Leaf $Python) -ieq "py.exe") {
@@ -27,7 +35,8 @@ $arguments += @(
     (Join-Path $PSScriptRoot "import_kotor_module.py"),
     "--game-root", $GameRoot,
     "--module", $Module,
-    "--output", $OutputRoot
+    "--output", $OutputRoot,
+    "--mdlops", $MdlOps
 )
 
 & $Python @arguments

@@ -13,6 +13,7 @@ retail executable.
 - Layout: 15 authored room records, including one walkmesh-only connector.
 - Godot geometry: 14 visual room models, 78,346 triangles.
 - Gameplay placements: 26 creatures, 15 doors, and 58 waypoints.
+- Lighting: installed area ambient color and 134 room-model light records.
 - Navigation: 540 walkable source triangles with an accepted grounded movement
   proof from the authored entry point.
 
@@ -23,6 +24,8 @@ the installed rules tables to assemble:
 - body texture `N_RepSold01`;
 - unique head `N_traskH`;
 - right-hand model `w_BlstrPstl_001`;
+- five source-derived glTF skins across 13 rendered meshes;
+- inherited `pause1`, `tlknorm`, and `walk` clips from `S_Male02`;
 - dialogue graph `end_trask01`.
 
 The Godot dialogue view starts at the installed opening branch and displays the
@@ -43,6 +46,19 @@ response:
 ./scripts/Start-KotorGodot.ps1 `
   -CapturePath 'artifacts/kotor-opening.png' `
   -DialogueChoice 0 `
+  -OpenFirstDoor `
+  -CaptureAndExit
+```
+
+For a local visual-QA frame without the proof overlay:
+
+```powershell
+./scripts/Start-KotorGodot.ps1 `
+  -CapturePath 'artifacts/kotor-trask-qa.png' `
+  -DialogueChoice 0 `
+  -OpenFirstDoor `
+  -TestMoveMeters 6.25 `
+  -CleanCapture `
   -CaptureAndExit
 ```
 
@@ -53,8 +69,11 @@ Confirmed in the new runtime:
 - source-bound module import;
 - real room geometry and diffuse textures;
 - authored UV2 lightmaps through the Odyssey room shader;
+- source area ambient color and room-model point-light records;
 - exact authored room and object placement data;
-- assembled static Trask model;
+- assembled, skinned Trask model with separate hook-bound head skin;
+- inherited idle, talk, and walk animation tracks;
+- weapon attachment following the animated right hand;
 - installed dialogue graph, local TLK text, and selectable replies;
 - deterministic dialogue advancement.
 - walkmesh-constrained player movement;
@@ -63,8 +82,8 @@ Confirmed in the new runtime:
 
 Not yet implemented:
 
-- final retail lighting gamma/gain parity;
-- skeletal animation and lipsync;
+- final renderer transfer-function and light-attenuation parity;
+- lipsync and per-line gesture selection;
 - voice and area audio playback;
 - player character creation/model assembly;
 - NCS condition/action execution and plot state;

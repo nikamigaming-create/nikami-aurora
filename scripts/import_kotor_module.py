@@ -8,9 +8,12 @@ import hashlib
 import json
 import math
 import struct
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+from kotor_actor_gltf import export_actor
 
 try:
     import numpy as np
@@ -19,8 +22,10 @@ try:
     from pykotor.extract.installation import Installation, SearchLocation
     from pykotor.resource.formats.lyt import read_lyt
     from pykotor.resource.formats.mdl import read_mdl
+    from pykotor.resource.formats.mdl.mdl_types import MDLControllerType
     from pykotor.resource.formats.tpc import TPCTextureFormat
     from pykotor.resource.formats.twoda import read_2da
+    from pykotor.resource.generics.are import read_are
     from pykotor.resource.generics.dlg import DLGEntry, read_dlg
     from pykotor.resource.generics.git import read_git
     from pykotor.resource.generics.ifo import read_ifo
@@ -87,6 +92,21 @@ def find_module_resource(installation: Installation, module: str, restype: str) 
 
 def vector3(value: Any) -> list[float]:
     return [float(value.x), float(value.y), float(value.z)]
+
+
+def color3(value: Any) -> list[float]:
+    return [float(value.r), float(value.g), float(value.b)]
+
+
+def controller_value(node: Any, controller_type: MDLControllerType,
+                     fallback: list[float]) -> list[float]:
+    """Return the authored value at time zero for a scalar/vector controller."""
+    for controller in node.controllers:
+        if controller.controller_type == controller_type and controller.rows:
+            data = [float(item) for item in controller.rows[0].data]
+            if len(data) >= len(fallback):
+                return data[:len(fallback)]
+    return fallback
 
 
 def quaternion_matrix(node: Any) -> np.ndarray:
@@ -213,11 +233,29 @@ def export_room(
     triangle_count = 0
     diffuse_textures: set[str] = set()
     lightmaps: set[str] = set()
+    lights: list[dict[str, Any]] = []
     walkmesh_triangles: list[list[list[float]]] = []
 
     def visit(node: Any, parent_transform: np.ndarray) -> None:
         nonlocal mesh_count, vertex_count, triangle_count
         world_transform = parent_transform @ quaternion_matrix(node)
+        if node.light is not None:
+            color = controller_value(node, MDLControllerType.COLOR, color3(node.light.color))
+            radius = controller_value(node, MDLControllerType.RADIUS, [float(node.light.radius)])[0]
+            multiplier = controller_value(
+                node, MDLControllerType.MULTIPLIER, [float(node.light.multiplier)])[0]
+            lights.append({
+                "name": str(node.name),
+                "position": [float(item) for item in world_transform[:3, 3]],
+                "color": color,
+                "radius": radius,
+                "multiplier": multiplier,
+                "ambientOnly": bool(node.light.ambient_only),
+                "dynamicType": int(node.light.dynamic_type),
+                "affectDynamic": bool(node.light.affect_dynamic),
+                "shadow": bool(node.light.shadow),
+                "priority": int(node.light.light_priority),
+            })
         mesh = node.mesh
         node_name = str(node.name or "").lower()
         collision_only = node.aabb is not None or node_name.startswith("walkmesh")
@@ -309,6 +347,7 @@ def export_room(
         "triangleCount": triangle_count,
         "diffuseTextures": sorted(diffuse_textures, key=str.lower),
         "lightmaps": sorted(lightmaps, key=str.lower),
+        "lights": lights,
         "walkmeshTriangles": walkmesh_triangles,
     }
     if mesh_count > 0:
@@ -330,6 +369,56 @@ def find_node_transform(model: Any, target_name: str) -> np.ndarray | None:
         return None
 
     return visit(model.root, np.identity(4, dtype=np.float64))
+
+
+def load_model_pair(installation: Installation, model_name: str) -> tuple[Any, bytes, bytes]:
+    mdl_resource = installation.resource(model_name, ResourceType.MDL)
+    mdx_resource = installation.resource(model_name, ResourceType.MDX)
+    if mdl_resource is None or mdx_resource is None:
+        raise RuntimeError(f"Missing MDL/MDX pair for {model_name}")
+    mdl_bytes = resource_data(mdl_resource)
+    mdx_bytes = resource_data(mdx_resource)
+    return read_mdl(mdl_bytes, source_ext=mdx_bytes), mdl_bytes, mdx_bytes
+
+
+def load_animation_supermodel(
+    installation: Installation,
+    mdlops: Path,
+    cache_root: Path,
+    model_name: str = "S_Male02",
+) -> tuple[Any, str]:
+    if not mdlops.is_file():
+        raise RuntimeError(
+            f"MDLOps was not found: {mdlops}. Run scripts/Bootstrap-MDLOps.ps1 first.")
+    mdl_resource = installation.resource(model_name, ResourceType.MDL)
+    mdx_resource = installation.resource(model_name, ResourceType.MDX)
+    if mdl_resource is None or mdx_resource is None:
+        raise RuntimeError(f"Animation supermodel pair was not found: {model_name}")
+    mdl_bytes = resource_data(mdl_resource)
+    mdx_bytes = resource_data(mdx_resource)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    stem = model_name.lower()
+    mdl_path = cache_root / f"{stem}.mdl"
+    mdx_path = cache_root / f"{stem}.mdx"
+    ascii_path = cache_root / f"{stem}.mdl.ascii"
+    source_hash = sha256_bytes(mdl_bytes + mdx_bytes)
+    stamp_path = cache_root / f"{stem}.sha256"
+    cached_hash = stamp_path.read_text(encoding="ascii").strip() if stamp_path.is_file() else ""
+    if not ascii_path.is_file() or cached_hash != source_hash:
+        mdl_path.write_bytes(mdl_bytes)
+        mdx_path.write_bytes(mdx_bytes)
+        completed = subprocess.run(
+            [str(mdlops), "--use-ascii-extension", str(mdl_path)],
+            cwd=cache_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0 or not ascii_path.is_file():
+            raise RuntimeError(
+                f"MDLOps failed for {model_name}: {completed.stdout}\n{completed.stderr}")
+        stamp_path.write_text(source_hash + "\n", encoding="ascii")
+    return read_mdl(ascii_path), source_hash
 
 
 def add_actor_model(
@@ -414,6 +503,8 @@ def export_trask_actor(
     installation: Installation,
     output_path: Path,
     textures: TextureCache,
+    mdlops: Path,
+    animation_cache: Path,
 ) -> dict[str, Any]:
     utc_resource = installation.resource("end_trask", ResourceType.UTC)
     if utc_resource is None:
@@ -440,30 +531,57 @@ def export_trask_actor(
     if not body_model:
         raise RuntimeError("Trask body model could not be resolved")
 
-    scene = trimesh.Scene(base_frame="end_trask")
-    body, body_record = add_actor_model(
-        scene, installation, body_model, textures, np.identity(4), body_texture)
-    model_records = [body_record]
-    head_hook = find_node_transform(body, "headhook")
-    if head_model and head_hook is not None:
-        _, record = add_actor_model(scene, installation, head_model, textures, head_hook, head_texture)
-        model_records.append(record)
-    right_hook = find_node_transform(body, "rhand")
-    if right_model and right_hook is not None:
-        _, record = add_actor_model(scene, installation, right_model, textures, right_hook)
-        model_records.append(record)
-    left_hook = find_node_transform(body, "lhand")
-    if left_model and left_hook is not None:
-        _, record = add_actor_model(scene, installation, left_model, textures, left_hook)
-        model_records.append(record)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(patch_glb_texture_channels(scene.export(file_type="glb")))
+    body, body_mdl, body_mdx = load_model_pair(installation, body_model)
+    head = head_mdl = head_mdx = None
+    if head_model:
+        head, head_mdl, head_mdx = load_model_pair(installation, head_model)
+    right = right_mdl = right_mdx = None
+    if right_model:
+        right, right_mdl, right_mdx = load_model_pair(installation, right_model)
+    animation_model, animation_source_hash = load_animation_supermodel(
+        installation, mdlops, animation_cache)
+    animation_report = export_actor(
+        output_path,
+        body_model=body,
+        body_name=body_model,
+        body_texture=body_texture,
+        head_model=head,
+        head_name=head_model,
+        head_texture=head_texture,
+        weapon_model=right,
+        weapon_name=right_model,
+        animation_model=animation_model,
+        animation_names=("pause1", "tlknorm", "walk"),
+        material_factory=lambda mesh, override: material_for(mesh, textures, override),
+    )
+    model_records = [{
+        "model": body_model,
+        "overrideTexture": body_texture,
+        "mdlSha256": sha256_bytes(body_mdl),
+        "mdxSha256": sha256_bytes(body_mdx),
+    }]
+    if head_model and head_mdl is not None and head_mdx is not None:
+        model_records.append({
+            "model": head_model,
+            "overrideTexture": head_texture,
+            "mdlSha256": sha256_bytes(head_mdl),
+            "mdxSha256": sha256_bytes(head_mdx),
+        })
+    if right_model and right_mdl is not None and right_mdx is not None:
+        model_records.append({
+            "model": right_model,
+            "overrideTexture": None,
+            "mdlSha256": sha256_bytes(right_mdl),
+            "mdxSha256": sha256_bytes(right_mdx),
+        })
     return {
         "glb": f"actors/{output_path.name}",
         "conversation": canonical_resref(utc.conversation),
         "utcSha256": sha256_bytes(utc_bytes),
         "models": model_records,
+        "animationSource": "S_Male02",
+        "animationSourceSha256": animation_source_hash,
+        "animation": animation_report,
     }
 
 
@@ -576,7 +694,7 @@ def export_opening_door(
     }
 
 
-def import_module(game_root: Path, module: str, output_root: Path) -> Path:
+def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path) -> Path:
     executable = game_root / "swkotor.exe"
     if not executable.is_file():
         raise RuntimeError(f"KOTOR executable not found: {executable}")
@@ -588,8 +706,10 @@ def import_module(game_root: Path, module: str, output_root: Path) -> Path:
     installation = Installation(game_root)
     ifo_resource = find_module_resource(installation, module, "IFO")
     git_resource = find_module_resource(installation, module, "GIT")
+    are_resource = find_module_resource(installation, module, "ARE")
     ifo = read_ifo(resource_data(ifo_resource))
     git = read_git(resource_data(git_resource))
+    are = read_are(resource_data(are_resource))
     area_resref = canonical_resref(ifo.area_name)
     lyt_resource = installation.resource(area_resref, ResourceType.LYT)
     if lyt_resource is None:
@@ -610,7 +730,13 @@ def import_module(game_root: Path, module: str, output_root: Path) -> Path:
         record["position"] = vector3(room.position)
         room_records.append(record)
 
-    trask_actor = export_trask_actor(installation, output_root / "actors" / "end_trask.glb", textures)
+    trask_actor = export_trask_actor(
+        installation,
+        output_root / "actors" / "end_trask.glb",
+        textures,
+        mdlops,
+        output_root / "_cache" / "animations",
+    )
     trask_actor["dialogue"] = export_dialogue(
         installation,
         trask_actor["conversation"],
@@ -667,6 +793,12 @@ def import_module(game_root: Path, module: str, output_root: Path) -> Path:
             "position": vector3(ifo.entry_position),
             "directionRadians": float(ifo.entry_direction),
         },
+        "lighting": {
+            "dynamicAmbient": color3(are.dynamic_light),
+            "shadows": bool(are.shadows),
+            "shadowOpacity": int(are.shadow_opacity),
+            "sourceSha256": sha256_bytes(resource_data(are_resource)),
+        },
         "rooms": room_records,
         "creatures": creatures,
         "doors": doors,
@@ -680,11 +812,12 @@ def import_module(game_root: Path, module: str, output_root: Path) -> Path:
             "placeables": len(git.placeables),
             "triggers": len(git.triggers),
             "walkmeshTriangles": sum(len(room["walkmeshTriangles"]) for room in room_records),
+            "authoredLights": sum(len(room["lights"]) for room in room_records),
         },
         "limitations": [
-            "Diffuse textures are embedded; authored lightmaps are inventoried but not yet applied.",
-            "Creature markers represent exact authored placements; creature models are not yet materialized.",
-            "Dialogue, NCS execution, doors, collision, audio, and cinematics are not yet executed.",
+            "Only Trask and the opening door are materialized; other creature and door records remain placements.",
+            "Dialogue graph traversal is partial; scripts, audio, lip sync, and cinematic camera execution remain.",
+            "Room lightmaps and light nodes are source-authored; renderer transfer-function parity remains under test.",
         ],
     }
     output_root.mkdir(parents=True, exist_ok=True)
@@ -703,13 +836,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--game-root", type=Path, required=True)
     parser.add_argument("--module", default="end_m01aa")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--mdlops", type=Path, required=True)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        import_module(args.game_root.resolve(), args.module.lower(), args.output.resolve())
+        import_module(
+            args.game_root.resolve(), args.module.lower(), args.output.resolve(), args.mdlops.resolve())
     except Exception as exc:
         print(f"KOTOR_IMPORT_FAIL: {exc}", file=sys.stderr)
         return 1

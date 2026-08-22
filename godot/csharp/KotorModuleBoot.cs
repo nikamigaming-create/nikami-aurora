@@ -13,11 +13,10 @@ public sealed partial class KotorModuleBoot : Node3D
             render_mode unshaded;
             uniform sampler2D albedo_texture : source_color, filter_linear_mipmap_anisotropic;
             uniform sampler2D lightmap_texture : source_color, filter_linear_mipmap_anisotropic;
-            uniform float lightmap_gain = 2.0;
             void fragment() {
                 vec4 base = texture(albedo_texture, UV);
                 vec3 lightmap = texture(lightmap_texture, UV2).rgb;
-                ALBEDO = base.rgb * lightmap * lightmap_gain;
+                ALBEDO = base.rgb * min(vec3(1.0), lightmap);
                 ALPHA = base.a;
                 if (ALPHA < 0.05) discard;
             }
@@ -25,6 +24,8 @@ public sealed partial class KotorModuleBoot : Node3D
     };
     private CharacterBody3D playerBody = null!;
     private Camera3D camera = null!;
+    private Godot.Environment runtimeEnvironment = null!;
+    private CanvasLayer overlayLayer = null!;
     private Label status = null!;
     private Label details = null!;
     private ColorRect loadingBackdrop = null!;
@@ -36,6 +37,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private readonly List<Button> activeChoiceButtons = [];
     private readonly List<NavigationTriangle> navigationTriangles = [];
     private readonly List<InteractiveDoor> interactiveDoors = [];
+    private readonly Dictionary<string, AnimationPlayer> actorAnimations =
+        new(StringComparer.OrdinalIgnoreCase);
     private int capturedFrames;
     private int readyFrames;
     private bool moduleReady;
@@ -107,6 +110,9 @@ public sealed partial class KotorModuleBoot : Node3D
                 GD.Print($"NIKAMI_AURORA_NAV_TEST status={(accepted ? "accepted" : "rejected")} " +
                          $"from={start} to={playerBody.GlobalPosition} requested={meters:F3}");
             }
+            if (readyFrames == 40 &&
+                System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_CLEAN") == "1")
+                overlayLayer.Visible = false;
         }
 
         var capturePath = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE");
@@ -160,6 +166,7 @@ public sealed partial class KotorModuleBoot : Node3D
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
 
             var manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
+            ApplyAreaLighting(manifest.Lighting);
             var loadedRooms = 0;
             foreach (var room in manifest.Rooms)
             {
@@ -173,13 +180,14 @@ public sealed partial class KotorModuleBoot : Node3D
                     throw new InvalidDataException($"Godot could not import room {room.Model}: {glbPath}");
                 imported.Name = room.Model;
                 imported.Position = ToGodot(room.Position);
-                MakeDiffuseProofReadable(imported);
+                ConfigureStaticRoomMaterials(imported);
                 AddChild(imported);
                 loadedRooms++;
                 details.Text = $"Rooms {loadedRooms}/{manifest.Rooms.Count}  •  {room.Model}";
                 await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             }
 
+            var authoredLights = LoadAuthoredLights(manifest.Rooms, manifest.Lighting);
             var materializedActors = LoadActorModels(manifest.Creatures, manifestDirectory);
             AddCreatureMarkers(manifest.Creatures);
             var materializedDoors = LoadDoorModels(manifest.Doors, manifestDirectory);
@@ -206,11 +214,14 @@ public sealed partial class KotorModuleBoot : Node3D
             details.Text = $"{manifest.Rooms.Count} authored / {loadedRooms} visual rooms  •  " +
                            $"{materializedActors} actor / {manifest.Counts.Creatures} creature placements  •  " +
                            $"{manifest.Counts.WalkmeshTriangles} nav triangles  •  " +
+                           $"{authoredLights}/{manifest.Counts.AuthoredLights} source lights  •  " +
                            $"{materializedDoors} door / {manifest.Counts.Doors} placements  •  " +
                            $"source {manifest.Target.ExecutableSha256[..12]}";
             GD.Print($"NIKAMI_AURORA_KOTOR_BOOT status=pass module={manifest.Module} " +
                      $"rooms={loadedRooms} authoredRooms={manifest.Rooms.Count} creatures={manifest.Counts.Creatures} " +
                      $"sha256={manifest.Target.ExecutableSha256}");
+            GD.Print($"NIKAMI_AURORA_LIGHTING status=ready authored={manifest.Counts.AuthoredLights} " +
+                     $"materialized={authoredLights} ambient={ToColor(manifest.Lighting.DynamicAmbient)}");
             GD.Print($"NIKAMI_AURORA_NAV status=ready triangles={navigationTriangles.Count} " +
                      $"entry={playerBody.GlobalPosition}");
             var openingActor = manifest.Creatures.FirstOrDefault(creature => creature.Dialogue is not null);
@@ -230,26 +241,25 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void CreateEnvironment()
     {
+        runtimeEnvironment = new Godot.Environment
+        {
+            BackgroundMode = Godot.Environment.BGMode.Color,
+            BackgroundColor = new Color(0.004f, 0.008f, 0.018f),
+            AmbientLightSource = Godot.Environment.AmbientSource.Color,
+            AmbientLightColor = new Color(0.2f, 0.2f, 0.2f),
+            AmbientLightEnergy = 1.0f
+        };
         var worldEnvironment = new WorldEnvironment
         {
-            Environment = new Godot.Environment
-            {
-                BackgroundMode = Godot.Environment.BGMode.Color,
-                BackgroundColor = new Color(0.004f, 0.008f, 0.018f),
-                AmbientLightSource = Godot.Environment.AmbientSource.Color,
-                AmbientLightColor = new Color(0.48f, 0.56f, 0.68f),
-                AmbientLightEnergy = 1.25f
-            }
+            Environment = runtimeEnvironment
         };
         AddChild(worldEnvironment);
-        var key = new DirectionalLight3D
-        {
-            RotationDegrees = new Vector3(-58, -32, 0),
-            LightColor = new Color(0.72f, 0.82f, 1.0f),
-            LightEnergy = 0.65f,
-            ShadowEnabled = true
-        };
-        AddChild(key);
+    }
+
+    private void ApplyAreaLighting(AreaLightingRecord lighting)
+    {
+        runtimeEnvironment.AmbientLightColor = ToColor(lighting.DynamicAmbient);
+        runtimeEnvironment.AmbientLightEnergy = 1.0f;
     }
 
     private void CreateCamera()
@@ -275,22 +285,22 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void CreateOverlay()
     {
-        var layer = new CanvasLayer();
-        AddChild(layer);
+        overlayLayer = new CanvasLayer();
+        AddChild(overlayLayer);
         loadingBackdrop = new ColorRect
         {
             Color = new Color(0.005f, 0.012f, 0.025f, 0.94f),
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
         loadingBackdrop.SetAnchorsPreset(Control.LayoutPreset.FullRect);
-        layer.AddChild(loadingBackdrop);
+        overlayLayer.AddChild(loadingBackdrop);
 
         var panel = new VBoxContainer
         {
             Position = new Vector2(36, 32),
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        layer.AddChild(panel);
+        overlayLayer.AddChild(panel);
         var brand = new Label { Text = "NIKAMI / AURORA", MouseFilter = Control.MouseFilterEnum.Ignore };
         brand.AddThemeFontSizeOverride("font_size", 18);
         brand.AddThemeColorOverride("font_color", new Color(0.42f, 0.78f, 1.0f));
@@ -311,7 +321,7 @@ public sealed partial class KotorModuleBoot : Node3D
         };
         controls.AddThemeFontSizeOverride("font_size", 14);
         controls.AddThemeColorOverride("font_color", new Color(0.62f, 0.7f, 0.8f));
-        layer.AddChild(controls);
+        overlayLayer.AddChild(controls);
 
         interactionPrompt = new Label
         {
@@ -321,7 +331,7 @@ public sealed partial class KotorModuleBoot : Node3D
         };
         interactionPrompt.AddThemeFontSizeOverride("font_size", 20);
         interactionPrompt.AddThemeColorOverride("font_color", new Color(0.45f, 0.88f, 1.0f));
-        layer.AddChild(interactionPrompt);
+        overlayLayer.AddChild(interactionPrompt);
 
         dialoguePanel = new PanelContainer
         {
@@ -353,7 +363,7 @@ public sealed partial class KotorModuleBoot : Node3D
             ContentMarginBottom = 16
         };
         dialoguePanel.AddThemeStyleboxOverride("panel", panelStyle);
-        layer.AddChild(dialoguePanel);
+        overlayLayer.AddChild(dialoguePanel);
         var dialogueLayout = new VBoxContainer();
         dialoguePanel.AddChild(dialogueLayout);
         dialogueSpeaker = new Label();
@@ -381,7 +391,30 @@ public sealed partial class KotorModuleBoot : Node3D
         if (graph.Schema != "nikami-aurora-kotor-dialogue-v1" || graph.Starters.Count == 0)
             throw new InvalidDataException($"Unsupported dialogue graph: {path}");
         var starterIndex = Math.Clamp(graph.OpeningStarter, 0, graph.Starters.Count - 1);
+        PlayActorAnimation(actor.Template, "tlknorm");
         PresentDialogueNode(graph, graph.Starters[starterIndex].Target, new HashSet<string>(), 0);
+    }
+
+    private void PlayActorAnimation(string actor, string requested)
+    {
+        if (!actorAnimations.TryGetValue(actor, out var player)) return;
+        var match = player.GetAnimationList().FirstOrDefault(name =>
+            name.ToString().Equals(requested, StringComparison.OrdinalIgnoreCase) ||
+            name.ToString().EndsWith('/' + requested, StringComparison.OrdinalIgnoreCase));
+        if (match == default) return;
+        player.Play(match);
+        GD.Print($"NIKAMI_AURORA_ACTOR_ANIMATION status=playing actor={actor} animation={match}");
+    }
+
+    private static T? FindDescendant<T>(Node node) where T : Node
+    {
+        if (node is T match) return match;
+        foreach (var child in node.GetChildren())
+        {
+            var found = FindDescendant<T>(child);
+            if (found is not null) return found;
+        }
+        return null;
     }
 
     private void PresentDialogueNode(DialogueGraph graph, string key, HashSet<string> visited, int depth)
@@ -517,9 +550,24 @@ public sealed partial class KotorModuleBoot : Node3D
                 throw new InvalidDataException($"Godot could not import actor {creature.Template}: {path}");
             actor.Name = $"Actor_{creature.Template}";
             actor.Position = ToGodot(creature.Position);
-            actor.Rotation = new Vector3(0, -creature.Bearing, 0);
-            MakeDiffuseProofReadable(actor);
+            // PyKotor's bearing zero faces native +Y. KOTOR_TO_GODOT maps that
+            // axis to Godot -Z, so the yaw sign is preserved.
+            actor.Rotation = new Vector3(0, creature.Bearing, 0);
             AddChild(actor);
+            var animationPlayer = FindDescendant<AnimationPlayer>(actor);
+            if (animationPlayer is not null)
+            {
+                actorAnimations[creature.Template] = animationPlayer;
+                foreach (var animationName in animationPlayer.GetAnimationList())
+                {
+                    var animation = animationPlayer.GetAnimation(animationName);
+                    if (animation is not null)
+                        animation.LoopMode = Animation.LoopModeEnum.Linear;
+                }
+                PlayActorAnimation(creature.Template, "pause1");
+                GD.Print($"NIKAMI_AURORA_ACTOR_ANIMATION status=ready actor={creature.Template} " +
+                         $"tracks={string.Join(',', animationPlayer.GetAnimationList())}");
+            }
             loaded++;
         }
         return loaded;
@@ -540,8 +588,7 @@ public sealed partial class KotorModuleBoot : Node3D
                 throw new InvalidDataException($"Godot could not import door {door.Tag}: {path}");
             model.Name = $"Door_{door.Tag}";
             model.Position = ToGodot(door.Position);
-            model.Rotation = new Vector3(0, -door.Bearing, 0);
-            MakeDiffuseProofReadable(model);
+            model.Rotation = new Vector3(0, door.Bearing, 0);
             AddChild(model);
             interactiveDoors.Add(new InteractiveDoor(door, model, model.Position));
             GD.Print($"NIKAMI_AURORA_DOOR status=ready tag={door.Tag} model={door.Model} " +
@@ -590,7 +637,39 @@ public sealed partial class KotorModuleBoot : Node3D
                  $"nativeOnOpen={door.Source.OnOpen}");
     }
 
-    private static void MakeDiffuseProofReadable(Node node)
+    private int LoadAuthoredLights(IEnumerable<RoomRecord> rooms, AreaLightingRecord lighting)
+    {
+        var loaded = 0;
+        foreach (var room in rooms)
+        {
+            if (room.Lights is null) continue;
+            foreach (var source in room.Lights)
+            {
+                // Odyssey treats radius >= 100 as directional. No such light is
+                // present in the Endar Spire opening; keep that separate mapping
+                // out of this point-light path.
+                if (source.Radius <= 0 || source.Radius >= 100 || source.Multiplier <= 0 ||
+                    source.AmbientOnly)
+                    continue;
+                var light = new OmniLight3D
+                {
+                    Name = $"SourceLight_{room.Model}_{source.Name}",
+                    Position = ToGodotWithOffset(source.Position, room.Position),
+                    LightColor = ToColor(source.Color),
+                    LightEnergy = source.Multiplier,
+                    LightSpecular = 0.0f,
+                    OmniRange = source.Radius,
+                    OmniAttenuation = 1.0f,
+                    ShadowEnabled = lighting.Shadows && source.Shadow
+                };
+                AddChild(light);
+                loaded++;
+            }
+        }
+        return loaded;
+    }
+
+    private static void ConfigureStaticRoomMaterials(Node node)
     {
         if (node is MeshInstance3D instance && instance.Mesh is not null)
         {
@@ -602,7 +681,6 @@ public sealed partial class KotorModuleBoot : Node3D
                     var lightmapped = new ShaderMaterial { Shader = OdysseyLightmapShader };
                     lightmapped.SetShaderParameter("albedo_texture", source.AlbedoTexture);
                     lightmapped.SetShaderParameter("lightmap_texture", source.EmissionTexture);
-                    lightmapped.SetShaderParameter("lightmap_gain", 2.0f);
                     instance.SetSurfaceOverrideMaterial(surface, lightmapped);
                     continue;
                 }
@@ -614,7 +692,7 @@ public sealed partial class KotorModuleBoot : Node3D
             }
         }
         foreach (var child in node.GetChildren())
-            MakeDiffuseProofReadable(child);
+            ConfigureStaticRoomMaterials(child);
     }
 
     private void BuildNavigation(IEnumerable<RoomRecord> rooms)
@@ -681,6 +759,9 @@ public sealed partial class KotorModuleBoot : Node3D
     private static Vector3 ToGodot(IReadOnlyList<float> source) =>
         new(source[0], source[2], -source[1]);
 
+    private static Color ToColor(IReadOnlyList<float> source) =>
+        new(source[0], source[1], source[2]);
+
     private static Vector3 ToGodotWithOffset(IReadOnlyList<float> source, IReadOnlyList<float> offset) =>
         ToGodot(new[] { source[0] + offset[0], source[1] + offset[1], source[2] + offset[2] });
 
@@ -694,6 +775,7 @@ public sealed partial class KotorModuleBoot : Node3D
         string Module,
         EntryRecord Entry,
         TargetRecord Target,
+        AreaLightingRecord Lighting,
         IReadOnlyList<RoomRecord> Rooms,
         IReadOnlyList<CreatureRecord> Creatures,
         IReadOnlyList<DoorRecord> Doors,
@@ -701,8 +783,14 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private sealed record EntryRecord(IReadOnlyList<float> Position, float DirectionRadians);
     private sealed record TargetRecord(string ExecutableSha256);
+    private sealed record AreaLightingRecord(IReadOnlyList<float> DynamicAmbient, bool Shadows,
+        int ShadowOpacity, string SourceSha256);
     private sealed record RoomRecord(string Model, string? Glb, IReadOnlyList<float> Position,
-        IReadOnlyList<IReadOnlyList<IReadOnlyList<float>>>? WalkmeshTriangles);
+        IReadOnlyList<IReadOnlyList<IReadOnlyList<float>>>? WalkmeshTriangles,
+        IReadOnlyList<LightRecord>? Lights);
+    private sealed record LightRecord(string Name, IReadOnlyList<float> Position,
+        IReadOnlyList<float> Color, float Radius, float Multiplier, bool AmbientOnly,
+        int DynamicType, bool AffectDynamic, bool Shadow, int Priority);
     private sealed record CreatureRecord(string Template, IReadOnlyList<float> Position, float Bearing,
         string? Glb, string? Conversation, DialogueReference? Dialogue);
     private sealed record DoorRecord(string Template, string Tag, IReadOnlyList<float> Position, float Bearing,
@@ -717,7 +805,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private sealed record DialogueLink(string Target, string Condition1, bool Condition1Not,
         string Condition2, bool Condition2Not, int Logic);
     private sealed record CountRecord(int Rooms, int Creatures, int Doors, int Waypoints, int Cameras,
-        int Placeables, int Triggers, int WalkmeshTriangles);
+        int Placeables, int Triggers, int WalkmeshTriangles, int AuthoredLights);
     private readonly record struct NavigationTriangle(Vector3 A, Vector3 B, Vector3 C);
     private sealed class InteractiveDoor(DoorRecord source, Node3D model, Vector3 closedPosition)
     {
