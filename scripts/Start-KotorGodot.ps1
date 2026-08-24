@@ -38,6 +38,8 @@ param(
     [switch]$EquipmentScreen,
     [switch]$TestEquipmentMenuTransaction,
     [switch]$TestFlatMenuNavigation,
+    [switch]$TestInventoryQuestFilter,
+    [switch]$TestInventoryScroll,
     [switch]$CaptureAndExit
 )
 
@@ -218,6 +220,18 @@ if ($InventoryScreen) {
     $env:NIKAMI_AURORA_TEST_OPEN_LOCKER = "1"
     $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
 }
+if ($TestInventoryQuestFilter) {
+    if (-not $InventoryScreen) {
+        throw "-TestInventoryQuestFilter requires -InventoryScreen."
+    }
+    $env:NIKAMI_AURORA_TEST_INVENTORY_QUEST_FILTER = "1"
+}
+if ($TestInventoryScroll) {
+    if (-not $InventoryScreen) {
+        throw "-TestInventoryScroll requires -InventoryScreen."
+    }
+    $env:NIKAMI_AURORA_TEST_INVENTORY_SCROLL_REPEAT = "3"
+}
 if ($EquipmentScreen) {
     if ($OpenXR -or $OpenXRSimulator) {
         throw "-EquipmentScreen is a flat presentation gate."
@@ -323,6 +337,8 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_XR_BODY_LOOKDOWN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_LOADING_SCREEN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_INVENTORY_SCREEN -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_INVENTORY_QUEST_FILTER -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_INVENTORY_SCROLL_REPEAT -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_EQUIPMENT_SCREEN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_EQUIPMENT_MENU_TRANSACTION -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_FLAT_MENU_NAVIGATION -ErrorAction SilentlyContinue

@@ -17,15 +17,24 @@ public sealed partial class KotorModuleBoot
     private Control? desktopHudRoot;
     private Control? inventoryScreen;
     private Control? inventoryReferenceSurface;
+    private ScrollContainer? inventoryScroll;
     private VBoxContainer? inventoryRows;
+    private Control? inventorySourceScrollbar;
+    private TextureRect? inventoryScrollThumb;
+    private VSlider? inventoryScrollSlider;
+    private KotorUiExtent? inventoryScrollExtent;
+    private int inventoryRowHeight = 50;
+    private bool updatingInventoryScrollSlider;
     private Label? inventoryDescription;
     private Label? inventoryCredits;
     private Label? inventoryVitality;
     private Label? inventoryDefense;
     private Button? inventoryUseButton;
+    private Button? inventoryQuestItemsButton;
     private readonly List<Button> inventoryRowButtons = [];
     private IReadOnlyList<KotorUiInventoryItemRecord> visibleInventoryItems = [];
     private int selectedInventoryIndex;
+    private bool inventoryQuestItemsOnly;
     private Control? equipmentScreen;
     private Control? equipmentReferenceSurface;
     private VBoxContainer? equipmentRows;
@@ -51,6 +60,8 @@ public sealed partial class KotorModuleBoot
     private bool automatedEquipmentScreenOpened;
     private int automatedEquipmentMenuStage;
     private int automatedFlatMenuNavigationStage;
+    private int automatedInventoryQuestFilterStage;
+    private bool automatedInventoryScrollVerified;
 
     private void ConfigureFlatReferenceViewportIfRequested()
     {
@@ -451,17 +462,35 @@ public sealed partial class KotorModuleBoot
         inventoryReferenceSurface.AddChild(inventoryDefense);
 
         var listControl = RequireControl(source.Controls, "LB_ITEMS");
-        inventoryRows = new VBoxContainer
-        {
-            Name = "RetailInventoryRows"
-        };
-        inventoryRows.AddThemeConstantOverride("separation", 0);
+        var listExtent = RequireExtent(listControl);
         var prototype = listControl.Prototype ?? throw new InvalidDataException(
             "KOTOR inventory layout has no list prototype");
         var prototypeExtent = RequireExtent(prototype);
-        inventoryRows.Position = new Vector2(prototypeExtent.Left, prototypeExtent.Top);
-        inventoryRows.Size = new Vector2(prototypeExtent.Width, 250);
-        inventoryReferenceSurface.AddChild(inventoryRows);
+        inventoryRowHeight = prototypeExtent.Height;
+        inventoryScroll = new ScrollContainer
+        {
+            Name = "RetailInventoryScroll",
+            Position = new Vector2(prototypeExtent.Left, prototypeExtent.Top),
+            Size = new Vector2(
+                prototypeExtent.Width,
+                listExtent.Top + listExtent.Height - prototypeExtent.Top),
+            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
+            VerticalScrollMode = ScrollContainer.ScrollMode.ShowNever,
+            FollowFocus = true,
+            ClipContents = true,
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        inventoryReferenceSurface.AddChild(inventoryScroll);
+        inventoryScroll.GetVScrollBar().ValueChanged += _ =>
+            UpdateInventorySourceScrollbar();
+        inventoryRows = new VBoxContainer
+        {
+            Name = "RetailInventoryRows",
+            CustomMinimumSize = new Vector2(prototypeExtent.Width, 0)
+        };
+        inventoryRows.AddThemeConstantOverride("separation", 0);
+        inventoryScroll.AddChild(inventoryRows);
+        ConfigureInventorySourceScrollbar(inventoryReferenceSurface, listControl);
 
         var descriptionControl = RequireControl(source.Controls, "LB_DESCRIPTION");
         var descriptionPrototype = descriptionControl.Prototype ??
@@ -477,8 +506,12 @@ public sealed partial class KotorModuleBoot
             descriptionInner, 10, true);
         inventoryReferenceSurface.AddChild(inventoryDescription);
 
-        AddSourceButton(
-            inventoryReferenceSurface, source.Controls, "BTN_QUESTITEMS", () => { }, 16);
+        inventoryQuestItemsButton = AddSourceButton(
+            inventoryReferenceSurface,
+            source.Controls,
+            "BTN_QUESTITEMS",
+            ToggleInventoryQuestItems,
+            16);
         inventoryUseButton = AddSourceButton(
             inventoryReferenceSurface, source.Controls, "BTN_USEITEM", UseSelectedInventoryItem, 16);
         AddSourceButton(
@@ -487,6 +520,146 @@ public sealed partial class KotorModuleBoot
                  $"layout={source.Layout.Resref} items={source.Items.Count} " +
                  $"top={source.TopLayout.Resref} party={source.PartyPortraits.Count} " +
                  "interaction=mouse,keyboard state=profile-owned");
+    }
+
+    private void ConfigureInventorySourceScrollbar(
+        Control parent,
+        KotorUiControlRecord listControl)
+    {
+        var source = listControl.Scrollbar ?? throw new InvalidDataException(
+            "KOTOR inventory item list has no source scrollbar");
+        var extent = RequireExtent(source);
+        inventoryScrollExtent = extent;
+        var direction = source.Direction ?? throw new InvalidDataException(
+            "KOTOR inventory scrollbar has no direction image");
+        var thumb = source.Thumb ?? throw new InvalidDataException(
+            "KOTOR inventory scrollbar has no thumb image");
+        if (string.IsNullOrWhiteSpace(direction.Image) ||
+            string.IsNullOrWhiteSpace(thumb.Image))
+            throw new InvalidDataException(
+                "KOTOR inventory scrollbar images are incomplete");
+
+        var arrowSize = extent.Width;
+        inventorySourceScrollbar = new Control
+        {
+            Name = "RetailInventorySourceScrollbar",
+            Position = new Vector2(extent.Left, extent.Top),
+            Size = new Vector2(extent.Width, extent.Height),
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            Visible = false
+        };
+        parent.AddChild(inventorySourceScrollbar);
+        AddTexture(
+            inventorySourceScrollbar,
+            direction.Image,
+            new KotorUiExtent(0, 0, arrowSize, arrowSize));
+        var downArrow = AddTexture(
+            inventorySourceScrollbar,
+            direction.Image,
+            new KotorUiExtent(0, extent.Height - arrowSize, arrowSize, arrowSize));
+        downArrow.FlipV = true;
+        inventoryScrollThumb = AddTexture(
+            inventorySourceScrollbar,
+            thumb.Image,
+            new KotorUiExtent(4, arrowSize, Math.Max(1, arrowSize - 8), arrowSize));
+        inventoryScrollSlider = new VSlider
+        {
+            Name = "RetailInventoryScrollDrag",
+            Position = new Vector2(0, arrowSize),
+            Size = new Vector2(extent.Width, extent.Height - arrowSize * 2),
+            MinValue = 0,
+            MaxValue = 1,
+            Step = 1,
+            Value = 1,
+            SelfModulate = new Color(1, 1, 1, 0),
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        inventoryScrollSlider.ValueChanged += ScrollInventoryFromSlider;
+        inventorySourceScrollbar.AddChild(inventoryScrollSlider);
+
+        foreach (var (name, localExtent, delta) in new[]
+                 {
+                     ("Up", new KotorUiExtent(0, 0, arrowSize, arrowSize), -inventoryRowHeight),
+                     ("Down", new KotorUiExtent(
+                         0, extent.Height - arrowSize, arrowSize, arrowSize), inventoryRowHeight)
+                 })
+        {
+            var button = new Button
+            {
+                Name = $"RetailInventoryScroll{name}",
+                Flat = true,
+                MouseDefaultCursorShape = Control.CursorShape.PointingHand
+            };
+            Place(button, localExtent);
+            button.Pressed += () => ScrollInventoryBy(delta);
+            inventorySourceScrollbar.AddChild(button);
+        }
+    }
+
+    private void ScrollInventoryBy(int pixels)
+    {
+        if (inventoryScroll is null) return;
+        var maximum = Math.Max(
+            0,
+            visibleInventoryItems.Count * inventoryRowHeight -
+            (int)inventoryScroll.Size.Y);
+        inventoryScroll.ScrollVertical = Math.Clamp(
+            inventoryScroll.ScrollVertical + pixels,
+            0,
+            maximum);
+        UpdateInventorySourceScrollbar();
+    }
+
+    private void UpdateInventorySourceScrollbar()
+    {
+        if (inventoryScroll is null || inventorySourceScrollbar is null ||
+            inventoryScrollThumb is null || inventoryScrollExtent is null)
+            return;
+        var viewportHeight = inventoryScroll.Size.Y;
+        var contentHeight = visibleInventoryItems.Count * inventoryRowHeight;
+        var maximum = Math.Max(0.0f, contentHeight - viewportHeight);
+        inventorySourceScrollbar.Visible = maximum > 0.5f;
+        if (!inventorySourceScrollbar.Visible)
+        {
+            inventoryScroll.ScrollVertical = 0;
+            return;
+        }
+
+        var arrowSize = inventoryScrollExtent.Width;
+        var trackHeight = Math.Max(1.0f, inventoryScrollExtent.Height - arrowSize * 2.0f);
+        var thumbHeight = Math.Max(
+            arrowSize,
+            trackHeight * viewportHeight / Math.Max(viewportHeight, contentHeight));
+        var travel = Math.Max(0.0f, trackHeight - thumbHeight);
+        var normalized = inventoryScroll.ScrollVertical / maximum;
+        inventoryScrollThumb.Position = new Vector2(
+            4,
+            arrowSize + travel * normalized);
+        inventoryScrollThumb.Size = new Vector2(
+            Math.Max(1, arrowSize - 8),
+            thumbHeight);
+        if (inventoryScrollSlider is not null)
+        {
+            updatingInventoryScrollSlider = true;
+            inventoryScrollSlider.MaxValue = maximum;
+            inventoryScrollSlider.Value = maximum - inventoryScroll.ScrollVertical;
+            updatingInventoryScrollSlider = false;
+        }
+    }
+
+    private void ScrollInventoryFromSlider(double value)
+    {
+        if (updatingInventoryScrollSlider || inventoryScroll is null)
+            return;
+        var maximum = Math.Max(
+            0,
+            visibleInventoryItems.Count * inventoryRowHeight -
+            (int)inventoryScroll.Size.Y);
+        inventoryScroll.ScrollVertical = Math.Clamp(
+            maximum - (int)Math.Round(value),
+            0,
+            maximum);
+        UpdateInventorySourceScrollbar();
     }
 
     private void ConfigureRetailEquipment(KotorUiEquipmentRecord source)
@@ -735,6 +908,7 @@ public sealed partial class KotorModuleBoot
             hudVitalityBar.Value = snapshot.PlayerCurrentVitality /
                                    (double)snapshot.PlayerMaximumVitality;
         }
+        UpdateInventorySourceScrollbar();
         desktopHudRoot.Visible = moduleReady &&
                                  inventoryScreen?.Visible != true &&
                                  equipmentScreen?.Visible != true &&
@@ -753,7 +927,8 @@ public sealed partial class KotorModuleBoot
         Input.MouseMode = Input.MouseModeEnum.Visible;
         UpdateFlatUiVisibility();
         GD.Print($"NIKAMI_AURORA_INVENTORY_UI status=open " +
-                 $"items={visibleInventoryItems.Count} selection={selectedInventoryIndex}");
+                 $"items={visibleInventoryItems.Count} selection={selectedInventoryIndex} " +
+                 $"filter={(inventoryQuestItemsOnly ? "quest" : "all")}");
     }
 
     private void HideInventory()
@@ -764,6 +939,24 @@ public sealed partial class KotorModuleBoot
             Input.MouseMode = Input.MouseModeEnum.Captured;
         UpdateFlatUiVisibility();
         GD.Print("NIKAMI_AURORA_INVENTORY_UI status=closed");
+    }
+
+    private void ToggleInventoryQuestItems()
+    {
+        if (flatUiRecord is null || inventoryQuestItemsButton is null)
+            return;
+        inventoryQuestItemsOnly = !inventoryQuestItemsOnly;
+        selectedInventoryIndex = 0;
+        if (inventoryScroll is not null)
+            inventoryScroll.ScrollVertical = 0;
+        inventoryQuestItemsButton.Text = inventoryQuestItemsOnly
+            ? flatUiRecord.Inventory.AllItems.Text
+            : RequireControl(flatUiRecord.Inventory.Controls, "BTN_QUESTITEMS")
+                .Text?.Resolved ?? "";
+        RefreshInventory();
+        GD.Print($"NIKAMI_AURORA_INVENTORY_FILTER status=changed " +
+                 $"mode={(inventoryQuestItemsOnly ? "quest" : "all")} " +
+                 $"items={visibleInventoryItems.Count}");
     }
 
     private void ShowEquipment()
@@ -813,6 +1006,8 @@ public sealed partial class KotorModuleBoot
         {
             if (key.Keycode is Key.Escape or Key.I)
                 HideInventory();
+            else if (key.Keycode == Key.Q)
+                ToggleInventoryQuestItems();
             else if (key.Keycode is Key.Up or Key.W)
                 SelectInventoryRow(selectedInventoryIndex - 1);
             else if (key.Keycode is Key.Down or Key.S)
@@ -844,9 +1039,26 @@ public sealed partial class KotorModuleBoot
                 $"{snapshot.PlayerCurrentVitality}/{snapshot.PlayerMaximumVitality}";
         if (inventoryDefense is not null)
             inventoryDefense.Text = snapshot.PlayerDefense.ToString();
-        visibleInventoryItems = flatUiRecord.Inventory.Items
-            .Where(item => snapshot.PlayerInventory.ContainsKey(item.Resref))
+        var sourceItems = flatUiRecord.Inventory.Items
+            .Where(item =>
+                snapshot.PlayerInventory.ContainsKey(item.Resref) &&
+                (!inventoryQuestItemsOnly || item.Plot))
             .ToArray();
+        var repeatText = System.Environment.GetEnvironmentVariable(
+            "NIKAMI_AURORA_TEST_INVENTORY_SCROLL_REPEAT");
+        if (int.TryParse(repeatText, out var repeat) && repeat is >= 2 and <= 12)
+        {
+            visibleInventoryItems = Enumerable.Range(0, repeat)
+                .SelectMany(_ => sourceItems)
+                .ToArray();
+            GD.Print($"NIKAMI_AURORA_INVENTORY_SCROLL_SIMULATION status=materialized " +
+                     $"sourceItems={sourceItems.Length} repeat={repeat} " +
+                     $"rows={visibleInventoryItems.Count}");
+        }
+        else
+        {
+            visibleInventoryItems = sourceItems;
+        }
         selectedInventoryIndex = visibleInventoryItems.Count == 0
             ? 0
             : Math.Clamp(selectedInventoryIndex, 0, visibleInventoryItems.Count - 1);
@@ -860,6 +1072,7 @@ public sealed partial class KotorModuleBoot
             inventoryRowButtons.Add(row);
         }
         SelectInventoryRow(selectedInventoryIndex);
+        UpdateInventorySourceScrollbar();
     }
 
     private Button CreateInventoryRow(
@@ -1449,7 +1662,8 @@ public sealed partial class KotorModuleBoot
         KotorUiTextureRecord Portrait,
         IReadOnlyList<KotorUiTextureRecord> PartyPortraits,
         string PartyPortraitsSourceSha256,
-        IReadOnlyList<KotorUiInventoryItemRecord> Items);
+        IReadOnlyList<KotorUiInventoryItemRecord> Items,
+        KotorUiLocalizedTextRecord AllItems);
     private sealed record KotorUiEquipmentRecord(
         KotorUiLayoutRecord Layout,
         IReadOnlyList<KotorUiControlRecord> Controls,
@@ -1495,6 +1709,7 @@ public sealed partial class KotorModuleBoot
         int Cost,
         int BaseItem,
         int EquipableSlots,
+        bool Plot,
         KotorUiTextureRecord Icon,
         string UtiSha256);
     private sealed record KotorUiLocalizedTextRecord(string Text, int Strref);
@@ -1515,9 +1730,12 @@ public sealed partial class KotorModuleBoot
         KotorUiSurfaceRecord? Highlight,
         KotorUiSurfaceRecord? Progress,
         KotorUiTextRecord? Text,
+        KotorUiImageRecord? Direction,
+        KotorUiImageRecord? Thumb,
         bool StartFromLeft,
         int CurrentValue,
         int MaxValue,
+        int VisibleValue,
         KotorUiControlRecord? Prototype,
         KotorUiControlRecord? Scrollbar);
     private sealed record KotorUiExtent(int Left, int Top, int Width, int Height);
@@ -1538,6 +1756,12 @@ public sealed partial class KotorModuleBoot
         uint Strref,
         string Resolved,
         bool Pulsing);
+    private sealed record KotorUiImageRecord(
+        string Image,
+        int DrawStyle,
+        int FlipStyle,
+        float Rotate,
+        int Alignment);
     private sealed record KotorUiTextureRecord(
         string Resref,
         string Path,
