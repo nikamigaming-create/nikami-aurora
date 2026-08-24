@@ -29,6 +29,7 @@ try:
     from pykotor.resource.formats.mdl import read_mdl
     from pykotor.resource.formats.mdl.mdl_types import MDLControllerType
     from pykotor.resource.formats.ncs import read_ncs
+    from pykotor.resource.formats.gff import read_gff
     from pykotor.resource.formats.tpc import TPCTextureFormat
     from pykotor.resource.formats.twoda import read_2da
     from pykotor.resource.generics.are import read_are
@@ -252,6 +253,458 @@ def export_effect_texture(
         "payloadSha256": sha256_bytes(payload),
         "byteCount": len(payload),
     }
+
+
+def export_kotor_ui(
+    installation: Installation,
+    module: str,
+    area_resref: str,
+    area: Any,
+    output_root: Path,
+    textures: TextureCache,
+    portrait_resref: str,
+    inventory_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Export source GUI contracts and owned textures for the flat runtime shell."""
+    talktable = installation.talktable()
+    exported_textures: dict[str, dict[str, Any]] = {}
+
+    def export_bitmap_font(
+        resref: str,
+        source_txi: str,
+        image: Image.Image,
+        width: int,
+        height: int,
+        requested_size_override: int | None = None,
+    ) -> dict[str, Any] | None:
+        lines = [line.strip() for line in source_txi.splitlines() if line.strip()]
+        settings: dict[str, str] = {}
+        for line in lines:
+            command, _, argument = line.partition(" ")
+            if command.lower() in {
+                    "numchars", "fontheight", "baselineheight", "texturewidth"}:
+                settings[command.lower()] = argument.strip()
+        if "numchars" not in settings:
+            return None
+        count = int(settings["numchars"])
+
+        def coordinates(command: str) -> list[tuple[float, float]]:
+            try:
+                start = next(
+                    index for index, line in enumerate(lines)
+                    if line.lower() == command) + 1
+            except StopIteration as error:
+                raise RuntimeError(
+                    f"KOTOR bitmap font is missing {command}: {resref}") from error
+            result: list[tuple[float, float]] = []
+            for line in lines[start:start + count]:
+                values = line.split()
+                if len(values) < 2:
+                    raise RuntimeError(
+                        f"KOTOR bitmap font has malformed {command}: {resref}")
+                result.append((float(values[0]), float(values[1])))
+            if len(result) != count:
+                raise RuntimeError(
+                    f"KOTOR bitmap font has incomplete {command}: {resref}")
+            return result
+
+        upper_left = coordinates("upperleftcoords")
+        lower_right = coordinates("lowerrightcoords")
+        source_requested_size = max(
+            1, round(float(settings["fontheight"]) * 100.0))
+        requested_size = requested_size_override or source_requested_size
+        source_baseline = max(
+            1, round(float(settings["baselineheight"]) * 100.0))
+        doubled_atlas = (
+            resref.lower() == "fnt_d16x16"
+            and count > 1
+            and round(abs(upper_left[1][0] - upper_left[0][0]) * width) <= 16
+        )
+        descriptor_line_height = source_requested_size
+        descriptor_baseline = source_baseline
+        coordinate_indices = range(count)
+        if doubled_atlas:
+            # fnt_d16x16 stores 16 text columns in 32-pixel cells and reserves
+            # the first 16-pixel row for controller glyphs.  Its TXI coordinate
+            # table describes half-cell slots, so indexing every second entry
+            # without the reserved-row offset maps every character sixteen code
+            # points too early (for example, T renders as D).  Walk the encoded
+            # character set directly and derive the real source cell instead.
+            coordinate_indices = range(256)
+            descriptor_line_height = 16
+            descriptor_baseline = descriptor_line_height
+        glyphs: list[tuple[int, int, int, int, int, int, int, int]] = []
+        for coordinate_index in coordinate_indices:
+            byte_value = coordinate_index if doubled_atlas else coordinate_index
+            try:
+                character = bytes([byte_value]).decode("cp1252")
+            except UnicodeDecodeError:
+                continue
+            codepoint = ord(character)
+            xoffset = 0
+            yoffset = 0
+            if doubled_atlas:
+                if byte_value == 32:
+                    # The printable atlas starts after a reserved controller-icon
+                    # row, but its space remains in the unshifted blank cell.
+                    # Keep it non-rendering while preserving the source font's
+                    # proportional spacing.
+                    glyphs.append((codepoint, 0, 32, 1, 1, 0, 0, 8))
+                    continue
+                left = (byte_value % 16) * 32
+                top = (byte_value // 16) * descriptor_line_height
+                if byte_value >= 64:
+                    top += descriptor_line_height
+                cell_right = min(width, left + 32)
+                cell_bottom = min(height, top + descriptor_line_height)
+                alpha = image.getchannel("A")
+                bounds = alpha.crop((left, top, cell_right, cell_bottom)).getbbox()
+                if bounds is None:
+                    right = min(width, left + 1)
+                    bottom = min(height, top + 1)
+                    advance = max(1, requested_size // 2)
+                else:
+                    xoffset, yoffset, local_right, local_bottom = bounds
+                    left += xoffset
+                    top += yoffset
+                    right = min(cell_right, left + local_right - xoffset)
+                    bottom = min(cell_bottom, top + local_bottom - yoffset)
+                    advance = max(1, local_right + 1)
+            else:
+                upper = upper_left[coordinate_index]
+                lower = lower_right[coordinate_index]
+                left = max(0, min(width, round(upper[0] * width)))
+                top = max(0, min(height, round((1.0 - upper[1]) * height)))
+                right = max(left, min(width, round(lower[0] * width)))
+                bottom = max(top, min(height, round((1.0 - lower[1]) * height)))
+                advance = max(1, right - left)
+            glyph_width = right - left
+            glyph_height = bottom - top
+            if glyph_width <= 0 or glyph_height <= 0:
+                continue
+            glyphs.append((
+                codepoint, left, top, glyph_width, glyph_height,
+                xoffset, yoffset, advance))
+
+        descriptor_lines = [
+            f'info face="{resref}" size={descriptor_line_height} bold=0 italic=0 charset="" ' +
+            "unicode=1 stretchH=100 smooth=0 aa=1 padding=0,0,0,0 " +
+            "spacing=0,0 outline=0",
+            f"common lineHeight={descriptor_line_height} base={descriptor_baseline} " +
+            f"scaleW={width} " +
+            f"scaleH={height} pages=1 packed=0 alphaChnl=0 redChnl=4 " +
+            "greenChnl=4 blueChnl=4",
+            f'page id=0 file="{resref.lower()}.png"',
+            f"chars count={len(glyphs)}",
+        ]
+        descriptor_lines.extend(
+            f"char id={codepoint} x={left} y={top} width={glyph_width} " +
+            f"height={glyph_height} xoffset={xoffset} yoffset={yoffset} " +
+            f"xadvance={advance} page=0 chnl=15"
+            for (codepoint, left, top, glyph_width, glyph_height,
+                 xoffset, yoffset, advance) in glyphs
+        )
+        descriptor_lines.append("kernings count=0")
+        payload = ("\n".join(descriptor_lines) + "\n").encode("utf-8")
+        relative = f"ui/{resref.lower()}.fnt"
+        path = output_root / relative
+        path.write_bytes(payload)
+        return {
+            "bitmapFontPath": relative,
+            "bitmapFontSha256": sha256_bytes(payload),
+            "bitmapFontByteCount": len(payload),
+            "bitmapFontSize": requested_size,
+            "bitmapFontBaseline": descriptor_baseline,
+            "bitmapFontNativeSize": descriptor_line_height,
+            "bitmapFontGlyphCount": len(glyphs),
+        }
+
+    def export_texture(resref: str) -> dict[str, Any]:
+        key = resref.strip().lower()
+        if not key:
+            raise RuntimeError("KOTOR UI texture resref cannot be empty")
+        if key in exported_textures:
+            return exported_textures[key]
+        source_resref = resref
+        source = None
+        requested_font_size = None
+        if key == "fnt_d16x16":
+            # The Windows resource set provides the corrected PC font under the
+            # engine alias fnt_d16x16b.  Preserve the GUI's logical resref while
+            # importing the exact source selected by the retail font manager.
+            source, _ = installation.texture_resource_result("fnt_d16x16b")
+            if source is not None:
+                source_resref = "fnt_d16x16b"
+                textures.image(resref)
+                logical_txi = textures.txi.get(key, "")
+                logical_font_height = next(
+                    (line.partition(" ")[2].strip()
+                     for line in logical_txi.splitlines()
+                     if line.strip().lower().startswith("fontheight ")),
+                    "")
+                if not logical_font_height:
+                    raise RuntimeError(
+                        "KOTOR logical fnt_d16x16 font height is missing")
+                requested_font_size = max(
+                    1, round(float(logical_font_height) * 100.0))
+        if source is None:
+            source, _ = installation.texture_resource_result(resref)
+        image = textures.image(source_resref)
+        if source is None or image is None:
+            raise RuntimeError(f"KOTOR UI texture is missing: {resref}")
+        source_bytes = resource_data(source)
+        encoded = io.BytesIO()
+        image.save(encoded, format="PNG", optimize=False)
+        payload = encoded.getvalue()
+        relative = f"ui/{key}.png"
+        path = output_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        source_txi = textures.txi.get(source_resref.lower(), "")
+        record = {
+            "resref": resref,
+            "sourceResref": source_resref,
+            "path": relative,
+            "width": int(image.width),
+            "height": int(image.height),
+            "sourceSha256": sha256_bytes(source_bytes),
+            "sourceByteCount": len(source_bytes),
+            "sourceType": resource_type_name(source),
+            "sourceTxi": source_txi,
+            "payloadSha256": sha256_bytes(payload),
+            "byteCount": len(payload),
+        }
+        bitmap_font = export_bitmap_font(
+            resref,
+            source_txi,
+            image,
+            int(image.width),
+            int(image.height),
+            requested_font_size)
+        if bitmap_font is not None:
+            record.update(bitmap_font)
+        exported_textures[key] = record
+        return record
+
+    def extent(source: Any) -> dict[str, int] | None:
+        if source is None:
+            return None
+        return {
+            "left": int(source.get("LEFT", 0)),
+            "top": int(source.get("TOP", 0)),
+            "width": int(source.get("WIDTH", 0)),
+            "height": int(source.get("HEIGHT", 0)),
+        }
+
+    def color(source: Any) -> list[float] | None:
+        if source is None:
+            return None
+        return [float(source.x), float(source.y), float(source.z)]
+
+    def surface(source: Any) -> dict[str, Any] | None:
+        if source is None:
+            return None
+        return {
+            "corner": canonical_resref(source.get("CORNER", "")),
+            "edge": canonical_resref(source.get("EDGE", "")),
+            "fill": canonical_resref(source.get("FILL", "")),
+            "fillStyle": int(source.get("FILLSTYLE", 0)),
+            "dimension": int(source.get("DIMENSION", 0)),
+            "innerOffset": int(source.get("INNEROFFSET", 0)),
+            "color": color(source.get("COLOR")),
+            "pulsing": bool(source.get("PULSING", 0)),
+        }
+
+    def text_record(source: Any) -> dict[str, Any] | None:
+        if source is None:
+            return None
+        strref = int(source.get("STRREF", 0xFFFFFFFF))
+        literal = str(source.get("TEXT", ""))
+        resolved = talktable.string(strref) if 0 <= strref < 0xFFFFFFFF else literal
+        return {
+            "alignment": int(source.get("ALIGNMENT", 0)),
+            "color": color(source.get("COLOR")),
+            "font": canonical_resref(source.get("FONT", "")),
+            "literal": literal,
+            "strref": strref,
+            "resolved": resolved,
+            "pulsing": bool(source.get("PULSING", 0)),
+        }
+
+    def control_record(source: Any, nested: bool = False) -> dict[str, Any]:
+        record: dict[str, Any] = {
+            "tag": str(source.get("TAG", "")),
+            "type": int(source.get("CONTROLTYPE", -1)),
+            "extent": extent(source.get("EXTENT")),
+            "border": surface(source.get("BORDER")),
+            "highlight": surface(source.get("HILIGHT")),
+            "progress": surface(source.get("PROGRESS")),
+            "text": text_record(source.get("TEXT")),
+            "startFromLeft": bool(source.get("STARTFROMLEFT", 1)),
+            "currentValue": int(source.get("CURVALUE", 0)),
+            "maxValue": int(source.get("MAXVALUE", 0)),
+        }
+        if not nested:
+            if source.get("PROTOITEM") is not None:
+                record["prototype"] = control_record(source.get("PROTOITEM"), True)
+            if source.get("SCROLLBAR") is not None:
+                record["scrollbar"] = control_record(source.get("SCROLLBAR"), True)
+        return record
+
+    def load_gui(resref: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        source = installation.resource(resref, ResourceType.GUI)
+        if source is None:
+            raise RuntimeError(f"KOTOR UI layout is missing: {resref}.gui")
+        source_bytes = resource_data(source)
+        root = read_gff(source_bytes).root
+        root_extent = extent(root.get("EXTENT"))
+        if root_extent is None or root_extent["width"] <= 0 or root_extent["height"] <= 0:
+            raise RuntimeError(f"KOTOR UI layout has an invalid root extent: {resref}")
+        record = {
+            "resref": resref,
+            "sourceSha256": sha256_bytes(source_bytes),
+            "sourceByteCount": len(source_bytes),
+            "extent": root_extent,
+            "border": surface(root.get("BORDER")),
+        }
+        controls = [control_record(control) for control in root.get_list("CONTROLS")]
+        return record, controls
+
+    def referenced_textures(value: Any) -> set[str]:
+        found: set[str] = set()
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in {"corner", "edge", "fill", "font"} and isinstance(child, str) and child:
+                    found.add(child)
+                else:
+                    found.update(referenced_textures(child))
+        elif isinstance(value, list):
+            for child in value:
+                found.update(referenced_textures(child))
+        return found
+
+    loading_layout, loading_controls = load_gui("loadscreen")
+    inventory_layout, inventory_controls = load_gui("inventory")
+    top_layout, top_controls = load_gui("top")
+    hud_layout, hud_controls = load_gui("mipc8x6")
+    module_loading_resref = f"load_{module}"
+
+    trask_resource = find_named_module_resource(
+        installation, module, "end_trask", "UTC")
+    if trask_resource is None:
+        raise RuntimeError("Endar Spire party member UTC could not be resolved")
+    trask = read_utc(resource_data(trask_resource))
+    portraits_resource = installation.resource("portraits", ResourceType.TwoDA)
+    if portraits_resource is None:
+        raise RuntimeError("portraits.2da could not be resolved for the party UI")
+    portraits_bytes = resource_data(portraits_resource)
+    portraits = read_2da(portraits_bytes)
+    trask_portrait_resref = str(portraits.get_cell(int(trask.portrait_id), "baseresref"))
+    if not trask_portrait_resref:
+        raise RuntimeError("Endar Spire party portrait could not be resolved")
+
+    loading_music = installation.sounds(
+        {"mus_loadscreen"}, [SearchLocation.MUSIC]).get("mus_loadscreen")
+    if not loading_music or not loading_music.startswith(b"RIFF"):
+        raise RuntimeError("KOTOR loading music could not be decoded as WAV")
+    loading_music_relative = "audio/mus_loadscreen.wav"
+    loading_music_path = output_root / loading_music_relative
+    loading_music_path.parent.mkdir(parents=True, exist_ok=True)
+    loading_music_path.write_bytes(loading_music)
+    loading_music_source_path = installation.streammusic_path() / "mus_loadscreen.wav"
+    loading_music_source = loading_music_source_path.read_bytes()
+    loading_music_record = {
+        "resref": "mus_loadscreen",
+        "path": loading_music_relative,
+        "format": "wav",
+        "sourceSha256": sha256_bytes(loading_music_source),
+        "sourceByteCount": len(loading_music_source),
+        "payloadSha256": sha256_bytes(loading_music),
+        "byteCount": len(loading_music),
+    }
+
+    loadscreen_hints_resource = installation.resource(
+        "loadscreenhints", ResourceType.TwoDA)
+    if loadscreen_hints_resource is None:
+        raise RuntimeError("loadscreenhints.2da could not be resolved")
+    loadscreen_hints_bytes = resource_data(loadscreen_hints_resource)
+    loadscreen_hints = read_2da(loadscreen_hints_bytes)
+    story_hint_strref = int(loadscreen_hints.get_cell(0, "storyhint"))
+
+    item_records: list[dict[str, Any]] = []
+    for item in inventory_items:
+        variation = (
+            int(item["textureVariation"])
+            if int(item["modelType"]) == 1 and int(item["textureVariation"]) > 0
+            else int(item["modelVariation"])
+        )
+        icon_resref = f"i{str(item['itemClass']).lower()}_{variation:03d}"
+        item_records.append({
+            "resref": item["resref"],
+            "displayName": item["displayName"],
+            "description": item["description"],
+            "cost": int(item["cost"]),
+            "baseItem": int(item["baseItem"]),
+            "equipableSlots": int(item["equipableSlots"]),
+            "icon": export_texture(icon_resref),
+            "utiSha256": item["utiSha256"],
+        })
+
+    ui_contract: dict[str, Any] = {
+        "schema": "nikami-aurora-kotor-ui-v1",
+        "loading": {
+            "layout": loading_layout,
+            "controls": loading_controls,
+            "background": export_texture(module_loading_resref),
+            "logo": export_texture("logo_sw_02"),
+            "progress": export_texture("bluefill"),
+            "loadingText": talktable.string(42493),
+            "loadingStrref": 42493,
+            "hintText": talktable.string(story_hint_strref),
+            "hintStrref": story_hint_strref,
+            "hintsSourceSha256": sha256_bytes(loadscreen_hints_bytes),
+            "musicResref": "mus_loadscreen",
+            "music": loading_music_record,
+        },
+        "inventory": {
+            "layout": inventory_layout,
+            "controls": inventory_controls,
+            "topLayout": top_layout,
+            "topControls": top_controls,
+            "background": export_texture("lbl_invent"),
+            "portrait": export_texture(portrait_resref),
+            "partyPortraits": [
+                export_texture(portrait_resref),
+                export_texture(trask_portrait_resref),
+            ],
+            "partyPortraitsSourceSha256": sha256_bytes(portraits_bytes),
+            "items": item_records,
+        },
+        "hud": {
+            "layout": hud_layout,
+            "controls": hud_controls,
+            "portrait": export_texture(portrait_resref),
+            "partyPortraits": [
+                export_texture(portrait_resref),
+                export_texture(trask_portrait_resref),
+            ],
+            "minimap": {
+                "texture": export_texture(f"lbl_map{area_resref}"),
+                "mapPoint1": [float(area.map_point_1.x), float(area.map_point_1.y)],
+                "mapPoint2": [float(area.map_point_2.x), float(area.map_point_2.y)],
+                "worldPoint1": [float(area.world_point_1.x), float(area.world_point_1.y)],
+                "worldPoint2": [float(area.world_point_2.x), float(area.world_point_2.y)],
+                "resolutionX": int(area.map_res_x),
+                "zoom": int(area.map_zoom),
+                "northAxis": int(area.north_axis),
+            },
+        },
+    }
+    for resref in sorted(referenced_textures(ui_contract)):
+        export_texture(resref)
+    ui_contract["textures"] = sorted(
+        exported_textures.values(), key=lambda record: record["resref"].lower())
+    return ui_contract
 
 
 def export_first_encounter_effects(
@@ -943,6 +1396,10 @@ def export_player_actor(
     if portrait_appearance != appearance_id:
         raise RuntimeError(
             f"Portrait {portrait_id} resolves appearance {portrait_appearance}, expected {appearance_id}")
+    portrait_resref = str(portraits.get_cell(portrait_id, "baseresref"))
+    if not portrait_resref or installation.texture(portrait_resref) is None:
+        raise RuntimeError(
+            f"Player portrait texture could not be resolved: portrait row {portrait_id}")
     body_name = str(appearance.get_cell(appearance_id, "modela"))
     body_texture_prefix = str(appearance.get_cell(appearance_id, "texa"))
     body_texture = body_texture_prefix
@@ -1034,6 +1491,7 @@ def export_player_actor(
         "schema": "nikami-aurora-kotor-player-v1",
         "glb": f"actors/{output_path.name}",
         "portraitId": portrait_id,
+        "portraitResref": portrait_resref,
         "appearanceId": appearance_id,
         "appearanceLabel": str(appearance.get_cell(appearance_id, "label")),
         "bodyModel": body_name,
@@ -1518,6 +1976,8 @@ def export_opening_locker(
             item_definitions[resref.lower()] = {
                 "resref": resref,
                 "displayName": installation.string(uti.name, resref),
+                "description": installation.string(uti.description, resref),
+                "cost": int(uti.cost),
                 "tag": str(uti.tag),
                 "baseItem": base_item,
                 "charges": int(uti.charges),
@@ -2057,6 +2517,16 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         mdlops,
         output_root / "_cache" / "animations",
     )
+    ui_contract = export_kotor_ui(
+        installation,
+        module,
+        area_resref,
+        are,
+        output_root,
+        textures,
+        player_actor["portraitResref"],
+        opening_locker["inventory"],
+    )
     lip_capsule = (
         Capsule(game_root / "lips" / f"{module}_loc.mod")
         if (game_root / "lips" / f"{module}_loc.mod").is_file() else None)
@@ -2391,6 +2861,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
             "height": float(camera_styles.get_cell(int(are.camera_style), "height")),
             "sourceSha256": sha256_bytes(resource_data(camera_style_resource)),
         },
+        "ui": ui_contract,
         "player": player_actor,
         "rooms": room_records,
         "creatures": creatures,

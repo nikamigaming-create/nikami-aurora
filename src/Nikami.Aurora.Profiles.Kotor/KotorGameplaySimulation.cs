@@ -251,6 +251,10 @@ public sealed record KotorPlaceableDefinition(
 
 public sealed record KotorGameplaySnapshot(
     int PlayerExperience,
+    int PlayerCurrentVitality,
+    int PlayerMaximumVitality,
+    int PlayerDefense,
+    int PlayerCredits,
     IReadOnlyDictionary<string, bool> DoorStates,
     IReadOnlyDictionary<string, bool> PlaceableStates,
     IReadOnlyDictionary<string, int> PlayerInventory,
@@ -279,6 +283,13 @@ public sealed record KotorEquipmentChanged(
     KotorEquipmentSlot Slot,
     KotorItemDefinition Item,
     string? PreviousResref) : KotorGameplayEvent;
+
+public sealed record KotorItemUsed(
+    KotorItemDefinition Item,
+    int QuantityBefore,
+    int QuantityAfter,
+    int VitalityBefore,
+    int VitalityAfter) : KotorGameplayEvent;
 
 public sealed record KotorTriggerEntered(KotorTriggerDefinition Trigger) : KotorGameplayEvent;
 
@@ -334,6 +345,10 @@ public sealed class KotorGameplaySimulation
     private readonly Dictionary<string, int> globalNumbers =
         new(StringComparer.OrdinalIgnoreCase);
     private int playerExperience;
+    private int playerCurrentVitality;
+    private readonly int playerMaximumVitality;
+    private readonly int playerDefense;
+    private readonly int playerCredits;
     private bool mapRevealed;
 
     public KotorGameplaySimulation(
@@ -341,10 +356,23 @@ public sealed class KotorGameplaySimulation
         IEnumerable<KotorDoorDefinition> doors,
         IEnumerable<KotorPlaceableDefinition> placeables,
         int initialPlayerExperience = 0,
-        IEnumerable<KotorTriggerDefinition>? triggers = null)
+        IEnumerable<KotorTriggerDefinition>? triggers = null,
+        int initialCurrentVitality = 20,
+        int initialMaximumVitality = 20,
+        int initialDefense = 10,
+        int initialCredits = 0)
     {
         if (initialPlayerExperience < 0)
             throw new ArgumentOutOfRangeException(nameof(initialPlayerExperience));
+        if (initialMaximumVitality <= 0)
+            throw new ArgumentOutOfRangeException(nameof(initialMaximumVitality));
+        if (initialCurrentVitality < 0 ||
+            initialCurrentVitality > initialMaximumVitality)
+            throw new ArgumentOutOfRangeException(nameof(initialCurrentVitality));
+        if (initialDefense < 0)
+            throw new ArgumentOutOfRangeException(nameof(initialDefense));
+        if (initialCredits < 0)
+            throw new ArgumentOutOfRangeException(nameof(initialCredits));
         this.scripts = UniqueByKey(scripts.Select(contract => contract.Validate()),
             contract => contract.Resref, "script contract");
         doorOrder = doors.ToArray();
@@ -379,10 +407,18 @@ public sealed class KotorGameplaySimulation
         triggerStates = this.triggers.Keys.ToDictionary(instanceId => instanceId, _ => false,
             StringComparer.OrdinalIgnoreCase);
         playerExperience = initialPlayerExperience;
+        playerCurrentVitality = initialCurrentVitality;
+        playerMaximumVitality = initialMaximumVitality;
+        playerDefense = initialDefense;
+        playerCredits = initialCredits;
     }
 
     public KotorGameplaySnapshot CaptureSnapshot() => new(
         playerExperience,
+        playerCurrentVitality,
+        playerMaximumVitality,
+        playerDefense,
+        playerCredits,
         ReadOnlyCopy(doorStates),
         ReadOnlyCopy(placeableStates),
         ReadOnlyCopy(playerInventory),
@@ -522,6 +558,46 @@ public sealed class KotorGameplaySimulation
         equipment.Clear();
         foreach (var pair in nextEquipment)
             equipment.Add(pair.Key, pair.Value);
+        return Complete(before, events);
+    }
+
+    public KotorGameplayTransition UseMedpac(
+        string resref,
+        int wisdomModifier = 0,
+        int treatInjurySkill = 0)
+    {
+        if (string.IsNullOrWhiteSpace(resref))
+            throw new ArgumentException("Medpac resref cannot be empty", nameof(resref));
+        if (treatInjurySkill < 0)
+            throw new ArgumentOutOfRangeException(nameof(treatInjurySkill));
+        var before = CaptureSnapshot();
+        var events = new List<KotorGameplayEvent>();
+        if (!itemDefinitions.TryGetValue(resref, out var item))
+            throw new KeyNotFoundException($"Unknown KOTOR item: {resref}");
+        if (item.BaseItem != 55)
+            throw new InvalidOperationException(
+                $"KOTOR item {item.Resref} is not medical equipment");
+        if (!playerInventory.TryGetValue(item.Resref, out var quantity) || quantity <= 0)
+            throw new InvalidOperationException(
+                $"KOTOR item {item.Resref} is not available to use");
+        if (playerCurrentVitality >= playerMaximumVitality)
+            return Complete(before, events);
+
+        var healing = Math.Max(1, checked(10 + wisdomModifier + treatInjurySkill));
+        var vitalityBefore = playerCurrentVitality;
+        playerCurrentVitality = Math.Min(
+            playerMaximumVitality,
+            checked(playerCurrentVitality + healing));
+        if (quantity == 1)
+            playerInventory.Remove(item.Resref);
+        else
+            playerInventory[item.Resref] = quantity - 1;
+        events.Add(new KotorItemUsed(
+            item,
+            quantity,
+            quantity - 1,
+            vitalityBefore,
+            playerCurrentVitality));
         return Complete(before, events);
     }
 

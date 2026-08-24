@@ -183,6 +183,7 @@ public sealed partial class KotorModuleBoot : Node3D
 
     public override void _Ready()
     {
+        ConfigureFlatReferenceViewportIfRequested();
         CreateEnvironment();
         CreateCamera();
         TryInitializeOpenXR();
@@ -266,6 +267,13 @@ public sealed partial class KotorModuleBoot : Node3D
             {
                 automatedLockerApplied = true;
                 UsePlaceable(materializedPlaceables[0]);
+            }
+            if (!automatedInventoryOpened && readyFrames >= 45 &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_INVENTORY_SCREEN") == "1")
+            {
+                automatedInventoryOpened = true;
+                ShowInventory();
             }
             if (!automatedTutorialXpChain && readyFrames >= 30 &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN") == "1" &&
@@ -420,6 +428,7 @@ public sealed partial class KotorModuleBoot : Node3D
         }
 
         UpdateXrSpectatorCamera();
+        UpdateFlatUiVisibility();
         var capturePath = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE");
         var captureNodeMatches = string.IsNullOrWhiteSpace(captureDialogueNode) ||
                                  currentDialogueNodeKey.Equals(
@@ -448,6 +457,8 @@ public sealed partial class KotorModuleBoot : Node3D
 
     public override void _UnhandledInput(InputEvent inputEvent)
     {
+        if (HandleFlatUiInput(inputEvent))
+            return;
         if (inputEvent is InputEventMouseMotion motion && Input.MouseMode == Input.MouseModeEnum.Captured)
         {
             yaw -= motion.Relative.X * 0.0025f;
@@ -556,11 +567,13 @@ public sealed partial class KotorModuleBoot : Node3D
             if (manifest.Schema != "nikami-aurora-kotor-module-v1")
                 throw new InvalidDataException($"Unsupported module manifest schema: {manifest.Schema}");
 
-            status.Text = $"LOADING {manifest.Module.ToUpperInvariant()}";
-            details.Text = "Resolving owned Odyssey geometry...";
-            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-
             var manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
+            ConfigureFlatPresentation(manifest.Ui, manifestDirectory);
+            UpdateLoadingProgress(0.35f);
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+            if (await CaptureLoadingPresentationIfRequested())
+                return;
+
             dialogueCameras.Clear();
             foreach (var sourceCamera in manifest.Cameras)
                 dialogueCameras[sourceCamera.Id] = sourceCamera;
@@ -615,7 +628,8 @@ public sealed partial class KotorModuleBoot : Node3D
                 roomSparkEmitterCount += emitterReport.Spark;
                 damagedEndSmokeReady |= emitterReport.DamagedEnd;
                 loadedRooms++;
-                details.Text = $"Rooms {loadedRooms}/{manifest.Rooms.Count}  •  {room.Model}";
+                UpdateLoadingProgress(
+                    0.35f + 0.45f * loadedRooms / Math.Max(1, manifest.Rooms.Count));
                 await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             }
             if (lightmappedOpaqueMaterials == 0 || baseOpaqueMaterials == 0 ||
@@ -665,7 +679,10 @@ public sealed partial class KotorModuleBoot : Node3D
                 cameraPivot.Rotation = new Vector3(pitch, 0, 0);
             }
 
+            UpdateLoadingProgress(1.0f);
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             loadingBackdrop.Visible = false;
+            StopRetailLoadingMusic();
             status.Text = $"{manifest.Module.ToUpperInvariant()}  •  ENDAR SPIRE";
             details.Text = $"{manifest.Rooms.Count} authored / {loadedRooms} visual rooms  •  " +
                            $"{materializedActors} actor / {manifest.Counts.Creatures} creature placements  •  " +
@@ -731,6 +748,8 @@ public sealed partial class KotorModuleBoot : Node3D
             status.Text = "KOTOR MODULE LOAD FAILED";
             details.Text = exception.Message;
             GD.PushError($"NIKAMI_AURORA_KOTOR_BOOT status=fail error={exception}");
+            if (System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_EXIT") == "1")
+                RequestCleanExit(1);
         }
     }
 
@@ -1497,40 +1516,23 @@ public sealed partial class KotorModuleBoot : Node3D
         AddChild(overlayLayer);
         loadingBackdrop = new ColorRect
         {
-            Color = new Color(0.005f, 0.012f, 0.025f, 0.94f),
+            Color = Colors.Black,
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
         loadingBackdrop.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         overlayLayer.AddChild(loadingBackdrop);
-
-        var panel = new VBoxContainer
+        status = new Label
         {
-            Position = new Vector2(36, 32),
+            Text = "Loading",
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        overlayLayer.AddChild(panel);
-        var brand = new Label { Text = "NIKAMI / AURORA", MouseFilter = Control.MouseFilterEnum.Ignore };
-        brand.AddThemeFontSizeOverride("font_size", 18);
-        brand.AddThemeColorOverride("font_color", new Color(0.42f, 0.78f, 1.0f));
-        panel.AddChild(brand);
-        status = new Label { Text = "INITIALIZING ODYSSEY PROFILE" };
-        status.AddThemeFontSizeOverride("font_size", 30);
-        panel.AddChild(status);
-        details = new Label { Text = "Waiting for module manifest..." };
-        details.AddThemeFontSizeOverride("font_size", 16);
-        details.AddThemeColorOverride("font_color", new Color(0.72f, 0.8f, 0.9f));
-        panel.AddChild(details);
-
-        var controls = new Label
+        details = new Label
         {
-            Text = "WASD move  •  mouse look  •  Shift sprint  •  E interact  •  " +
-                   "Q equip opening gear  •  Esc release mouse",
-            Position = new Vector2(36, 680),
+            Text = "",
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        controls.AddThemeFontSizeOverride("font_size", 14);
-        controls.AddThemeColorOverride("font_color", new Color(0.62f, 0.7f, 0.8f));
-        overlayLayer.AddChild(controls);
+        loadingBackdrop.AddChild(status);
+        loadingBackdrop.AddChild(details);
 
         interactionPrompt = new Label
         {
@@ -2846,6 +2848,11 @@ public sealed partial class KotorModuleBoot : Node3D
                              $"slot={equipped.Slot} item={equipped.Item.Resref} " +
                              $"previous={equipped.PreviousResref}");
                     break;
+                case KotorItemUsed used:
+                    GD.Print($"NIKAMI_AURORA_ITEM status=used item={used.Item.Resref} " +
+                             $"quantity={used.QuantityBefore}->{used.QuantityAfter} " +
+                             $"vitality={used.VitalityBefore}->{used.VitalityAfter}");
+                    break;
                 case KotorTriggerEntered entered:
                     GD.Print($"NIKAMI_AURORA_TRIGGER status=entered " +
                              $"id={entered.Trigger.InstanceId} " +
@@ -3640,6 +3647,7 @@ public sealed partial class KotorModuleBoot : Node3D
         TargetRecord Target,
         AreaLightingRecord Lighting,
         CameraStyleRecord CameraStyle,
+        KotorUiRecord Ui,
         PlayerRecord Player,
         IReadOnlyList<RoomRecord> Rooms,
         IReadOnlyList<CreatureRecord> Creatures,

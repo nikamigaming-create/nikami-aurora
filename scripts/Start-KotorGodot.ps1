@@ -32,6 +32,9 @@ param(
     [switch]$EquipmentCloseup,
     [switch]$ChairCloseup,
     [switch]$XrBodyLookDown,
+    [switch]$LoadingScreenCapture,
+    [switch]$HudScreen,
+    [switch]$InventoryScreen,
     [switch]$CaptureAndExit
 )
 
@@ -186,6 +189,35 @@ if ($XrBodyLookDown) {
     }
     $env:NIKAMI_AURORA_CAPTURE_XR_BODY_LOOKDOWN = "1"
 }
+if ($LoadingScreenCapture) {
+    if ($OpenXR -or $OpenXRSimulator) {
+        throw "-LoadingScreenCapture is a flat presentation gate."
+    }
+    if ([string]::IsNullOrWhiteSpace($CapturePath)) {
+        throw "-LoadingScreenCapture requires -CapturePath."
+    }
+    $env:NIKAMI_AURORA_CAPTURE_LOADING_SCREEN = "1"
+}
+if ($HudScreen) {
+    if ($OpenXR -or $OpenXRSimulator) {
+        throw "-HudScreen is a flat presentation gate."
+    }
+    if ([string]::IsNullOrWhiteSpace($CapturePath)) {
+        throw "-HudScreen requires -CapturePath."
+    }
+    $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
+}
+if ($InventoryScreen) {
+    if ($OpenXR -or $OpenXRSimulator) {
+        throw "-InventoryScreen is a flat presentation gate."
+    }
+    $env:NIKAMI_AURORA_TEST_INVENTORY_SCREEN = "1"
+    $env:NIKAMI_AURORA_TEST_OPEN_LOCKER = "1"
+    $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
+}
+if ($LoadingScreenCapture -or $HudScreen -or $InventoryScreen) {
+    $env:NIKAMI_AURORA_FLAT_UI_REFERENCE_VIEWPORT = "800x600"
+}
 
 try {
     & dotnet build (Join-Path $repo "godot\Nikami.Aurora.Godot.csproj") --configuration Debug
@@ -193,6 +225,12 @@ try {
         throw "Godot C# build failed with code $LASTEXITCODE"
     }
     $godotArguments = @("--path", (Join-Path $repo "godot"))
+    if ($LoadingScreenCapture -or $HudScreen -or $InventoryScreen) {
+        # mipc8x6 is KOTOR's owned 800x600 HUD contract.  Keeping flat
+        # acceptance captures at that exact viewport prevents widescreen
+        # stretching from being mistaken for source-layout drift.
+        $godotArguments += @("--windowed", "--resolution", "800x600")
+    }
     if ($OpenXR) {
         $godotArguments += @("--xr-mode", "on")
     }
@@ -260,6 +298,9 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_XR_BODY_LOOKDOWN -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_LOADING_SCREEN -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_INVENTORY_SCREEN -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_FLAT_UI_REFERENCE_VIEWPORT -ErrorAction SilentlyContinue
     if ($hadXrRuntimeJson) {
         $env:XR_RUNTIME_JSON = $previousXrRuntimeJson
     }
