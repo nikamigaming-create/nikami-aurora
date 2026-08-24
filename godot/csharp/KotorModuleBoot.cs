@@ -277,6 +277,68 @@ public sealed partial class KotorModuleBoot : Node3D
                 automatedInventoryOpened = true;
                 ShowInventory();
             }
+            if (System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_INVENTORY_QUEST_FILTER") == "1" &&
+                inventoryScreen?.Visible == true)
+            {
+                if (automatedInventoryQuestFilterStage == 0 && readyFrames >= 50)
+                {
+                    ToggleInventoryQuestItems();
+                    if (visibleInventoryItems.Count != 0 ||
+                        inventoryQuestItemsButton?.Text != flatUiRecord?.Inventory.AllItems.Text)
+                        throw new InvalidDataException(
+                            "Opening inventory quest-only filter did not produce its source-empty state");
+                    automatedInventoryQuestFilterStage = 1;
+                }
+                else if (automatedInventoryQuestFilterStage == 1 && readyFrames >= 55)
+                {
+                    ToggleInventoryQuestItems();
+                    if (visibleInventoryItems.Count != 3 || inventoryQuestItemsOnly)
+                        throw new InvalidDataException(
+                            "Opening inventory all-items filter did not restore three item types");
+                    automatedInventoryQuestFilterStage = 2;
+                    GD.Print("NIKAMI_AURORA_INVENTORY_FILTER status=pass " +
+                             "all=3 quest=0 all-restored=3");
+                }
+            }
+            if (!automatedInventoryScrollVerified && readyFrames >= 50 &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_INVENTORY_SCROLL_REPEAT") == "3" &&
+                inventoryScreen?.Visible == true)
+            {
+                if (visibleInventoryItems.Count != 9 ||
+                    inventorySourceScrollbar?.Visible != true ||
+                    inventoryScrollThumb is null || inventoryScroll is null)
+                    throw new InvalidDataException(
+                        "Inventory overflow simulation did not materialize its source scrollbar");
+                var thumbBefore = inventoryScrollThumb.Position.Y;
+                ScrollInventoryBy(inventoryRowHeight);
+                if (inventoryScroll.ScrollVertical != inventoryRowHeight ||
+                    inventoryScrollThumb.Position.Y <= thumbBefore)
+                    throw new InvalidDataException(
+                        "Inventory source scrollbar did not advance one item row");
+                ScrollInventoryBy(10_000);
+                var expectedBottom = visibleInventoryItems.Count * inventoryRowHeight -
+                                     (int)inventoryScroll.Size.Y;
+                if (inventoryScroll.ScrollVertical != expectedBottom)
+                    throw new InvalidDataException(
+                        "Inventory source scrollbar did not clamp to its final item row");
+                if (inventoryScrollSlider is null)
+                    throw new InvalidDataException(
+                        "Inventory source scrollbar has no drag control");
+                inventoryScrollSlider.Value = inventoryScrollSlider.MaxValue;
+                if (inventoryScroll.ScrollVertical != 0)
+                    throw new InvalidDataException(
+                        "Inventory source scrollbar drag did not reach its first row");
+                inventoryScrollSlider.Value = 0;
+                if (inventoryScroll.ScrollVertical != expectedBottom)
+                    throw new InvalidDataException(
+                        "Inventory source scrollbar drag did not reach its final row");
+                automatedInventoryScrollVerified = true;
+                GD.Print($"NIKAMI_AURORA_INVENTORY_SCROLL_SIMULATION status=pass " +
+                         $"rows={visibleInventoryItems.Count} rowHeight={inventoryRowHeight} " +
+                         $"bottom={expectedBottom} input=arrows,drag");
+            }
             if (!automatedEquipmentScreenOpened && readyFrames >= 45 &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_TEST_EQUIPMENT_SCREEN") == "1")

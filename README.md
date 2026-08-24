@@ -52,6 +52,9 @@ navigate between Inventory and Equipment, select all nine authored paper-doll
 slots, equip or remove Clothing and the Short Sword through profile state, and
 render the base, single-item, or combined source-derived player variant. Owned
 GUI, font, icon, portrait, audio, model, and capture payloads stay local.
+The inventory's source Quest Items/All Items toggle now reads each installed
+UTI `Plot` bit, and its native arrow/thumb scrollbar clips and navigates lists
+that exceed the authored viewport.
 
 Opening-room furniture now distinguishes baked room meshes from GIT placeables.
 The installed `PLC_Chair2` model is instanced at all three authored placements;

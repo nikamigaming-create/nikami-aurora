@@ -531,6 +531,17 @@ def export_kotor_ui(
             "pulsing": bool(source.get("PULSING", 0)),
         }
 
+    def image_record(source: Any) -> dict[str, Any] | None:
+        if source is None:
+            return None
+        return {
+            "image": canonical_resref(source.get("IMAGE", "")),
+            "drawStyle": int(source.get("DRAWSTYLE", 0)),
+            "flipStyle": int(source.get("FLIPSTYLE", 0)),
+            "rotate": float(source.get("ROTATE", 0.0)),
+            "alignment": int(source.get("ALIGNMENT", 0)),
+        }
+
     def control_record(source: Any, nested: bool = False) -> dict[str, Any]:
         record: dict[str, Any] = {
             "tag": str(source.get("TAG", "")),
@@ -540,9 +551,12 @@ def export_kotor_ui(
             "highlight": surface(source.get("HILIGHT")),
             "progress": surface(source.get("PROGRESS")),
             "text": text_record(source.get("TEXT")),
+            "direction": image_record(source.get("DIR")),
+            "thumb": image_record(source.get("THUMB")),
             "startFromLeft": bool(source.get("STARTFROMLEFT", 1)),
             "currentValue": int(source.get("CURVALUE", 0)),
             "maxValue": int(source.get("MAXVALUE", 0)),
+            "visibleValue": int(source.get("VISIBLEVALUE", 0)),
         }
         if not nested:
             if source.get("PROTOITEM") is not None:
@@ -574,7 +588,7 @@ def export_kotor_ui(
         found: set[str] = set()
         if isinstance(value, dict):
             for key, child in value.items():
-                if key in {"corner", "edge", "fill", "font"} and isinstance(child, str) and child:
+                if key in {"corner", "edge", "fill", "font", "image"} and isinstance(child, str) and child:
                     found.add(child)
                 else:
                     found.update(referenced_textures(child))
@@ -647,6 +661,7 @@ def export_kotor_ui(
             "cost": int(item["cost"]),
             "baseItem": int(item["baseItem"]),
             "equipableSlots": int(item["equipableSlots"]),
+            "plot": bool(item["plot"]),
             "icon": export_texture(icon_resref),
             "utiSha256": item["utiSha256"],
         })
@@ -680,6 +695,10 @@ def export_kotor_ui(
             ],
             "partyPortraitsSourceSha256": sha256_bytes(portraits_bytes),
             "items": item_records,
+            "allItems": {
+                "text": talktable.string(41822),
+                "strref": 41822,
+            },
         },
         "equipment": {
             "layout": equipment_layout,
@@ -2145,6 +2164,7 @@ def export_opening_locker(
                 "bodyVariation": int(uti.body_variation),
                 "textureVariation": int(uti.texture_variation),
                 "equipableSlots": int(slots_text, 0) if slots_text else 0,
+                "plot": bool(uti.plot),
                 "itemClass": base_cell("itemclass"),
                 "modelType": int(base_cell("modeltype") or "0"),
                 "defaultModel": base_cell("defaultmodel"),
