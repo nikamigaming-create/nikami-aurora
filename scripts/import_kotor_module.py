@@ -608,7 +608,8 @@ def export_kotor_ui(
         installation, module, "end_trask", "UTC")
     if trask_resource is None:
         raise RuntimeError("Endar Spire party member UTC could not be resolved")
-    trask = read_utc(resource_data(trask_resource))
+    trask_utc_bytes = resource_data(trask_resource)
+    trask = read_utc(trask_utc_bytes)
     portraits_resource = installation.resource("portraits", ResourceType.TwoDA)
     if portraits_resource is None:
         raise RuntimeError("portraits.2da could not be resolved for the party UI")
@@ -617,6 +618,38 @@ def export_kotor_ui(
     trask_portrait_resref = str(portraits.get_cell(int(trask.portrait_id), "baseresref"))
     if not trask_portrait_resref:
         raise RuntimeError("Endar Spire party portrait could not be resolved")
+
+    trask_armor = next(
+        (item for slot, item in trask.equipment.items() if int(slot.value) == 0x00002),
+        None)
+    if trask_armor is None:
+        raise RuntimeError("Endar Spire party member has no equipped armor definition")
+    trask_armor_resref = canonical_resref(trask_armor.resref)
+    trask_armor_resource = installation.resource(trask_armor_resref, ResourceType.UTI)
+    if trask_armor_resource is None:
+        raise RuntimeError(
+            f"Endar Spire party armor could not be resolved: {trask_armor_resref}")
+    trask_armor_bytes = resource_data(trask_armor_resource)
+    trask_armor_uti = read_uti(trask_armor_bytes)
+    baseitems_resource = installation.resource("baseitems", ResourceType.TwoDA)
+    if baseitems_resource is None:
+        raise RuntimeError("baseitems.2da could not be resolved for party defense")
+    baseitems_bytes = resource_data(baseitems_resource)
+    baseitems = read_2da(baseitems_bytes)
+    armor_base_ac = int(baseitems.get_cell(int(trask_armor_uti.base_item), "baseac") or "0")
+    armor_dexterity_limit = int(
+        baseitems.get_cell(int(trask_armor_uti.base_item), "dexbonus") or "-1")
+    dexterity_modifier = math.floor((int(trask.dexterity) - 10) / 2)
+    applied_dexterity_modifier = (
+        dexterity_modifier
+        if armor_dexterity_limit < 0
+        else min(dexterity_modifier, armor_dexterity_limit)
+    )
+    trask_defense = (
+        10 + int(trask.natural_ac) + armor_base_ac + applied_dexterity_modifier)
+    trask_display_name = talktable.string(int(trask.first_name.stringref))
+    if not trask_display_name:
+        raise RuntimeError("Endar Spire party member name could not be resolved")
 
     loading_music = installation.sounds(
         {"mus_loadscreen"}, [SearchLocation.MUSIC]).get("mus_loadscreen")
@@ -694,6 +727,34 @@ def export_kotor_ui(
                 export_texture(trask_portrait_resref),
             ],
             "partyPortraitsSourceSha256": sha256_bytes(portraits_bytes),
+            "partyMembers": [
+                {
+                    "id": "player",
+                    "displayName": "Player",
+                    "portrait": export_texture(portrait_resref),
+                    "currentVitality": 20,
+                    "maximumVitality": 20,
+                    "defense": 10,
+                    "sourceKind": "profile",
+                    "utcSha256": None,
+                    "armorResref": None,
+                    "armorUtiSha256": None,
+                    "baseItemsSha256": None,
+                },
+                {
+                    "id": canonical_resref(trask.tag).lower(),
+                    "displayName": trask_display_name,
+                    "portrait": export_texture(trask_portrait_resref),
+                    "currentVitality": int(trask.current_hp),
+                    "maximumVitality": int(trask.max_hp),
+                    "defense": trask_defense,
+                    "sourceKind": "utc",
+                    "utcSha256": sha256_bytes(trask_utc_bytes),
+                    "armorResref": trask_armor_resref,
+                    "armorUtiSha256": sha256_bytes(trask_armor_bytes),
+                    "baseItemsSha256": sha256_bytes(baseitems_bytes),
+                },
+            ],
             "items": item_records,
             "allItems": {
                 "text": talktable.string(41822),

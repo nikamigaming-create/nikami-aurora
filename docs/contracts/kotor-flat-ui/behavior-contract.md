@@ -100,9 +100,11 @@ non-medical items.
 These gates confirm source binding, deterministic layout, and the bounded
 inventory transition. They do not yet establish complete retail visual parity.
 Matched live-retail capture rows, resolution-specific HUD selection beyond
-800x600, party switching, the full campaign item corpus, arbitrary item
-effects, combat HUD state, save/load, and character-generation-derived
-statistics remain separate contracts. The opening Quest Items toggle and list
-scroll controller are specified by the inventory-controls contract. The
-opening-player equipment screen is specified separately by
+800x600, the full campaign party/item corpus, party join/leave and
+controlled-character flows, arbitrary item effects, combat HUD state,
+save/load, and character-generation-derived statistics remain separate
+contracts. Opening Inventory party selection is specified by the
+inventory-party contract. The opening Quest Items toggle and list scroll
+controller are specified by the inventory-controls contract. The opening-player
+equipment screen is specified separately by
 `docs/contracts/kotor-equipment-ui/behavior-contract.md`.

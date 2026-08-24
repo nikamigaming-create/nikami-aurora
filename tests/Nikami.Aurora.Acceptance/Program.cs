@@ -287,7 +287,12 @@ internal static class Program
                     new System.Numerics.Vector3(5, 1, 0),
                     new System.Numerics.Vector3(4, 1, 0)
                 ],
-                "k_pend_trig02")]);
+                "k_pend_trig02")],
+            initialPartyMembers:
+            [
+                new KotorPartyMemberDefinition(
+                    "end_trask", "Trask", 30, 36, 12)
+            ]);
 
         var locker = simulation.UsePlaceable("PLACEABLE:0000");
         Expect(locker.Before.PlayerExperience == 0 && locker.After.PlayerExperience == 50,
@@ -475,6 +480,35 @@ internal static class Program
         Expect(!closeDoor.After.DoorStates["door:0000"] &&
                closeDoor.After.PlayerExperience == 150,
             "direct door toggle did not preserve the profile-owned story state");
+
+        var selectTrask = simulation.SelectPartyMember("END_TRASK");
+        Expect(selectTrask.Before.SelectedPartyMemberId ==
+               KotorGameplaySimulation.PlayerPartyMemberId &&
+               selectTrask.After.SelectedPartyMemberId == "end_trask" &&
+               selectTrask.After.PartyMembers["end_trask"].CurrentVitality == 30 &&
+               selectTrask.Events.Single() is KotorPartyMemberSelected selected &&
+               selected.BeforeId == KotorGameplaySimulation.PlayerPartyMemberId &&
+               selected.AfterId == "end_trask",
+            "inventory party selection did not persist the profile-owned member");
+        var healTrask = simulation.UseMedpac("g_i_medeqpmnt01");
+        var partyUse = healTrask.Events.OfType<KotorItemUsed>().Single();
+        Expect(healTrask.After.PartyMembers["end_trask"].CurrentVitality == 36 &&
+               healTrask.After.PlayerCurrentVitality == 20 &&
+               healTrask.After.PlayerInventory["g_i_medeqpmnt01"] == 1 &&
+               partyUse.PartyMemberId == "end_trask" &&
+               partyUse.VitalityBefore == 30 && partyUse.VitalityAfter == 36,
+            "inventory Medpac did not target the selected party member");
+        var selectPlayer = simulation.SelectPartyMember(
+            KotorGameplaySimulation.PlayerPartyMemberId);
+        Expect(selectPlayer.After.SelectedPartyMemberId ==
+               KotorGameplaySimulation.PlayerPartyMemberId &&
+               selectPlayer.After.PartyMembers["end_trask"].CurrentVitality == 36,
+            "inventory party selection did not preserve companion vitality");
+        var repeatedPlayerSelection = simulation.SelectPartyMember("PLAYER");
+        Expect(repeatedPlayerSelection.Events.Count == 0 &&
+               repeatedPlayerSelection.After.SelectedPartyMemberId ==
+               KotorGameplaySimulation.PlayerPartyMemberId,
+            "repeated inventory party selection was not idempotent");
     }
 
     private static void MaterializeMarkers(string root, GameProfileDescriptor descriptor)

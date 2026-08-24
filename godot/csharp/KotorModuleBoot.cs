@@ -339,6 +339,37 @@ public sealed partial class KotorModuleBoot : Node3D
                          $"rows={visibleInventoryItems.Count} rowHeight={inventoryRowHeight} " +
                          $"bottom={expectedBottom} input=arrows,drag");
             }
+            if (!automatedInventoryPartySelectionVerified && readyFrames >= 50 &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_INVENTORY_PARTY_SELECTION") == "1" &&
+                inventoryScreen?.Visible == true)
+            {
+                var memberSource = flatUiRecord?.Inventory.PartyMembers.Single(member =>
+                    member.SourceKind.Equals("utc", StringComparison.OrdinalIgnoreCase))
+                    ?? throw new InvalidDataException(
+                        "Opening inventory has no UTC-backed party member");
+                SelectInventoryPartyMember(memberSource.Id);
+                var snapshot = gameplaySimulation?.CaptureSnapshot()
+                    ?? throw new InvalidDataException(
+                        "Opening inventory party selection has no profile state");
+                var selected = snapshot.PartyMembers[snapshot.SelectedPartyMemberId];
+                if (!selected.Id.Equals(memberSource.Id, StringComparison.OrdinalIgnoreCase) ||
+                    selected.CurrentVitality != 30 || selected.MaximumVitality != 36 ||
+                    selected.Defense != 12 ||
+                    inventoryVitality?.Text != "30/36" ||
+                    inventoryDefense?.Text != "12" ||
+                    !ReferenceEquals(
+                        inventoryPortrait?.Texture,
+                        Texture(memberSource.Portrait.Resref)) ||
+                    !inventoryPartyButtons.ContainsKey(memberSource.Id) ||
+                    inventoryUseButton?.Disabled != false)
+                    throw new InvalidDataException(
+                        "Opening inventory party selection drifted from Trask's UTC state");
+                automatedInventoryPartySelectionVerified = true;
+                GD.Print("NIKAMI_AURORA_INVENTORY_PARTY status=pass " +
+                         "selected=end_trask vitality=30/36 defense=12 " +
+                         "medpacTarget=enabled");
+            }
             if (!automatedEquipmentScreenOpened && readyFrames >= 45 &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_TEST_EQUIPMENT_SCREEN") == "1")
@@ -3044,7 +3075,12 @@ public sealed partial class KotorModuleBoot : Node3D
                 case KotorItemUsed used:
                     GD.Print($"NIKAMI_AURORA_ITEM status=used item={used.Item.Resref} " +
                              $"quantity={used.QuantityBefore}->{used.QuantityAfter} " +
+                             $"target={used.PartyMemberId} " +
                              $"vitality={used.VitalityBefore}->{used.VitalityAfter}");
+                    break;
+                case KotorPartyMemberSelected selected:
+                    GD.Print($"NIKAMI_AURORA_PARTY status=selected " +
+                             $"member={selected.BeforeId}->{selected.AfterId}");
                     break;
                 case KotorTriggerEntered entered:
                     GD.Print($"NIKAMI_AURORA_TRIGGER status=entered " +
@@ -3836,8 +3872,43 @@ public sealed partial class KotorModuleBoot : Node3D
                 contract.Resref.Equals(
                     trigger.OnEnterScript, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
+        var partySources = manifest.Ui.Inventory.PartyMembers;
+        var playerPartySource = partySources.Single(member => member.Id.Equals(
+            KotorGameplaySimulation.PlayerPartyMemberId,
+            StringComparison.OrdinalIgnoreCase));
+        if (partySources.Count != 2 ||
+            playerPartySource.SourceKind != "profile" ||
+            playerPartySource.CurrentVitality != 20 ||
+            playerPartySource.MaximumVitality != 20 ||
+            playerPartySource.Defense != 10)
+            throw new InvalidDataException(
+                "Opening inventory player party baseline is incomplete");
+        var companionSources = partySources.Where(member => !member.Id.Equals(
+                KotorGameplaySimulation.PlayerPartyMemberId,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (companionSources.Any(member =>
+                member.SourceKind != "utc" ||
+                member.UtcSha256?.Length != 64 ||
+                string.IsNullOrWhiteSpace(member.ArmorResref) ||
+                member.ArmorUtiSha256?.Length != 64 ||
+                member.BaseItemsSha256?.Length != 64))
+            throw new InvalidDataException(
+                "Opening inventory companion evidence is incomplete");
+        var partyMembers = companionSources.Select(member =>
+            new KotorPartyMemberDefinition(
+                member.Id,
+                member.DisplayName,
+                member.CurrentVitality,
+                member.MaximumVitality,
+                member.Defense));
         return new KotorGameplaySimulation(
-            contracts, doors, placeables, initialPlayerExperience, triggers);
+            contracts,
+            doors,
+            placeables,
+            initialPlayerExperience,
+            triggers,
+            initialPartyMembers: partyMembers);
     }
 
     private static void ValidatePlayerEquipmentVariants(ModuleManifest manifest)

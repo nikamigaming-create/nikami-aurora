@@ -201,6 +201,9 @@ Confirmed in the new runtime:
   navigation, atomic unequip, and base/Clothing/left-Sword/right-Sword variants;
 - source-bound Quest Items/All Items inventory views driven by installed UTI
   `Plot` bits, plus clipped overflow rows and the owned arrow/thumb scrollbar;
+- source-positioned opening party controls that select player or Trask through
+  profile state, refresh the portrait/vitality/Defense fields, and direct
+  Medpac use to the selected member;
 - all three source `plc_chair2` opening-room placements materialized from one
   `PLC_Chair2` model while remaining excluded from interaction targeting;
 - source-opaque lightmapped and base room materials audited into opaque
@@ -265,8 +268,9 @@ Not yet implemented:
 - general NCS VM execution and complete plot/party state;
 - retail door animation and complete `k_pend_door1xp` behavior beyond the
   validated XP branch;
-- combat; the full campaign inventory item corpus, party switching, arbitrary
-  item effects, general equipment models/rules beyond the opening
+- combat; the full campaign inventory and party corpus, party join/leave and
+  controlled-character flows, arbitrary item effects, companion equipment,
+  general equipment models/rules beyond the opening
   player items, derived equipment combat stats, saves, and area transitions.
 
 The current door-opening presentation remains a temporary Godot tween. Script
