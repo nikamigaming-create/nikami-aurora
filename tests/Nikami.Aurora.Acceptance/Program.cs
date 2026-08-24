@@ -389,6 +389,37 @@ internal static class Program
                repeatedEquip.After.Equipment.Count == 2,
             "repeated equipment transaction was not idempotent");
 
+        var unequipped = simulation.UnequipItem(KotorEquipmentSlot.Armor);
+        Expect(!unequipped.After.Equipment.ContainsKey(KotorEquipmentSlot.Armor) &&
+               unequipped.After.Equipment[KotorEquipmentSlot.RightHand] ==
+               "g_w_shortswrd01" &&
+               unequipped.After.PlayerInventory["g_a_clothes01"] == 1 &&
+               unequipped.Events.Single() is KotorEquipmentRemoved removed &&
+               removed.Slot == KotorEquipmentSlot.Armor &&
+               removed.Item.Resref == "g_a_clothes01",
+            "unequip did not return Clothing to inventory atomically");
+        var repeatedUnequip = simulation.UnequipItem(KotorEquipmentSlot.Armor);
+        Expect(repeatedUnequip.Events.Count == 0 &&
+               repeatedUnequip.After.PlayerInventory["g_a_clothes01"] == 1,
+            "repeated unequip duplicated the returned item");
+        _ = simulation.EquipItems([
+            new KotorEquipRequest("g_a_clothes01", KotorEquipmentSlot.Armor)
+        ]);
+        var rightHandRemoved = simulation.UnequipItem(KotorEquipmentSlot.RightHand);
+        var leftHandEquipped = simulation.EquipItems([
+            new KotorEquipRequest("g_w_shortswrd01", KotorEquipmentSlot.LeftHand)
+        ]);
+        Expect(rightHandRemoved.After.PlayerInventory["g_w_shortswrd01"] == 1 &&
+               leftHandEquipped.After.Equipment[KotorEquipmentSlot.LeftHand] ==
+               "g_w_shortswrd01" &&
+               !leftHandEquipped.After.Equipment.ContainsKey(
+                   KotorEquipmentSlot.RightHand),
+            "source-valid Short Sword left-hand transaction was not preserved");
+        _ = simulation.UnequipItem(KotorEquipmentSlot.LeftHand);
+        _ = simulation.EquipItems([
+            new KotorEquipRequest("g_w_shortswrd01", KotorEquipmentSlot.RightHand)
+        ]);
+
         var corridorTrigger = simulation.UpdateTriggers(
             new System.Numerics.Vector3(0, 0, 0),
             new System.Numerics.Vector3(6, 0, 0));

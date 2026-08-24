@@ -65,7 +65,8 @@ NIKAMI_AURORA_GAMEPLAY_STATE status=ready scripts=3 doors=15 placeables=60 xp=0
 NIKAMI_AURORA_NCS_CHAIN status=pass xp=0->50->150
 ```
 
-This is a validated action-table slice, not a claim of a general NCS VM.
-Selective inventory UI, item use, general equipment/unequip coverage, party
-propagation, global variables, saves, action-queue timing, and complete script
+This is a validated action-table slice, not a claim of a general NCS VM. The
+opening inventory/item-use and player equipment/unequip paths are specified by
+their separate flat-UI contracts. Party propagation, arbitrary item/equipment
+coverage, global variables, saves, action-queue timing, and complete script
 coverage remain future contracts.

@@ -26,6 +26,20 @@ public sealed partial class KotorModuleBoot
     private readonly List<Button> inventoryRowButtons = [];
     private IReadOnlyList<KotorUiInventoryItemRecord> visibleInventoryItems = [];
     private int selectedInventoryIndex;
+    private Control? equipmentScreen;
+    private Control? equipmentReferenceSurface;
+    private VBoxContainer? equipmentRows;
+    private Label? equipmentDescription;
+    private Label? equipmentSlotName;
+    private Label? equipmentVitality;
+    private Label? equipmentDefense;
+    private Button? equipmentOkButton;
+    private readonly List<Button> equipmentRowButtons = [];
+    private readonly Dictionary<KotorEquipmentSlot, TextureRect> equipmentSlotFrames = [];
+    private readonly Dictionary<KotorEquipmentSlot, TextureRect> equipmentSlotIcons = [];
+    private IReadOnlyList<KotorEquipmentChoice> visibleEquipmentChoices = [];
+    private KotorEquipmentSlot selectedEquipmentSlot = KotorEquipmentSlot.Armor;
+    private int selectedEquipmentIndex;
     private TextureProgressBar? loadingProgress;
     private TextureProgressBar? hudVitalityBar;
     private AudioStreamPlayer? loadingMusicPlayer;
@@ -34,6 +48,9 @@ public sealed partial class KotorModuleBoot
     private TextureRect? hudMinimapArrow;
     private KotorUiMinimapRecord? hudMinimapRecord;
     private bool automatedInventoryOpened;
+    private bool automatedEquipmentScreenOpened;
+    private int automatedEquipmentMenuStage;
+    private int automatedFlatMenuNavigationStage;
 
     private void ConfigureFlatReferenceViewportIfRequested()
     {
@@ -68,12 +85,14 @@ public sealed partial class KotorModuleBoot
         {
             ConfigureRetailDesktopHud(ui.Hud);
             ConfigureRetailInventory(ui.Inventory);
+            ConfigureRetailEquipment(ui.Equipment);
         }
         GD.Print($"NIKAMI_AURORA_FLAT_UI status=ready schema={ui.Schema} " +
                  $"textures={ui.Textures.Count} " +
                  $"fonts={flatUiFonts.Count} " +
                  $"loading={ui.Loading.Layout.Resref} " +
-                 $"hud={ui.Hud.Layout.Resref} inventory={ui.Inventory.Layout.Resref}");
+                 $"hud={ui.Hud.Layout.Resref} inventory={ui.Inventory.Layout.Resref} " +
+                 $"equipment={ui.Equipment.Layout.Resref}");
     }
 
     private Texture2D LoadAndValidateUiTexture(KotorUiTextureRecord source)
@@ -290,6 +309,17 @@ public sealed partial class KotorModuleBoot
         Place(inventoryHotspot, RequireExtent(inventoryControl));
         inventoryHotspot.Pressed += ShowInventory;
         surface.AddChild(inventoryHotspot);
+        var equipmentControl = RequireControl(source.Controls, "BTN_EQU");
+        var equipmentHotspot = new Button
+        {
+            Name = "RetailEquipmentHotspot",
+            Flat = true,
+            TooltipText = "Equipment",
+            MouseDefaultCursorShape = Control.CursorShape.PointingHand
+        };
+        Place(equipmentHotspot, RequireExtent(equipmentControl));
+        equipmentHotspot.Pressed += ShowEquipment;
+        surface.AddChild(equipmentHotspot);
         GD.Print($"NIKAMI_AURORA_HUD status=ready layout={source.Layout.Resref} " +
                  $"reference=800x600 portraits={source.PartyPortraits.Count} " +
                  "playerVitality=profile force=empty");
@@ -377,20 +407,13 @@ public sealed partial class KotorModuleBoot
         dim.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         inventoryScreen.AddChild(dim);
         inventoryReferenceSurface = CreateReferenceSurface(
-            inventoryScreen, source.Layout.Extent, "RetailInventorySurface");
+            inventoryScreen,
+            source.Layout.Extent,
+            "RetailInventorySurface",
+            allowUpscale: false);
         AddTexture(inventoryReferenceSurface, source.Background.Resref, source.Layout.Extent);
 
-        foreach (var control in source.TopControls.Where(control =>
-                     control.Tag.StartsWith("LBLH_", StringComparison.OrdinalIgnoreCase)))
-        {
-            var selected = control.Tag.Equals(
-                "LBLH_INV", StringComparison.OrdinalIgnoreCase);
-            var fill = selected
-                ? control.Highlight?.Fill
-                : control.Border?.Fill;
-            if (!string.IsNullOrWhiteSpace(fill))
-                AddTexture(inventoryReferenceSurface, fill, RequireExtent(control));
-        }
+        AddTopToolbar(inventoryReferenceSurface, source.TopControls, "LBLH_INV");
 
         foreach (var tag in new[] { "LBL_BGPORT", "LBL_BGSTATS" })
         {
@@ -466,6 +489,213 @@ public sealed partial class KotorModuleBoot
                  "interaction=mouse,keyboard state=profile-owned");
     }
 
+    private void ConfigureRetailEquipment(KotorUiEquipmentRecord source)
+    {
+        equipmentScreen?.QueueFree();
+        equipmentSlotFrames.Clear();
+        equipmentSlotIcons.Clear();
+        equipmentScreen = new Control
+        {
+            Name = "RetailEquipmentScreen",
+            MouseFilter = Control.MouseFilterEnum.Stop,
+            Visible = false
+        };
+        equipmentScreen.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        overlayLayer.AddChild(equipmentScreen);
+
+        var dim = new ColorRect
+        {
+            Color = new Color(0, 0, 0, 0.86f),
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        dim.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        equipmentScreen.AddChild(dim);
+        equipmentReferenceSurface = CreateReferenceSurface(
+            equipmentScreen,
+            source.Layout.Extent,
+            "RetailEquipmentSurface",
+            allowUpscale: false);
+        AddTexture(equipmentReferenceSurface, source.Background.Resref, source.Layout.Extent);
+        AddTopToolbar(equipmentReferenceSurface, source.TopControls, "LBLH_EQU");
+
+        foreach (var tag in new[]
+                 {
+                     "LBL_ATTACK_INFO", "LBL_PORT_BORD", "LBL_DEF_INFO", "LBL_TXTBAR"
+                 })
+        {
+            var control = RequireControl(source.Controls, tag);
+            if (control.Border?.Fill is { Length: > 0 } fill)
+                AddTexture(equipmentReferenceSurface, fill, RequireExtent(control));
+        }
+
+        var portraitControl = RequireControl(source.Controls, "LBL_PORTRAIT");
+        AddTexture(
+            equipmentReferenceSurface,
+            source.Portrait.Resref,
+            RequireExtent(portraitControl));
+        var partyTags = new[] { "BTN_CHANGE1", "BTN_CHANGE2" };
+        for (var index = 0; index < Math.Min(partyTags.Length, source.PartyPortraits.Count); index++)
+        {
+            AddTexture(
+                equipmentReferenceSurface,
+                source.PartyPortraits[index].Resref,
+                RequireExtent(RequireControl(source.Controls, partyTags[index])));
+        }
+
+        foreach (var (buttonTag, labelTag, slot) in EquipmentSlotBindings())
+        {
+            var labelControl = RequireControl(source.Controls, labelTag);
+            if (labelControl.Border?.Fill is { Length: > 0 } labelFill)
+                AddTexture(
+                    equipmentReferenceSurface,
+                    labelFill,
+                    RequireExtent(labelControl));
+            var buttonControl = RequireControl(source.Controls, buttonTag);
+            var buttonExtent = RequireExtent(buttonControl);
+            var frame = AddTexture(
+                equipmentReferenceSurface,
+                buttonControl.Border?.Fill ?? throw new InvalidDataException(
+                    $"KOTOR equipment slot has no source frame: {buttonTag}"),
+                buttonExtent);
+            equipmentSlotFrames.Add(slot, frame);
+            var icon = new TextureRect
+            {
+                Name = $"EquippedIcon_{slot}",
+                Position = new Vector2(buttonExtent.Left + 8, buttonExtent.Top + 8),
+                Size = new Vector2(buttonExtent.Width - 16, buttonExtent.Height - 16),
+                ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+                StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+                Visible = false
+            };
+            equipmentReferenceSurface.AddChild(icon);
+            equipmentSlotIcons.Add(slot, icon);
+            var hotspot = new Button
+            {
+                Name = $"RetailEquipmentSlot_{slot}",
+                Flat = true,
+                FocusMode = Control.FocusModeEnum.All,
+                MouseDefaultCursorShape = Control.CursorShape.PointingHand
+            };
+            Place(hotspot, buttonExtent);
+            hotspot.Pressed += () => SelectEquipmentSlot(slot);
+            equipmentReferenceSurface.AddChild(hotspot);
+        }
+
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TITLE", 16);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_DAMAGE", 16);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHIT", 16);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_ATKL", 16);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_ATKR", 16);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHITL", 16);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHITR", 16);
+
+        var vitalityControl = RequireControl(source.Controls, "LBL_VITALITY");
+        equipmentVitality = CreateKotorLabel(
+            "20/20", vitalityControl.Text, RequireExtent(vitalityControl), 16);
+        equipmentReferenceSurface.AddChild(equipmentVitality);
+        var defenseControl = RequireControl(source.Controls, "LBL_DEF");
+        equipmentDefense = CreateKotorLabel(
+            "10", defenseControl.Text, RequireExtent(defenseControl), 16);
+        equipmentReferenceSurface.AddChild(equipmentDefense);
+        var slotControl = RequireControl(source.Controls, "LBL_SLOTNAME");
+        equipmentSlotName = CreateKotorLabel(
+            "", slotControl.Text, RequireExtent(slotControl), 16);
+        equipmentReferenceSurface.AddChild(equipmentSlotName);
+
+        var listControl = RequireControl(source.Controls, "LB_ITEMS");
+        var prototype = listControl.Prototype ?? throw new InvalidDataException(
+            "KOTOR equipment layout has no item-list prototype");
+        var prototypeExtent = RequireExtent(prototype);
+        equipmentRows = new VBoxContainer
+        {
+            Name = "RetailEquipmentRows",
+            Position = new Vector2(prototypeExtent.Left, prototypeExtent.Top),
+            Size = new Vector2(prototypeExtent.Width, 270)
+        };
+        equipmentRows.AddThemeConstantOverride("separation", 0);
+        equipmentReferenceSurface.AddChild(equipmentRows);
+
+        var descriptionControl = RequireControl(source.Controls, "LB_DESC");
+        var descriptionPrototype = descriptionControl.Prototype ??
+            throw new InvalidDataException(
+                "KOTOR equipment description has no source prototype");
+        var descriptionOuter = RequireExtent(descriptionControl);
+        var descriptionInner = RequireExtent(descriptionPrototype) with
+        {
+            Height = descriptionOuter.Height - 8
+        };
+        equipmentDescription = CreateKotorLabel(
+            "", descriptionPrototype.Text, descriptionInner, 10, true);
+        equipmentDescription.Visible = false;
+        equipmentReferenceSurface.AddChild(equipmentDescription);
+
+        equipmentOkButton = AddSourceButton(
+            equipmentReferenceSurface,
+            source.Controls,
+            "BTN_EQUIP",
+            CommitEquipmentSelection,
+            16);
+        AddSourceButton(
+            equipmentReferenceSurface,
+            source.Controls,
+            "BTN_BACK",
+            HideEquipment,
+            16);
+        GD.Print($"NIKAMI_AURORA_EQUIPMENT_UI status=ready " +
+                 $"layout={source.Layout.Resref} items={source.Items.Count} " +
+                 $"top={source.TopLayout.Resref} slots={EquipmentSlotBindings().Length} " +
+                 "party=player interaction=mouse,keyboard state=profile-owned");
+    }
+
+    private void AddTopToolbar(
+        Control parent,
+        IReadOnlyList<KotorUiControlRecord> controls,
+        string selectedTag)
+    {
+        foreach (var control in controls.Where(control =>
+                     control.Tag.StartsWith("LBLH_", StringComparison.OrdinalIgnoreCase)))
+        {
+            var selected = control.Tag.Equals(selectedTag, StringComparison.OrdinalIgnoreCase);
+            var fill = selected ? control.Highlight?.Fill : control.Border?.Fill;
+            if (!string.IsNullOrWhiteSpace(fill))
+                AddTexture(parent, fill, RequireExtent(control));
+        }
+
+        foreach (var (tag, action, tooltip) in new[]
+                 {
+                     ("BTN_INV", (Action)ShowInventory, "Inventory"),
+                     ("BTN_EQU", (Action)ShowEquipment, "Equipment")
+                 })
+        {
+            var source = RequireControl(controls, tag);
+            var hotspot = new Button
+            {
+                Name = $"RetailToolbar_{tag}",
+                Flat = true,
+                TooltipText = tooltip,
+                MouseDefaultCursorShape = Control.CursorShape.PointingHand
+            };
+            Place(hotspot, RequireExtent(source));
+            hotspot.Pressed += action;
+            parent.AddChild(hotspot);
+        }
+    }
+
+    private static (string ButtonTag, string LabelTag, KotorEquipmentSlot Slot)[]
+        EquipmentSlotBindings() =>
+        [
+            ("BTN_INV_HEAD", "LBL_INV_HEAD", KotorEquipmentSlot.Head),
+            ("BTN_INV_IMPLANT", "LBL_INV_IMPLANT", KotorEquipmentSlot.Implant),
+            ("BTN_INV_BODY", "LBL_INV_BODY", KotorEquipmentSlot.Armor),
+            ("BTN_INV_ARM_L", "LBL_INV_ARM_L", KotorEquipmentSlot.LeftArm),
+            ("BTN_INV_WEAP_L", "LBL_INV_WEAP_L", KotorEquipmentSlot.LeftHand),
+            ("BTN_INV_BELT", "LBL_INV_BELT", KotorEquipmentSlot.Belt),
+            ("BTN_INV_WEAP_R", "LBL_INV_WEAP_R", KotorEquipmentSlot.RightHand),
+            ("BTN_INV_ARM_R", "LBL_INV_ARM_R", KotorEquipmentSlot.RightArm),
+            ("BTN_INV_HANDS", "LBL_INV_HANDS", KotorEquipmentSlot.Gauntlet)
+        ];
+
     private void UpdateLoadingProgress(float normalized)
     {
         if (loadingProgress is not null)
@@ -507,6 +737,7 @@ public sealed partial class KotorModuleBoot
         }
         desktopHudRoot.Visible = moduleReady &&
                                  inventoryScreen?.Visible != true &&
+                                 equipmentScreen?.Visible != true &&
                                  !dialoguePanel.Visible &&
                                  !loadingBackdrop.Visible;
     }
@@ -515,6 +746,8 @@ public sealed partial class KotorModuleBoot
     {
         if (!moduleReady || xrActive || inventoryScreen is null || dialoguePanel.Visible)
             return;
+        if (equipmentScreen is not null)
+            equipmentScreen.Visible = false;
         RefreshInventory();
         inventoryScreen.Visible = true;
         Input.MouseMode = Input.MouseModeEnum.Visible;
@@ -527,15 +760,55 @@ public sealed partial class KotorModuleBoot
     {
         if (inventoryScreen is null || !inventoryScreen.Visible) return;
         inventoryScreen.Visible = false;
-        Input.MouseMode = Input.MouseModeEnum.Captured;
+        if (equipmentScreen?.Visible != true)
+            Input.MouseMode = Input.MouseModeEnum.Captured;
         UpdateFlatUiVisibility();
         GD.Print("NIKAMI_AURORA_INVENTORY_UI status=closed");
+    }
+
+    private void ShowEquipment()
+    {
+        if (!moduleReady || xrActive || equipmentScreen is null || dialoguePanel.Visible)
+            return;
+        if (inventoryScreen is not null)
+            inventoryScreen.Visible = false;
+        equipmentScreen.Visible = true;
+        SelectEquipmentSlot(selectedEquipmentSlot);
+        Input.MouseMode = Input.MouseModeEnum.Visible;
+        UpdateFlatUiVisibility();
+        GD.Print($"NIKAMI_AURORA_EQUIPMENT_UI status=open " +
+                 $"slot={selectedEquipmentSlot} choices={visibleEquipmentChoices.Count} " +
+                 $"selection={selectedEquipmentIndex}");
+    }
+
+    private void HideEquipment()
+    {
+        if (equipmentScreen is null || !equipmentScreen.Visible) return;
+        equipmentScreen.Visible = false;
+        if (inventoryScreen?.Visible != true)
+            Input.MouseMode = Input.MouseModeEnum.Captured;
+        UpdateFlatUiVisibility();
+        GD.Print("NIKAMI_AURORA_EQUIPMENT_UI status=closed");
     }
 
     private bool HandleFlatUiInput(InputEvent inputEvent)
     {
         if (inputEvent is not InputEventKey key || !key.Pressed || key.Echo)
             return false;
+        if (equipmentScreen?.Visible == true)
+        {
+            if (key.Keycode == Key.Escape)
+                HideEquipment();
+            else if (key.Keycode == Key.I)
+                ShowInventory();
+            else if (key.Keycode is Key.Up or Key.W)
+                SelectEquipmentRow(selectedEquipmentIndex - 1);
+            else if (key.Keycode is Key.Down or Key.S)
+                SelectEquipmentRow(selectedEquipmentIndex + 1);
+            else if (key.Keycode is Key.Enter or Key.Space)
+                CommitEquipmentSelection();
+            return true;
+        }
         if (inventoryScreen?.Visible == true)
         {
             if (key.Keycode is Key.Escape or Key.I)
@@ -708,15 +981,208 @@ public sealed partial class KotorModuleBoot
                  $"resref={selected.Resref} action=consume");
     }
 
+    private void SelectEquipmentSlot(KotorEquipmentSlot slot)
+    {
+        selectedEquipmentSlot = slot;
+        RefreshEquipment();
+    }
+
+    private void RefreshEquipment()
+    {
+        if (flatUiRecord is null || equipmentRows is null || gameplaySimulation is null)
+            return;
+        foreach (var child in equipmentRows.GetChildren())
+            child.QueueFree();
+        equipmentRowButtons.Clear();
+        var source = flatUiRecord.Equipment;
+        var snapshot = gameplaySimulation.CaptureSnapshot();
+        if (equipmentVitality is not null)
+            equipmentVitality.Text =
+                $"{snapshot.PlayerCurrentVitality}/{snapshot.PlayerMaximumVitality}";
+        if (equipmentDefense is not null)
+            equipmentDefense.Text = snapshot.PlayerDefense.ToString();
+        if (equipmentSlotName is not null)
+            equipmentSlotName.Text = source.SlotNames.TryGetValue(
+                selectedEquipmentSlot.ToString(), out var slotName)
+                ? slotName.Text
+                : throw new InvalidDataException(
+                    $"KOTOR equipment slot has no localized name: {selectedEquipmentSlot}");
+
+        foreach (var (buttonTag, _, slot) in EquipmentSlotBindings())
+        {
+            var buttonSource = RequireControl(source.Controls, buttonTag);
+            var frameResref = slot == selectedEquipmentSlot
+                ? buttonSource.Highlight?.Fill
+                : buttonSource.Border?.Fill;
+            if (string.IsNullOrWhiteSpace(frameResref))
+                throw new InvalidDataException(
+                    $"KOTOR equipment slot frame is incomplete: {buttonTag}");
+            equipmentSlotFrames[slot].Texture = Texture(frameResref);
+            var icon = equipmentSlotIcons[slot];
+            if (!snapshot.Equipment.TryGetValue(slot, out var equippedResref))
+            {
+                var slotIcon = source.SlotIcons.TryGetValue(slot.ToString(), out var emptyIcon)
+                    ? emptyIcon
+                    : throw new InvalidDataException(
+                        $"KOTOR equipment slot has no source icon: {slot}");
+                icon.Texture = Texture(slotIcon.Resref);
+                icon.Visible = true;
+                continue;
+            }
+            var equippedItem = source.Items.SingleOrDefault(item =>
+                item.Resref.Equals(equippedResref, StringComparison.OrdinalIgnoreCase));
+            if (equippedItem is null)
+                throw new InvalidDataException(
+                    $"Equipped item has no UI record: {equippedResref}");
+            icon.Texture = Texture(equippedItem.Icon.Resref);
+            icon.Visible = true;
+        }
+
+        snapshot.Equipment.TryGetValue(selectedEquipmentSlot, out var currentResref);
+        var choices = new List<KotorEquipmentChoice>
+        {
+            new(null, currentResref is null)
+        };
+        var hasVisualCoverage = selectedEquipmentSlot is
+            KotorEquipmentSlot.Armor or
+            KotorEquipmentSlot.LeftHand or
+            KotorEquipmentSlot.RightHand;
+        choices.AddRange(source.Items
+            .Where(item =>
+                hasVisualCoverage &&
+                (item.EquipableSlots & (int)selectedEquipmentSlot) != 0 &&
+                (snapshot.PlayerInventory.ContainsKey(item.Resref) ||
+                 item.Resref.Equals(currentResref, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Select(item => new KotorEquipmentChoice(
+                item,
+                item.Resref.Equals(currentResref, StringComparison.OrdinalIgnoreCase))));
+        visibleEquipmentChoices = choices;
+        selectedEquipmentIndex = Math.Max(
+            0,
+            choices.FindIndex(choice => choice.Equipped));
+        for (var index = 0; index < visibleEquipmentChoices.Count; index++)
+        {
+            var row = CreateEquipmentRow(visibleEquipmentChoices[index], index);
+            equipmentRows.AddChild(row);
+            equipmentRowButtons.Add(row);
+        }
+        SelectEquipmentRow(selectedEquipmentIndex);
+    }
+
+    private Button CreateEquipmentRow(KotorEquipmentChoice choice, int index)
+    {
+        var source = flatUiRecord?.Equipment ?? throw new InvalidDataException(
+            "KOTOR equipment UI record is unavailable");
+        var prototypeText = source.Controls.Single(control => control.Tag.Equals(
+            "LB_ITEMS", StringComparison.OrdinalIgnoreCase)).Prototype?.Text;
+        var row = new Button
+        {
+            Name = $"EquipmentRow{index}",
+            CustomMinimumSize = new Vector2(246, 52),
+            Flat = true,
+            FocusMode = Control.FocusModeEnum.All,
+            MouseDefaultCursorShape = Control.CursorShape.PointingHand
+        };
+        row.Pressed += () => SelectEquipmentRow(index);
+        var iconSource = choice.Item?.Icon ?? source.NoneIcon;
+        var icon = new TextureRect
+        {
+            Texture = Texture(iconSource.Resref),
+            Position = new Vector2(2, 2),
+            Size = new Vector2(48, 48),
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        row.AddChild(icon);
+        var itemName = choice.Item?.DisplayName ?? source.None.Text;
+        if (choice.Item is not null && choice.Equipped)
+            itemName = $"{itemName}\n({source.Equipped.Text})";
+        var name = new Label
+        {
+            Text = itemName,
+            Position = new Vector2(55, 0),
+            Size = new Vector2(185, 52),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        ApplyKotorFont(name, prototypeText, 16);
+        name.AddThemeColorOverride(
+            "font_color",
+            choice.Equipped ? KotorYellow : KotorTextColor(prototypeText));
+        row.AddChild(name);
+        return row;
+    }
+
+    private void SelectEquipmentRow(int index)
+    {
+        if (visibleEquipmentChoices.Count == 0)
+            return;
+        selectedEquipmentIndex = Math.Clamp(index, 0, visibleEquipmentChoices.Count - 1);
+        for (var rowIndex = 0; rowIndex < equipmentRowButtons.Count; rowIndex++)
+            equipmentRowButtons[rowIndex].Modulate = rowIndex == selectedEquipmentIndex
+                ? new Color(0.78f, 1.0f, 1.0f)
+                : Colors.White;
+        var selected = visibleEquipmentChoices[selectedEquipmentIndex];
+        SetEquipmentDescription(selected.Item?.Description ?? "");
+        if (equipmentOkButton is not null)
+        {
+            equipmentOkButton.Disabled = selected.Equipped;
+            equipmentOkButton.Visible = !selected.Equipped;
+        }
+        equipmentRowButtons[selectedEquipmentIndex].GrabFocus();
+    }
+
+    private void SetEquipmentDescription(string text)
+    {
+        if (equipmentDescription is null || flatUiRecord is null)
+            return;
+        var source = flatUiRecord.Equipment.Controls.Single(control => control.Tag.Equals(
+            "LB_DESC", StringComparison.OrdinalIgnoreCase)).Prototype?.Text;
+        if (source?.Font is { Length: > 0 } resref &&
+            flatUiFonts.TryGetValue(resref, out var bitmap))
+            text = WrapKotorText(
+                text,
+                bitmap.Font,
+                bitmap.NativeSize,
+                equipmentDescription.Size.X);
+        equipmentDescription.Text = text;
+        equipmentDescription.Visible = false;
+    }
+
+    private void CommitEquipmentSelection()
+    {
+        if (visibleEquipmentChoices.Count == 0 || gameplaySimulation is null)
+            return;
+        var choice = visibleEquipmentChoices[selectedEquipmentIndex];
+        var transition = choice.Item is null
+            ? gameplaySimulation.UnequipItem(selectedEquipmentSlot)
+            : gameplaySimulation.EquipItems([
+                new KotorEquipRequest(choice.Item.Resref, selectedEquipmentSlot)
+            ]);
+        ApplyGameplayTransition(transition);
+        RefreshEquipment();
+        RefreshInventory();
+        GD.Print($"NIKAMI_AURORA_EQUIPMENT_UI status=" +
+                 $"{(transition.Events.Count == 0 ? "unchanged" : "committed")} " +
+                 $"slot={selectedEquipmentSlot} " +
+                 $"item={choice.Item?.Resref ?? "none"}");
+    }
+
     private Control CreateReferenceSurface(
         Control parent,
         KotorUiExtent extent,
-        string name)
+        string name,
+        bool allowUpscale = true)
     {
         var viewportSize = GetViewport().GetVisibleRect().Size;
         var scale = Mathf.Min(
             viewportSize.X / extent.Width,
             viewportSize.Y / extent.Height);
+        if (!allowUpscale)
+            scale = Mathf.Min(scale, 1.0f);
         var surface = new Control
         {
             Name = name,
@@ -958,6 +1424,7 @@ public sealed partial class KotorModuleBoot
         string Schema,
         KotorUiLoadingRecord Loading,
         KotorUiInventoryRecord Inventory,
+        KotorUiEquipmentRecord Equipment,
         KotorUiHudRecord Hud,
         IReadOnlyList<KotorUiTextureRecord> Textures);
     private sealed record KotorUiLoadingRecord(
@@ -983,6 +1450,21 @@ public sealed partial class KotorModuleBoot
         IReadOnlyList<KotorUiTextureRecord> PartyPortraits,
         string PartyPortraitsSourceSha256,
         IReadOnlyList<KotorUiInventoryItemRecord> Items);
+    private sealed record KotorUiEquipmentRecord(
+        KotorUiLayoutRecord Layout,
+        IReadOnlyList<KotorUiControlRecord> Controls,
+        KotorUiLayoutRecord TopLayout,
+        IReadOnlyList<KotorUiControlRecord> TopControls,
+        KotorUiTextureRecord Background,
+        KotorUiTextureRecord Portrait,
+        IReadOnlyList<KotorUiTextureRecord> PartyPortraits,
+        string PartyPortraitsSourceSha256,
+        IReadOnlyList<KotorUiInventoryItemRecord> Items,
+        IReadOnlyDictionary<string, KotorUiTextureRecord> SlotIcons,
+        KotorUiLocalizedTextRecord None,
+        KotorUiTextureRecord NoneIcon,
+        KotorUiLocalizedTextRecord Equipped,
+        IReadOnlyDictionary<string, KotorUiLocalizedTextRecord> SlotNames);
     private sealed record KotorUiHudRecord(
         KotorUiLayoutRecord Layout,
         IReadOnlyList<KotorUiControlRecord> Controls,
@@ -1015,6 +1497,10 @@ public sealed partial class KotorModuleBoot
         int EquipableSlots,
         KotorUiTextureRecord Icon,
         string UtiSha256);
+    private sealed record KotorUiLocalizedTextRecord(string Text, int Strref);
+    private sealed record KotorEquipmentChoice(
+        KotorUiInventoryItemRecord? Item,
+        bool Equipped);
     private sealed record KotorUiLayoutRecord(
         string Resref,
         string SourceSha256,

@@ -46,6 +46,13 @@ OpenXR `B/Y`. The profile owns slot legality and inventory removal; Godot swaps
 to a source-derived `PMBBM01` skinned player with the sword attached beneath the
 animated right-hand hook while preserving idle/walk/run state.
 
+The flat path now imports the source loading screen, native 800x600 HUD, and
+native-centered 640x480 Inventory and Equipment menus. The opening player can
+navigate between Inventory and Equipment, select all nine authored paper-doll
+slots, equip or remove Clothing and the Short Sword through profile state, and
+render the base, single-item, or combined source-derived player variant. Owned
+GUI, font, icon, portrait, audio, model, and capture payloads stay local.
+
 Opening-room furniture now distinguishes baked room meshes from GIT placeables.
 The installed `PLC_Chair2` model is instanced at all three authored placements;
 because the UTP is not usable, those chairs never steal the footlocker prompt.

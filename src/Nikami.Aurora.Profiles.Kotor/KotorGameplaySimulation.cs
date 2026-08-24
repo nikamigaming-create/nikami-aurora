@@ -284,6 +284,10 @@ public sealed record KotorEquipmentChanged(
     KotorItemDefinition Item,
     string? PreviousResref) : KotorGameplayEvent;
 
+public sealed record KotorEquipmentRemoved(
+    KotorEquipmentSlot Slot,
+    KotorItemDefinition Item) : KotorGameplayEvent;
+
 public sealed record KotorItemUsed(
     KotorItemDefinition Item,
     int QuantityBefore,
@@ -558,6 +562,26 @@ public sealed class KotorGameplaySimulation
         equipment.Clear();
         foreach (var pair in nextEquipment)
             equipment.Add(pair.Key, pair.Value);
+        return Complete(before, events);
+    }
+
+    public KotorGameplayTransition UnequipItem(KotorEquipmentSlot slot)
+    {
+        if (!Enum.IsDefined(slot))
+            throw new ArgumentOutOfRangeException(nameof(slot), slot,
+                "Unknown KOTOR equipment slot");
+        var before = CaptureSnapshot();
+        var events = new List<KotorGameplayEvent>();
+        if (!equipment.TryGetValue(slot, out var resref))
+            return Complete(before, events);
+        if (!itemDefinitions.TryGetValue(resref, out var item))
+            throw new InvalidOperationException(
+                $"Equipped KOTOR item has no definition: {resref}");
+
+        playerInventory.TryGetValue(resref, out var quantity);
+        playerInventory[resref] = checked(quantity + 1);
+        equipment.Remove(slot);
+        events.Add(new KotorEquipmentRemoved(slot, item));
         return Complete(before, events);
     }
 
