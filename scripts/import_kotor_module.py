@@ -585,6 +585,7 @@ def export_kotor_ui(
 
     loading_layout, loading_controls = load_gui("loadscreen")
     inventory_layout, inventory_controls = load_gui("inventory")
+    equipment_layout, equipment_controls = load_gui("equip")
     top_layout, top_controls = load_gui("top")
     hud_layout, hud_controls = load_gui("mipc8x6")
     module_loading_resref = f"load_{module}"
@@ -680,6 +681,51 @@ def export_kotor_ui(
             "partyPortraitsSourceSha256": sha256_bytes(portraits_bytes),
             "items": item_records,
         },
+        "equipment": {
+            "layout": equipment_layout,
+            "controls": equipment_controls,
+            "topLayout": top_layout,
+            "topControls": top_controls,
+            "background": export_texture("lbl_equip"),
+            "portrait": export_texture(portrait_resref),
+            "partyPortraits": [
+                export_texture(portrait_resref),
+                export_texture(trask_portrait_resref),
+            ],
+            "partyPortraitsSourceSha256": sha256_bytes(portraits_bytes),
+            "items": item_records,
+            "slotIcons": {
+                "Head": export_texture("ihead"),
+                "Implant": export_texture("iimplant"),
+                "Armor": export_texture("iarmor"),
+                "LeftArm": export_texture("ihand_l"),
+                "LeftHand": export_texture("iweap_l"),
+                "Belt": export_texture("ibelt"),
+                "RightHand": export_texture("iweap_r"),
+                "RightArm": export_texture("ihand_r"),
+                "Gauntlet": export_texture("ihands"),
+            },
+            "none": {
+                "text": talktable.string(363),
+                "strref": 363,
+            },
+            "noneIcon": export_texture("inone"),
+            "equipped": {
+                "text": talktable.string(32346),
+                "strref": 32346,
+            },
+            "slotNames": {
+                "Head": {"text": talktable.string(31375), "strref": 31375},
+                "LeftArm": {"text": talktable.string(31376), "strref": 31376},
+                "RightArm": {"text": talktable.string(31377), "strref": 31377},
+                "LeftHand": {"text": talktable.string(31378), "strref": 31378},
+                "RightHand": {"text": talktable.string(31379), "strref": 31379},
+                "Armor": {"text": talktable.string(31380), "strref": 31380},
+                "Belt": {"text": talktable.string(31382), "strref": 31382},
+                "Gauntlet": {"text": talktable.string(31383), "strref": 31383},
+                "Implant": {"text": talktable.string(31388), "strref": 31388},
+            },
+        },
         "hud": {
             "layout": hud_layout,
             "controls": hud_controls,
@@ -700,8 +746,19 @@ def export_kotor_ui(
             },
         },
     }
+    unresolved_references: list[str] = []
     for resref in sorted(referenced_textures(ui_contract)):
-        export_texture(resref)
+        try:
+            export_texture(resref)
+        except RuntimeError as exc:
+            # Some GUI resources carry design-time placeholders that retail
+            # replaces from live party state (equip.gui's po_mhk47 portrait is
+            # one example).  Preserve the unresolved source reference without
+            # pretending it is an asset required by the materialized screen.
+            if "texture is missing" not in str(exc):
+                raise
+            unresolved_references.append(resref)
+    ui_contract["unresolvedReferencedTextures"] = unresolved_references
     ui_contract["textures"] = sorted(
         exported_textures.values(), key=lambda record: record["resref"].lower())
     return ui_contract
@@ -1460,20 +1517,99 @@ def export_player_actor(
     equipped_body, equipped_body_mdl, equipped_body_mdx = load_model_pair(
         installation, equipped_body_name)
     weapon, weapon_mdl, weapon_mdx = load_model_pair(installation, weapon_model_name)
-    equipped_animation_report = export_actor(
-        equipped_output_path,
-        body_model=equipped_body,
-        body_name=equipped_body_name,
-        body_texture=equipped_texture,
-        head_model=head,
-        head_name=head_name,
-        head_texture=None,
-        weapon_model=weapon,
-        weapon_name=weapon_model_name,
-        animation_model=animation_model,
-        animation_names=("pause1", "walk", "run", "talk"),
-        material_factory=lambda mesh, override: material_for(mesh, textures, override),
-    )
+
+    def equipment_variant(
+        variant_id: str,
+        variant_output_path: Path,
+        variant_body: Any,
+        variant_body_name: str,
+        variant_body_texture: str,
+        variant_body_mdl: bytes,
+        variant_body_mdx: bytes,
+        armor: dict[str, Any] | None,
+        left_hand: dict[str, Any] | None,
+        right_hand: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if left_hand is not None and right_hand is not None:
+            raise RuntimeError(
+                "Opening single-weapon variant cannot target both hands")
+        hand_item = right_hand if right_hand is not None else left_hand
+        variant_weapon = weapon if hand_item is not None else None
+        variant_weapon_name = weapon_model_name if hand_item is not None else None
+        weapon_hook = "rhand" if right_hand is not None else "lhand"
+        variant_animation = export_actor(
+            variant_output_path,
+            body_model=variant_body,
+            body_name=variant_body_name,
+            body_texture=variant_body_texture,
+            head_model=head,
+            head_name=head_name,
+            head_texture=None,
+            weapon_model=variant_weapon,
+            weapon_name=variant_weapon_name,
+            animation_model=animation_model,
+            animation_names=("pause1", "walk", "run", "talk"),
+            material_factory=lambda mesh, override: material_for(mesh, textures, override),
+            weapon_hook=weapon_hook,
+        )
+        variant_head_hook = find_node_transform(variant_body, "headhook")
+        variant_camera_hook = find_node_transform(variant_body, "camerahook")
+        variant_talk_offset = None
+        if variant_head_hook is not None and talk_dummy is not None:
+            variant_talk_transform = variant_head_hook @ talk_dummy
+            variant_talk_offset = [
+                float(item) for item in variant_talk_transform[:3, 3]]
+        models = [
+            {
+                "model": variant_body_name,
+                "overrideTexture": variant_body_texture,
+                "mdlSha256": sha256_bytes(variant_body_mdl),
+                "mdxSha256": sha256_bytes(variant_body_mdx),
+            },
+            {
+                "model": head_name,
+                "overrideTexture": None,
+                "mdlSha256": sha256_bytes(head_mdl),
+                "mdxSha256": sha256_bytes(head_mdx),
+            },
+        ]
+        if hand_item is not None:
+            models.append({
+                "model": weapon_model_name,
+                "overrideTexture": None,
+                "mdlSha256": sha256_bytes(weapon_mdl),
+                "mdxSha256": sha256_bytes(weapon_mdx),
+            })
+        return {
+            "schema": "nikami-aurora-kotor-player-equipment-v1",
+            "id": variant_id,
+            "glb": f"actors/{variant_output_path.name}",
+            "armorResref": armor["resref"] if armor is not None else None,
+            "leftHandResref": (
+                left_hand["resref"] if left_hand is not None else None),
+            "rightHandResref": (
+                right_hand["resref"] if right_hand is not None else None),
+            "bodyModel": variant_body_name,
+            "bodyTexture": variant_body_texture,
+            "headModel": head_name,
+            "weaponModel": variant_weapon_name,
+            "weaponHook": weapon_hook if hand_item is not None else None,
+            "talkOffset": variant_talk_offset,
+            "cameraOffset": (
+                [float(item) for item in variant_camera_hook[:3, 3]]
+                if variant_camera_hook is not None else None
+            ),
+            "animation": variant_animation,
+            "armorUtiSha256": (
+                armor["utiSha256"] if armor is not None else None),
+            "leftHandUtiSha256": (
+                left_hand["utiSha256"] if left_hand is not None else None),
+            "rightHandUtiSha256": (
+                right_hand["utiSha256"] if right_hand is not None else None),
+            "baseItemsSha256": armor_item["baseItemsSha256"],
+            "models": models,
+        }
+
     head_hook = find_node_transform(body, "headhook")
     talk_dummy = find_node_transform(head, "talkdummy")
     camera_hook = find_node_transform(body, "camerahook")
@@ -1481,12 +1617,76 @@ def export_player_actor(
     if head_hook is not None and talk_dummy is not None:
         talk_transform = head_hook @ talk_dummy
         talk_offset = [float(item) for item in talk_transform[:3, 3]]
-    equipped_head_hook = find_node_transform(equipped_body, "headhook")
-    equipped_camera_hook = find_node_transform(equipped_body, "camerahook")
-    equipped_talk_offset = None
-    if equipped_head_hook is not None and talk_dummy is not None:
-        equipped_talk_transform = equipped_head_hook @ talk_dummy
-        equipped_talk_offset = [float(item) for item in equipped_talk_transform[:3, 3]]
+    clothing_output_path = equipped_output_path.with_name(
+        "player-opening-clothing.glb")
+    sword_output_path = equipped_output_path.with_name(
+        "player-opening-short-sword.glb")
+    left_sword_output_path = equipped_output_path.with_name(
+        "player-opening-left-short-sword.glb")
+    clothing_left_sword_output_path = equipped_output_path.with_name(
+        "player-opening-clothing-left-short-sword.glb")
+    equipment_variants = [
+        equipment_variant(
+            "opening-clothing",
+            clothing_output_path,
+            equipped_body,
+            equipped_body_name,
+            equipped_texture,
+            equipped_body_mdl,
+            equipped_body_mdx,
+            armor_item,
+            None,
+            None,
+        ),
+        equipment_variant(
+            "opening-left-short-sword",
+            left_sword_output_path,
+            body,
+            body_name,
+            body_texture,
+            body_mdl,
+            body_mdx,
+            None,
+            right_hand_item,
+            None,
+        ),
+        equipment_variant(
+            "opening-clothing-left-short-sword",
+            clothing_left_sword_output_path,
+            equipped_body,
+            equipped_body_name,
+            equipped_texture,
+            equipped_body_mdl,
+            equipped_body_mdx,
+            armor_item,
+            right_hand_item,
+            None,
+        ),
+        equipment_variant(
+            "opening-short-sword",
+            sword_output_path,
+            body,
+            body_name,
+            body_texture,
+            body_mdl,
+            body_mdx,
+            None,
+            None,
+            right_hand_item,
+        ),
+        equipment_variant(
+            "opening-clothing-short-sword",
+            equipped_output_path,
+            equipped_body,
+            equipped_body_name,
+            equipped_texture,
+            equipped_body_mdl,
+            equipped_body_mdx,
+            armor_item,
+            None,
+            right_hand_item,
+        ),
+    ]
     return {
         "schema": "nikami-aurora-kotor-player-v1",
         "glb": f"actors/{output_path.name}",
@@ -1526,48 +1726,7 @@ def export_player_actor(
                 "mdxSha256": sha256_bytes(head_mdx),
             },
         ],
-        "equipmentVariants": [
-            {
-                "schema": "nikami-aurora-kotor-player-equipment-v1",
-                "id": "opening-clothing-short-sword",
-                "glb": f"actors/{equipped_output_path.name}",
-                "armorResref": armor_item["resref"],
-                "rightHandResref": right_hand_item["resref"],
-                "bodyModel": equipped_body_name,
-                "bodyTexture": equipped_texture,
-                "headModel": head_name,
-                "weaponModel": weapon_model_name,
-                "talkOffset": equipped_talk_offset,
-                "cameraOffset": (
-                    [float(item) for item in equipped_camera_hook[:3, 3]]
-                    if equipped_camera_hook is not None else None
-                ),
-                "animation": equipped_animation_report,
-                "armorUtiSha256": armor_item["utiSha256"],
-                "rightHandUtiSha256": right_hand_item["utiSha256"],
-                "baseItemsSha256": armor_item["baseItemsSha256"],
-                "models": [
-                    {
-                        "model": equipped_body_name,
-                        "overrideTexture": equipped_texture,
-                        "mdlSha256": sha256_bytes(equipped_body_mdl),
-                        "mdxSha256": sha256_bytes(equipped_body_mdx),
-                    },
-                    {
-                        "model": head_name,
-                        "overrideTexture": None,
-                        "mdlSha256": sha256_bytes(head_mdl),
-                        "mdxSha256": sha256_bytes(head_mdx),
-                    },
-                    {
-                        "model": weapon_model_name,
-                        "overrideTexture": None,
-                        "mdlSha256": sha256_bytes(weapon_mdl),
-                        "mdxSha256": sha256_bytes(weapon_mdx),
-                    },
-                ],
-            }
-        ],
+        "equipmentVariants": equipment_variants,
     }
 
 

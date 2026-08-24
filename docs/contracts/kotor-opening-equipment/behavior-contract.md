@@ -84,7 +84,8 @@ Confirmed in the owned Endar runtime:
 - a compact world-space `EQUIPPED` notice replaces the loot notice rather than
   overlapping it.
 
-Physical-HMD input/haptic delivery remains hardware-gated. General equipment
-menus, individual unequip/re-equip presentation variants, dual wielding,
-combat stances/attacks, item stats, saves, and arbitrary armor/weapon model
-coverage remain future contracts.
+Physical-HMD input/haptic delivery remains hardware-gated. The flat opening
+equipment menu and individual unequip/re-equip presentation variants are now
+specified by `docs/contracts/kotor-equipment-ui/behavior-contract.md`. Dual
+wielding, combat stances/attacks, derived item stats, saves, and arbitrary
+armor/weapon model coverage remain future contracts.

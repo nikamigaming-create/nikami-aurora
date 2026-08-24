@@ -394,6 +394,7 @@ def export_actor(
     animation_model: Any,
     animation_names: tuple[str, ...],
     material_factory: Callable[[Any, str | None], Any],
+    weapon_hook: str = "rhand",
 ) -> dict[str, Any]:
     builder = ActorSceneBuilder(material_factory)
     head_skin_count = 0
@@ -430,7 +431,10 @@ def export_actor(
         if not builder.nodes_by_name.get("head_g", "").startswith("head::"):
             raise RuntimeError(f"Hook-bound head animation target was not isolated: {head_name}")
     if weapon_model is not None and weapon_name:
-        weapon_parent = builder.nodes_by_name.get("rhand", "actor_basis")
+        weapon_parent = builder.nodes_by_name.get(weapon_hook.lower(), "actor_basis")
+        if weapon_parent == "actor_basis":
+            raise RuntimeError(
+                f"Actor weapon hook is missing: {weapon_hook} ({weapon_name})")
         builder.register_model(
             weapon_model, weapon_name, attach_parent=weapon_parent, prefix="weapon::",
             merge_by_name=False)

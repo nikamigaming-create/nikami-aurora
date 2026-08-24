@@ -80,6 +80,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private Node3D? playerModel;
     private AnimationPlayer? playerAnimationPlayer;
     private PlayerEquipmentVariantRecord? openingEquipmentVariant;
+    private IReadOnlyList<PlayerEquipmentVariantRecord> playerEquipmentVariants = [];
+    private PlayerRecord? basePlayerRecord;
     private string playerManifestDirectory = "";
     private string currentPlayerAnimation = "";
     private string forcedPlayerAnimation = "";
@@ -274,6 +276,114 @@ public sealed partial class KotorModuleBoot : Node3D
             {
                 automatedInventoryOpened = true;
                 ShowInventory();
+            }
+            if (!automatedEquipmentScreenOpened && readyFrames >= 45 &&
+                System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_EQUIPMENT_SCREEN") == "1")
+            {
+                automatedEquipmentScreenOpened = true;
+                ShowEquipment();
+            }
+            if (System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_EQUIPMENT_MENU_TRANSACTION") == "1" &&
+                equipmentScreen?.Visible == true)
+            {
+                if (automatedEquipmentMenuStage == 0 && readyFrames >= 50)
+                {
+                    if (equipmentOkButton?.Visible == true)
+                        throw new InvalidDataException(
+                            "Equipment OK was visible without a pending change");
+                    SelectEquipmentSlot(KotorEquipmentSlot.Armor);
+                    SelectEquipmentRow(1);
+                    if (equipmentOkButton?.Visible != true)
+                        throw new InvalidDataException(
+                            "Equipment OK did not appear for a pending change");
+                    CommitEquipmentSelection();
+                    if (equipmentOkButton?.Visible == true)
+                        throw new InvalidDataException(
+                            "Equipment OK remained visible after commit");
+                    automatedEquipmentMenuStage = 1;
+                }
+                else if (automatedEquipmentMenuStage == 1 && readyFrames >= 55)
+                {
+                    SelectEquipmentRow(0);
+                    CommitEquipmentSelection();
+                    automatedEquipmentMenuStage = 2;
+                }
+                else if (automatedEquipmentMenuStage == 2 && readyFrames >= 60)
+                {
+                    SelectEquipmentSlot(KotorEquipmentSlot.LeftHand);
+                    if (visibleEquipmentChoices.Count != 2)
+                        throw new InvalidDataException(
+                            "Source-valid left-hand Short Sword choice was not materialized");
+                    SelectEquipmentRow(1);
+                    CommitEquipmentSelection();
+                    automatedEquipmentMenuStage = 3;
+                }
+                else if (automatedEquipmentMenuStage == 3 && readyFrames >= 65)
+                {
+                    SelectEquipmentSlot(KotorEquipmentSlot.Armor);
+                    SelectEquipmentRow(1);
+                    CommitEquipmentSelection();
+                    automatedEquipmentMenuStage = 4;
+                }
+                else if (automatedEquipmentMenuStage == 4 && readyFrames >= 70)
+                {
+                    SelectEquipmentSlot(KotorEquipmentSlot.LeftHand);
+                    SelectEquipmentRow(0);
+                    CommitEquipmentSelection();
+                    automatedEquipmentMenuStage = 5;
+                }
+                else if (automatedEquipmentMenuStage == 5 && readyFrames >= 75)
+                {
+                    SelectEquipmentSlot(KotorEquipmentSlot.Armor);
+                    SelectEquipmentRow(0);
+                    CommitEquipmentSelection();
+                    automatedEquipmentMenuStage = 6;
+                }
+                else if (automatedEquipmentMenuStage == 6 && readyFrames >= 80)
+                {
+                    SelectEquipmentSlot(KotorEquipmentSlot.RightHand);
+                    SelectEquipmentRow(1);
+                    CommitEquipmentSelection();
+                    automatedEquipmentMenuStage = 7;
+                }
+                else if (automatedEquipmentMenuStage == 7 && readyFrames >= 85)
+                {
+                    SelectEquipmentSlot(KotorEquipmentSlot.Armor);
+                    SelectEquipmentRow(1);
+                    CommitEquipmentSelection();
+                    automatedEquipmentMenuStage = 8;
+                    GD.Print("NIKAMI_AURORA_EQUIPMENT_UI_TRANSACTION status=pass " +
+                             "variants=clothing,base,left-short-sword," +
+                             "clothing-left-short-sword,short-sword,combined");
+                }
+            }
+            if (System.Environment.GetEnvironmentVariable(
+                    "NIKAMI_AURORA_TEST_FLAT_MENU_NAVIGATION") == "1")
+            {
+                if (automatedFlatMenuNavigationStage == 0 && readyFrames >= 50)
+                {
+                    ShowInventory();
+                    if (inventoryScreen?.Visible != true ||
+                        equipmentScreen?.Visible == true ||
+                        desktopHudRoot?.Visible == true)
+                        throw new InvalidDataException(
+                            "Equipment-to-inventory navigation visibility drifted");
+                    automatedFlatMenuNavigationStage = 1;
+                }
+                else if (automatedFlatMenuNavigationStage == 1 && readyFrames >= 55)
+                {
+                    ShowEquipment();
+                    if (equipmentScreen?.Visible != true ||
+                        inventoryScreen?.Visible == true ||
+                        desktopHudRoot?.Visible == true)
+                        throw new InvalidDataException(
+                            "Inventory-to-equipment navigation visibility drifted");
+                    automatedFlatMenuNavigationStage = 2;
+                    GD.Print("NIKAMI_AURORA_FLAT_MENU_NAVIGATION status=pass " +
+                             "path=hud,equipment,inventory,equipment");
+                }
             }
             if (!automatedTutorialXpChain && readyFrames >= 30 &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN") == "1" &&
@@ -523,21 +633,28 @@ public sealed partial class KotorModuleBoot : Node3D
         if (dialoguePanel.Visible || Time.GetTicksMsec() < inputLockedUntilMsec) return;
         var variant = openingEquipmentVariant;
         if (variant is null || gameplaySimulation is null) return;
+        var armorResref = variant.ArmorResref
+            ?? throw new InvalidDataException("Opening equipment variant has no armor item");
+        if (variant.LeftHandResref is not null)
+            throw new InvalidDataException(
+                "Opening equipment variant unexpectedly targets the left hand");
+        var rightHandResref = variant.RightHandResref
+            ?? throw new InvalidDataException("Opening equipment variant has no right-hand item");
         var snapshot = gameplaySimulation.CaptureSnapshot();
         if (snapshot.Equipment.TryGetValue(KotorEquipmentSlot.Armor, out var armor) &&
-            armor.Equals(variant.ArmorResref, StringComparison.OrdinalIgnoreCase) &&
+            armor.Equals(armorResref, StringComparison.OrdinalIgnoreCase) &&
             snapshot.Equipment.TryGetValue(KotorEquipmentSlot.RightHand, out var rightHand) &&
-            rightHand.Equals(variant.RightHandResref, StringComparison.OrdinalIgnoreCase))
+            rightHand.Equals(rightHandResref, StringComparison.OrdinalIgnoreCase))
         {
             GD.Print("NIKAMI_AURORA_EQUIPMENT status=already-equipped " +
                      $"armor={armor} rightHand={rightHand}");
             return;
         }
-        if (!snapshot.PlayerInventory.ContainsKey(variant.ArmorResref) ||
-            !snapshot.PlayerInventory.ContainsKey(variant.RightHandResref))
+        if (!snapshot.PlayerInventory.ContainsKey(armorResref) ||
+            !snapshot.PlayerInventory.ContainsKey(rightHandResref))
         {
             GD.Print("NIKAMI_AURORA_EQUIPMENT status=unavailable " +
-                     $"armor={variant.ArmorResref} rightHand={variant.RightHandResref}");
+                     $"armor={armorResref} rightHand={rightHandResref}");
             return;
         }
 
@@ -545,8 +662,8 @@ public sealed partial class KotorModuleBoot : Node3D
         try
         {
             ApplyGameplayTransition(gameplaySimulation.EquipItems([
-                new KotorEquipRequest(variant.ArmorResref, KotorEquipmentSlot.Armor),
-                new KotorEquipRequest(variant.RightHandResref, KotorEquipmentSlot.RightHand)
+                new KotorEquipRequest(armorResref, KotorEquipmentSlot.Armor),
+                new KotorEquipRequest(rightHandResref, KotorEquipmentSlot.RightHand)
             ]));
         }
         finally
@@ -1978,7 +2095,13 @@ public sealed partial class KotorModuleBoot : Node3D
         var target = playerModel.GlobalPosition + Vector3.Up * 1.1f;
         var forward = -playerModel.GlobalTransform.Basis.Z.Normalized();
         var right = playerModel.GlobalTransform.Basis.X.Normalized();
-        var eye = target + forward * 1.8f + right * 1.1f + Vector3.Up * 0.1f;
+        var snapshot = gameplaySimulation?.CaptureSnapshot();
+        var inspectLeftHand = snapshot?.Equipment.ContainsKey(
+            KotorEquipmentSlot.LeftHand) == true &&
+            snapshot.Equipment.ContainsKey(KotorEquipmentSlot.RightHand) == false;
+        var eye = target + forward * 1.8f +
+                  right * (inspectLeftHand ? -1.1f : 1.1f) +
+                  Vector3.Up * 0.1f;
         if (xrActive)
         {
             SetPresentationCameraBase(eye, target, Vector3.Up, 45.0f);
@@ -1999,6 +2122,7 @@ public sealed partial class KotorModuleBoot : Node3D
             inspectionCamera.LookAt(target, Vector3.Up);
         }
         GD.Print($"NIKAMI_AURORA_PLAYER_CAMERA status=active mode=equipment-closeup " +
+                 $"hand={(inspectLeftHand ? "left" : "right")} " +
                  $"fov=45.000 position={eye} xr={xrActive}");
     }
 
@@ -2522,7 +2646,9 @@ public sealed partial class KotorModuleBoot : Node3D
             string.IsNullOrWhiteSpace(source.Glb))
             throw new InvalidDataException("Player manifest is missing or unsupported");
         playerManifestDirectory = manifestDirectory;
-        openingEquipmentVariant = source.EquipmentVariants?.SingleOrDefault(variant =>
+        basePlayerRecord = source;
+        playerEquipmentVariants = source.EquipmentVariants ?? [];
+        openingEquipmentVariant = playerEquipmentVariants.SingleOrDefault(variant =>
             variant.Id.Equals("opening-clothing-short-sword", StringComparison.OrdinalIgnoreCase));
         if (openingEquipmentVariant is not null &&
             openingEquipmentVariant.Schema != "nikami-aurora-kotor-player-equipment-v1")
@@ -2848,6 +2974,11 @@ public sealed partial class KotorModuleBoot : Node3D
                              $"slot={equipped.Slot} item={equipped.Item.Resref} " +
                              $"previous={equipped.PreviousResref}");
                     break;
+                case KotorEquipmentRemoved removed:
+                    equipmentChanged = true;
+                    GD.Print($"NIKAMI_AURORA_EQUIPMENT status=removed " +
+                             $"slot={removed.Slot} item={removed.Item.Resref}");
+                    break;
                 case KotorItemUsed used:
                     GD.Print($"NIKAMI_AURORA_ITEM status=used item={used.Item.Resref} " +
                              $"quantity={used.QuantityBefore}->{used.QuantityAfter} " +
@@ -2982,37 +3113,85 @@ public sealed partial class KotorModuleBoot : Node3D
 
     private void PresentEquipment(KotorGameplaySnapshot snapshot)
     {
-        var variant = openingEquipmentVariant
-            ?? throw new InvalidDataException("Opening player equipment variant is unavailable");
-        if (!snapshot.Equipment.TryGetValue(KotorEquipmentSlot.Armor, out var armor) ||
-            !armor.Equals(variant.ArmorResref, StringComparison.OrdinalIgnoreCase) ||
-            !snapshot.Equipment.TryGetValue(KotorEquipmentSlot.RightHand, out var rightHand) ||
-            !rightHand.Equals(variant.RightHandResref, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("No player model matches the profile equipment snapshot");
+        var unsupportedSlots = snapshot.Equipment.Keys.Where(slot =>
+            slot is not KotorEquipmentSlot.Armor and
+            not KotorEquipmentSlot.LeftHand and
+            not KotorEquipmentSlot.RightHand).ToArray();
+        if (unsupportedSlots.Length > 0)
+            throw new InvalidDataException(
+                $"Player equipment has no visual variant coverage: " +
+                string.Join(',', unsupportedSlots));
+        snapshot.Equipment.TryGetValue(KotorEquipmentSlot.Armor, out var armor);
+        snapshot.Equipment.TryGetValue(KotorEquipmentSlot.LeftHand, out var leftHand);
+        snapshot.Equipment.TryGetValue(KotorEquipmentSlot.RightHand, out var rightHand);
+        var basePlayer = basePlayerRecord
+            ?? throw new InvalidDataException("Base player model is unavailable");
+        var isBaseAppearance = armor is null && leftHand is null && rightHand is null;
+        var variant = isBaseAppearance
+            ? null
+            : playerEquipmentVariants.SingleOrDefault(candidate =>
+                string.Equals(
+                    candidate.ArmorResref, armor, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
+                    candidate.LeftHandResref, leftHand, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
+                    candidate.RightHandResref, rightHand, StringComparison.OrdinalIgnoreCase));
+        if (!isBaseAppearance && variant is null)
+            throw new InvalidDataException(
+                $"No player model matches Armor={armor ?? "none"}, " +
+                $"LeftHand={leftHand ?? "none"}, " +
+                $"RightHand={rightHand ?? "none"}");
 
+        var glb = variant?.Glb ?? basePlayer.Glb;
+        var animationContract = variant?.Animation ?? basePlayer.Animation;
+        var cameraOffset = variant?.CameraOffset ?? basePlayer.CameraOffset;
+        var variantId = variant?.Id ?? "opening-base";
         var path = Path.GetFullPath(Path.Combine(playerManifestDirectory,
-            variant.Glb.Replace('/', Path.DirectorySeparatorChar)));
+            glb.Replace('/', Path.DirectorySeparatorChar)));
         var document = new GltfDocument();
         var state = new GltfState();
         if (document.AppendFromFile(path, state) != Error.Ok ||
             document.GenerateScene(state) is not Node3D model)
-            throw new InvalidDataException($"Godot could not import equipped player model: {path}");
-        model.Name = "PlayerModelEquipped";
+            throw new InvalidDataException($"Godot could not import player equipment model: {path}");
+        model.Name = $"PlayerModel_{variantId}";
+        var weaponNodes = FindDescendants<Node3D>(model).Where(node =>
+            node.Name.ToString().StartsWith(
+                "weapon__", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (variant?.WeaponHook is { Length: > 0 } expectedWeaponHook)
+        {
+            var weaponRoots = weaponNodes.Where(node =>
+                node.GetParent() is not Node3D parent ||
+                !parent.Name.ToString().StartsWith(
+                    "weapon__", StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (weaponRoots.Length != 1 ||
+                !weaponRoots[0].GetParent().Name.ToString().Equals(
+                    expectedWeaponHook, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(
+                    $"Player weapon hierarchy does not attach to {expectedWeaponHook}");
+            GD.Print($"NIKAMI_AURORA_PLAYER_WEAPON status=attached " +
+                     $"variant={variantId} hook={expectedWeaponHook} " +
+                     $"nodes={weaponNodes.Length}");
+        }
+        else if (weaponNodes.Length != 0)
+        {
+            throw new InvalidDataException(
+                $"Unarmed player variant contains weapon nodes: {variantId}");
+        }
         var animationPlayer = FindDescendant<AnimationPlayer>(model)
-            ?? throw new InvalidDataException("Equipped player model has no animation player");
+            ?? throw new InvalidDataException("Player equipment model has no animation player");
         foreach (var animationName in animationPlayer.GetAnimationList())
         {
-            var animation = animationPlayer.GetAnimation(animationName);
-            if (animation is not null)
-                animation.LoopMode = Animation.LoopModeEnum.Linear;
+            var clip = animationPlayer.GetAnimation(animationName);
+            if (clip is not null)
+                clip.LoopMode = Animation.LoopModeEnum.Linear;
         }
-        foreach (var expected in variant.Animation.Animations)
+        foreach (var expected in animationContract.Animations)
             _ = FindAnimationName(animationPlayer, expected);
         var playerFaceRig = BuildLipRig(model, animationPlayer);
         playerFaceRig?.Modifier.SetNeutral();
         GD.Print($"NIKAMI_AURORA_PLAYER_FACE status=" +
                  $"{(playerFaceRig is null ? "unavailable" : "neutralized")} " +
-                 $"variant={variant.Id}");
+                 $"variant={variantId}");
 
         var requestedAnimation = string.IsNullOrWhiteSpace(currentPlayerAnimation)
             ? "pause1"
@@ -3028,24 +3207,39 @@ public sealed partial class KotorModuleBoot : Node3D
         UpdateXrLocalAvatarVisibility();
         playerAnimationPlayer = animationPlayer;
         currentPlayerAnimation = "";
-        if (variant.CameraOffset is { Count: >= 3 })
+        var walkAnimation = animationPlayer.GetAnimation(
+            FindAnimationName(animationPlayer, "walk"));
+        var runAnimation = animationPlayer.GetAnimation(
+            FindAnimationName(animationPlayer, "run"));
+        if (walkAnimation is null || runAnimation is null)
+            throw new InvalidDataException("Player equipment movement animations are missing");
+        playerWalkSpeed = basePlayer.WalkDistance / (float)walkAnimation.GetLength();
+        playerRunSpeed = basePlayer.RunDistance / (float)runAnimation.GetLength();
+        if (cameraOffset is { Count: >= 3 })
         {
-            cameraPivot.Position = ToGodot(variant.CameraOffset);
+            cameraPivot.Position = ToGodot(cameraOffset);
             xrGameplayOriginCalibrated = false;
             if (xrActive && !dialogueCameraActive)
                 RecenterXrGameplayBase();
         }
         PlayPlayerAnimation(requestedAnimation);
-        ShowWorldNotice("EQUIPPED", ["Clothing", "Short Sword"]);
+        if (equipmentScreen?.Visible != true)
+            ShowWorldNotice(
+                snapshot.Equipment.Count == 0 ? "UNEQUIPPED" : "EQUIPPED",
+                snapshot.Equipment.Values.ToArray());
         if (xrActive)
             (activeInteractionController ?? xrRightHand)
                 .TriggerHapticPulse("haptic", 0.0, 0.5, 0.12, 0.0);
-        GD.Print($"NIKAMI_AURORA_PLAYER_EQUIPMENT status=ready variant={variant.Id} " +
-                 $"body={variant.BodyModel} texture={variant.BodyTexture} " +
-                 $"head={variant.HeadModel} weapon={variant.WeaponModel} " +
-                 $"skins={variant.Animation.SkinCount} " +
-                 $"headSkins={variant.Animation.HeadSkinCount} " +
-                 $"animations={string.Join(',', variant.Animation.Animations)}");
+        GD.Print($"NIKAMI_AURORA_PLAYER_EQUIPMENT status=ready variant={variantId} " +
+                 $"armor={armor ?? "none"} leftHand={leftHand ?? "none"} " +
+                 $"rightHand={rightHand ?? "none"} " +
+                 $"body={variant?.BodyModel ?? basePlayer.BodyModel} " +
+                 $"texture={variant?.BodyTexture ?? basePlayer.BodyTexture} " +
+                 $"head={variant?.HeadModel ?? basePlayer.HeadModel} " +
+                 $"weapon={variant?.WeaponModel ?? "none"} " +
+                 $"skins={animationContract.SkinCount} " +
+                 $"headSkins={animationContract.HeadSkinCount} " +
+                 $"animations={string.Join(',', animationContract.Animations)}");
     }
 
     private static void PresentExperienceAward(KotorExperienceAwarded experience)
@@ -3591,31 +3785,61 @@ public sealed partial class KotorModuleBoot : Node3D
                 (Item: item, BaseItemsSha256: placeable.BaseItemsSha256)));
         foreach (var variant in manifest.Player.EquipmentVariants ?? [])
         {
+            var hasArmor = !string.IsNullOrWhiteSpace(variant.ArmorResref);
+            var hasLeftHand = !string.IsNullOrWhiteSpace(variant.LeftHandResref);
+            var hasRightHand = !string.IsNullOrWhiteSpace(variant.RightHandResref);
+            var expectedWeaponHook = hasLeftHand
+                ? "lhand"
+                : hasRightHand
+                    ? "rhand"
+                    : null;
             if (variant.Schema != "nikami-aurora-kotor-player-equipment-v1" ||
                 string.IsNullOrWhiteSpace(variant.Glb) ||
+                (!hasArmor && !hasLeftHand && !hasRightHand) ||
+                (hasLeftHand && hasRightHand) ||
+                (hasLeftHand || hasRightHand) !=
+                !string.IsNullOrWhiteSpace(variant.WeaponModel) ||
+                !string.Equals(
+                    variant.WeaponHook,
+                    expectedWeaponHook,
+                    StringComparison.OrdinalIgnoreCase) ||
                 variant.Animation.SkinCount <= 0 ||
                 variant.Animation.HeadSkinCount <= 0 ||
                 !variant.Animation.Animations.Contains("pause1", StringComparer.OrdinalIgnoreCase) ||
                 !variant.Animation.Animations.Contains("walk", StringComparer.OrdinalIgnoreCase) ||
                 !variant.Animation.Animations.Contains("run", StringComparer.OrdinalIgnoreCase))
                 throw new InvalidDataException($"Player equipment variant is incomplete: {variant.Id}");
-            var armor = itemSources.SingleOrDefault(source =>
+            var armor = hasArmor ? itemSources.SingleOrDefault(source =>
                 source.Item.Resref.Equals(
-                    variant.ArmorResref, StringComparison.OrdinalIgnoreCase));
-            var rightHand = itemSources.SingleOrDefault(source =>
+                    variant.ArmorResref, StringComparison.OrdinalIgnoreCase)) : default;
+            var leftHand = hasLeftHand ? itemSources.SingleOrDefault(source =>
                 source.Item.Resref.Equals(
-                    variant.RightHandResref, StringComparison.OrdinalIgnoreCase));
-            if (armor.Item is null || rightHand.Item is null ||
-                !armor.Item.UtiSha256.Equals(
-                    variant.ArmorUtiSha256, StringComparison.OrdinalIgnoreCase) ||
-                !rightHand.Item.UtiSha256.Equals(
-                    variant.RightHandUtiSha256, StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(
+                    variant.LeftHandResref, StringComparison.OrdinalIgnoreCase)) : default;
+            var rightHand = hasRightHand ? itemSources.SingleOrDefault(source =>
+                source.Item.Resref.Equals(
+                    variant.RightHandResref, StringComparison.OrdinalIgnoreCase)) : default;
+            var armorValid = !hasArmor ||
+                armor.Item is not null &&
+                armor.Item.UtiSha256.Equals(
+                    variant.ArmorUtiSha256, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
                     armor.BaseItemsSha256, variant.BaseItemsSha256,
-                    StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(
+                    StringComparison.OrdinalIgnoreCase);
+            var leftHandValid = !hasLeftHand ||
+                leftHand.Item is not null &&
+                leftHand.Item.UtiSha256.Equals(
+                    variant.LeftHandUtiSha256, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
+                    leftHand.BaseItemsSha256, variant.BaseItemsSha256,
+                    StringComparison.OrdinalIgnoreCase);
+            var rightHandValid = !hasRightHand ||
+                rightHand.Item is not null &&
+                rightHand.Item.UtiSha256.Equals(
+                    variant.RightHandUtiSha256, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
                     rightHand.BaseItemsSha256, variant.BaseItemsSha256,
-                    StringComparison.OrdinalIgnoreCase))
+                    StringComparison.OrdinalIgnoreCase);
+            if (!armorValid || !leftHandValid || !rightHandValid)
                 throw new InvalidDataException(
                     $"Player equipment variant sources drifted: {variant.Id}");
         }
@@ -3677,17 +3901,20 @@ public sealed partial class KotorModuleBoot : Node3D
         string Schema,
         string Id,
         string Glb,
-        string ArmorResref,
-        string RightHandResref,
+        string? ArmorResref,
+        string? LeftHandResref,
+        string? RightHandResref,
         string BodyModel,
         string BodyTexture,
         string HeadModel,
-        string WeaponModel,
+        string? WeaponModel,
+        string? WeaponHook,
         IReadOnlyList<float>? TalkOffset,
         IReadOnlyList<float>? CameraOffset,
         PlayerAnimationRecord Animation,
-        string ArmorUtiSha256,
-        string RightHandUtiSha256,
+        string? ArmorUtiSha256,
+        string? LeftHandUtiSha256,
+        string? RightHandUtiSha256,
         string BaseItemsSha256);
     private sealed record RoomRecord(string Model, string? Glb, IReadOnlyList<float> Position,
         IReadOnlyList<IReadOnlyList<IReadOnlyList<float>>>? WalkmeshTriangles,

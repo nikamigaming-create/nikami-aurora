@@ -35,6 +35,9 @@ param(
     [switch]$LoadingScreenCapture,
     [switch]$HudScreen,
     [switch]$InventoryScreen,
+    [switch]$EquipmentScreen,
+    [switch]$TestEquipmentMenuTransaction,
+    [switch]$TestFlatMenuNavigation,
     [switch]$CaptureAndExit
 )
 
@@ -215,7 +218,27 @@ if ($InventoryScreen) {
     $env:NIKAMI_AURORA_TEST_OPEN_LOCKER = "1"
     $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
 }
-if ($LoadingScreenCapture -or $HudScreen -or $InventoryScreen) {
+if ($EquipmentScreen) {
+    if ($OpenXR -or $OpenXRSimulator) {
+        throw "-EquipmentScreen is a flat presentation gate."
+    }
+    $env:NIKAMI_AURORA_TEST_EQUIPMENT_SCREEN = "1"
+    $env:NIKAMI_AURORA_TEST_OPEN_LOCKER = "1"
+    $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
+}
+if ($TestEquipmentMenuTransaction) {
+    if (-not $EquipmentScreen) {
+        throw "-TestEquipmentMenuTransaction requires -EquipmentScreen."
+    }
+    $env:NIKAMI_AURORA_TEST_EQUIPMENT_MENU_TRANSACTION = "1"
+}
+if ($TestFlatMenuNavigation) {
+    if (-not $EquipmentScreen) {
+        throw "-TestFlatMenuNavigation requires -EquipmentScreen."
+    }
+    $env:NIKAMI_AURORA_TEST_FLAT_MENU_NAVIGATION = "1"
+}
+if ($LoadingScreenCapture -or $HudScreen -or $InventoryScreen -or $EquipmentScreen) {
     $env:NIKAMI_AURORA_FLAT_UI_REFERENCE_VIEWPORT = "800x600"
 }
 
@@ -225,7 +248,7 @@ try {
         throw "Godot C# build failed with code $LASTEXITCODE"
     }
     $godotArguments = @("--path", (Join-Path $repo "godot"))
-    if ($LoadingScreenCapture -or $HudScreen -or $InventoryScreen) {
+    if ($LoadingScreenCapture -or $HudScreen -or $InventoryScreen -or $EquipmentScreen) {
         # mipc8x6 is KOTOR's owned 800x600 HUD contract.  Keeping flat
         # acceptance captures at that exact viewport prevents widescreen
         # stretching from being mistaken for source-layout drift.
@@ -300,6 +323,9 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_XR_BODY_LOOKDOWN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_LOADING_SCREEN -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_INVENTORY_SCREEN -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_EQUIPMENT_SCREEN -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_EQUIPMENT_MENU_TRANSACTION -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_FLAT_MENU_NAVIGATION -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_FLAT_UI_REFERENCE_VIEWPORT -ErrorAction SilentlyContinue
     if ($hadXrRuntimeJson) {
         $env:XR_RUNTIME_JSON = $previousXrRuntimeJson
