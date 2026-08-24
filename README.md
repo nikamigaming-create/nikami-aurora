@@ -55,6 +55,9 @@ GUI, font, icon, portrait, audio, model, and capture payloads stay local.
 The inventory's source Quest Items/All Items toggle now reads each installed
 UTI `Plot` bit, and its native arrow/thumb scrollbar clips and navigates lists
 that exceed the authored viewport.
+The opening Inventory party controls now select the player or Trask through
+profile-owned state, refresh the source portrait and imported vitality/Defense,
+and target Medpac use at the selected member.
 
 Opening-room furniture now distinguishes baked room meshes from GIT placeables.
 The installed `PLC_Chair2` model is instanced at all three authored placements;

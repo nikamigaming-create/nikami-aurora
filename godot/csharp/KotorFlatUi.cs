@@ -17,6 +17,9 @@ public sealed partial class KotorModuleBoot
     private Control? desktopHudRoot;
     private Control? inventoryScreen;
     private Control? inventoryReferenceSurface;
+    private TextureRect? inventoryPortrait;
+    private readonly Dictionary<string, Button> inventoryPartyButtons =
+        new(StringComparer.OrdinalIgnoreCase);
     private ScrollContainer? inventoryScroll;
     private VBoxContainer? inventoryRows;
     private Control? inventorySourceScrollbar;
@@ -62,6 +65,7 @@ public sealed partial class KotorModuleBoot
     private int automatedFlatMenuNavigationStage;
     private int automatedInventoryQuestFilterStage;
     private bool automatedInventoryScrollVerified;
+    private bool automatedInventoryPartySelectionVerified;
 
     private void ConfigureFlatReferenceViewportIfRequested()
     {
@@ -401,6 +405,7 @@ public sealed partial class KotorModuleBoot
     private void ConfigureRetailInventory(KotorUiInventoryRecord source)
     {
         inventoryScreen?.QueueFree();
+        inventoryPartyButtons.Clear();
         inventoryScreen = new Control
         {
             Name = "RetailInventoryScreen",
@@ -433,15 +438,36 @@ public sealed partial class KotorModuleBoot
                 AddTexture(inventoryReferenceSurface, fill, RequireExtent(control));
         }
 
+        var playerPartyMember = source.PartyMembers.Single(member =>
+            member.Id.Equals(
+                KotorGameplaySimulation.PlayerPartyMemberId,
+                StringComparison.OrdinalIgnoreCase));
         var portraitControl = RequireControl(source.Controls, "LBL_PORT");
-        AddTexture(inventoryReferenceSurface, source.Portrait.Resref, RequireExtent(portraitControl));
+        inventoryPortrait = AddTexture(
+            inventoryReferenceSurface,
+            playerPartyMember.Portrait.Resref,
+            RequireExtent(portraitControl));
         var partyTags = new[] { "BTN_CHANGE1", "BTN_CHANGE2" };
-        for (var index = 0; index < Math.Min(partyTags.Length, source.PartyPortraits.Count); index++)
+        for (var index = 0; index < Math.Min(partyTags.Length, source.PartyMembers.Count); index++)
         {
+            var member = source.PartyMembers[index];
+            var memberControl = RequireControl(source.Controls, partyTags[index]);
             AddTexture(
                 inventoryReferenceSurface,
-                source.PartyPortraits[index].Resref,
-                RequireExtent(RequireControl(source.Controls, partyTags[index])));
+                member.Portrait.Resref,
+                RequireExtent(memberControl));
+            var button = new Button
+            {
+                Name = $"RetailInventoryParty_{member.Id}",
+                Flat = false,
+                TooltipText = member.DisplayName,
+                FocusMode = Control.FocusModeEnum.All,
+                MouseDefaultCursorShape = Control.CursorShape.PointingHand
+            };
+            Place(button, RequireExtent(memberControl));
+            button.Pressed += () => SelectInventoryPartyMember(member.Id);
+            inventoryReferenceSurface.AddChild(button);
+            inventoryPartyButtons.Add(member.Id, button);
         }
 
         AddSourceLabel(inventoryReferenceSurface, source.Controls, "LBL_INV", 16);
@@ -518,7 +544,7 @@ public sealed partial class KotorModuleBoot
             inventoryReferenceSurface, source.Controls, "BTN_EXIT", HideInventory, 16);
         GD.Print($"NIKAMI_AURORA_INVENTORY_UI status=ready " +
                  $"layout={source.Layout.Resref} items={source.Items.Count} " +
-                 $"top={source.TopLayout.Resref} party={source.PartyPortraits.Count} " +
+                 $"top={source.TopLayout.Resref} party={source.PartyMembers.Count} " +
                  "interaction=mouse,keyboard state=profile-owned");
     }
 
@@ -959,6 +985,19 @@ public sealed partial class KotorModuleBoot
                  $"items={visibleInventoryItems.Count}");
     }
 
+    private void SelectInventoryPartyMember(string id)
+    {
+        if (gameplaySimulation is null)
+            return;
+        var transition = gameplaySimulation.SelectPartyMember(id);
+        ApplyGameplayTransition(transition);
+        RefreshInventory();
+        var member = transition.After.PartyMembers[transition.After.SelectedPartyMemberId];
+        GD.Print($"NIKAMI_AURORA_INVENTORY_PARTY status=selected " +
+                 $"id={member.Id} vitality={member.CurrentVitality}/{member.MaximumVitality} " +
+                 $"defense={member.Defense}");
+    }
+
     private void ShowEquipment()
     {
         if (!moduleReady || xrActive || equipmentScreen is null || dialoguePanel.Visible)
@@ -1032,13 +1071,19 @@ public sealed partial class KotorModuleBoot
             child.QueueFree();
         inventoryRowButtons.Clear();
         var snapshot = gameplaySimulation.CaptureSnapshot();
+        var selectedPartyMember = snapshot.PartyMembers[snapshot.SelectedPartyMemberId];
+        var selectedPartySource = flatUiRecord.Inventory.PartyMembers.Single(member =>
+            member.Id.Equals(selectedPartyMember.Id, StringComparison.OrdinalIgnoreCase));
+        if (inventoryPortrait is not null)
+            inventoryPortrait.Texture = Texture(selectedPartySource.Portrait.Resref);
+        RefreshInventoryPartyButtonStyles(selectedPartyMember.Id);
         if (inventoryCredits is not null)
             inventoryCredits.Text = snapshot.PlayerCredits.ToString();
         if (inventoryVitality is not null)
             inventoryVitality.Text =
-                $"{snapshot.PlayerCurrentVitality}/{snapshot.PlayerMaximumVitality}";
+                $"{selectedPartyMember.CurrentVitality}/{selectedPartyMember.MaximumVitality}";
         if (inventoryDefense is not null)
-            inventoryDefense.Text = snapshot.PlayerDefense.ToString();
+            inventoryDefense.Text = selectedPartyMember.Defense.ToString();
         var sourceItems = flatUiRecord.Inventory.Items
             .Where(item =>
                 snapshot.PlayerInventory.ContainsKey(item.Resref) &&
@@ -1150,10 +1195,13 @@ public sealed partial class KotorModuleBoot
         if (inventoryUseButton is not null)
         {
             var snapshot = gameplaySimulation?.CaptureSnapshot();
+            var selectedPartyMember = snapshot is null
+                ? null
+                : snapshot.PartyMembers[snapshot.SelectedPartyMemberId];
             inventoryUseButton.Disabled =
                 selected.BaseItem != 55 ||
-                snapshot is null ||
-                snapshot.PlayerCurrentVitality >= snapshot.PlayerMaximumVitality;
+                selectedPartyMember is null ||
+                selectedPartyMember.CurrentVitality >= selectedPartyMember.MaximumVitality;
         }
         inventoryRowButtons[selectedInventoryIndex].GrabFocus();
     }
@@ -1186,13 +1234,43 @@ public sealed partial class KotorModuleBoot
                      $"resref={selected.Resref} baseItem={selected.BaseItem}");
             return;
         }
-        var transition = gameplaySimulation.UseMedpac(selected.Resref);
+        var partyMemberId = gameplaySimulation.CaptureSnapshot().SelectedPartyMemberId;
+        var transition = gameplaySimulation.UseMedpac(
+            selected.Resref,
+            partyMemberId: partyMemberId);
         ApplyGameplayTransition(transition);
         RefreshInventory();
         GD.Print($"NIKAMI_AURORA_INVENTORY_UI status=" +
                  $"{(transition.Events.Count == 0 ? "no-effect" : "used")} " +
-                 $"resref={selected.Resref} action=consume");
+                 $"resref={selected.Resref} target={partyMemberId} action=consume");
     }
+
+    private void RefreshInventoryPartyButtonStyles(string selectedId)
+    {
+        foreach (var (id, button) in inventoryPartyButtons)
+        {
+            var normal = PartyPortraitBorder(
+                id.Equals(selectedId, StringComparison.OrdinalIgnoreCase)
+                    ? KotorYellow
+                    : Colors.Black);
+            var highlighted = PartyPortraitBorder(KotorYellow);
+            button.AddThemeStyleboxOverride("normal", normal);
+            button.AddThemeStyleboxOverride("hover", highlighted);
+            button.AddThemeStyleboxOverride("focus", highlighted);
+            button.AddThemeStyleboxOverride("pressed", highlighted);
+            button.AddThemeStyleboxOverride("disabled", normal);
+        }
+    }
+
+    private static StyleBoxFlat PartyPortraitBorder(Color color) => new()
+    {
+        BgColor = Colors.Transparent,
+        BorderColor = color,
+        BorderWidthLeft = 1,
+        BorderWidthTop = 1,
+        BorderWidthRight = 1,
+        BorderWidthBottom = 1
+    };
 
     private void SelectEquipmentSlot(KotorEquipmentSlot slot)
     {
@@ -1662,6 +1740,7 @@ public sealed partial class KotorModuleBoot
         KotorUiTextureRecord Portrait,
         IReadOnlyList<KotorUiTextureRecord> PartyPortraits,
         string PartyPortraitsSourceSha256,
+        IReadOnlyList<KotorUiPartyMemberRecord> PartyMembers,
         IReadOnlyList<KotorUiInventoryItemRecord> Items,
         KotorUiLocalizedTextRecord AllItems);
     private sealed record KotorUiEquipmentRecord(
@@ -1713,6 +1792,18 @@ public sealed partial class KotorModuleBoot
         KotorUiTextureRecord Icon,
         string UtiSha256);
     private sealed record KotorUiLocalizedTextRecord(string Text, int Strref);
+    private sealed record KotorUiPartyMemberRecord(
+        string Id,
+        string DisplayName,
+        KotorUiTextureRecord Portrait,
+        int CurrentVitality,
+        int MaximumVitality,
+        int Defense,
+        string SourceKind,
+        string? UtcSha256,
+        string? ArmorResref,
+        string? ArmorUtiSha256,
+        string? BaseItemsSha256);
     private sealed record KotorEquipmentChoice(
         KotorUiInventoryItemRecord? Item,
         bool Equipped);
