@@ -311,6 +311,47 @@ internal static class Program
         Expect(repeatedLocker.After.PlayerInventory["g_i_medeqpmnt01"] == 2,
             "repeated locker interaction duplicated its inventory");
 
+        var fullHealthUse = simulation.UseMedpac("g_i_medeqpmnt01");
+        Expect(fullHealthUse.Events.Count == 0 &&
+               fullHealthUse.After.PlayerInventory["g_i_medeqpmnt01"] == 2 &&
+               fullHealthUse.After.PlayerCurrentVitality == 20,
+            "full-health medpac use consumed an item or changed vitality");
+
+        var healingSimulation = new KotorGameplaySimulation(
+            [],
+            [],
+            [new KotorPlaceableDefinition(
+                "placeable:healing", "healing_locker", null,
+                [
+                    new KotorItemStack(medpac, 2, false, false),
+                    new KotorItemStack(clothing, 1, false, false)
+                ])],
+            initialCurrentVitality: 5,
+            initialMaximumVitality: 20,
+            initialDefense: 10,
+            initialCredits: 0);
+        healingSimulation.UsePlaceable("placeable:healing");
+        var healed = healingSimulation.UseMedpac(
+            "g_i_medeqpmnt01", wisdomModifier: 1, treatInjurySkill: 2);
+        var used = healed.Events.OfType<KotorItemUsed>().Single();
+        Expect(healed.After.PlayerCurrentVitality == 18 &&
+               healed.After.PlayerInventory["g_i_medeqpmnt01"] == 1 &&
+               used.QuantityBefore == 2 && used.QuantityAfter == 1 &&
+               used.VitalityBefore == 5 && used.VitalityAfter == 18,
+            "medpac use did not apply the 10 + WIS + Treat Injury contract");
+        var nonMedicalRejected = false;
+        try
+        {
+            _ = healingSimulation.UseMedpac("g_a_clothes01");
+        }
+        catch (InvalidOperationException)
+        {
+            nonMedicalRejected = true;
+        }
+        Expect(nonMedicalRejected &&
+               healingSimulation.CaptureSnapshot().PlayerInventory["g_a_clothes01"] == 1,
+            "inventory Use Item accepted or consumed non-medical equipment");
+
         var invalidEquipRejected = false;
         try
         {

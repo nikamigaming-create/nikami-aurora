@@ -190,6 +190,9 @@ Confirmed in the new runtime:
   transfer of two Medpacs, Clothing, and a Short Sword into profile inventory;
 - desktop/OpenXR-shared world-space loot presentation and an XR haptic request
   driven by the same item-transfer event;
+- source-bound flat loading, native 800x600 HUD, and opening inventory layouts,
+  including the Windows bitmap-font alias, loading music, owned minimap,
+  snapshot-backed stats, and tested basic Medpac consumption;
 - profile-owned atomic Armor/RightHand equipment and source-derived
   `PMBBM01`/`PMHA01`/Short Sword player presentation, including exact right-hand
   hierarchy attachment and preserved idle/walk/run clips;
@@ -257,8 +260,9 @@ Not yet implemented:
 - general NCS VM execution and complete plot/party state;
 - retail door animation and complete `k_pend_door1xp` behavior beyond the
   validated XP branch;
-- combat, selective inventory UI/item use and general equipment variants,
-  saves, and area transitions.
+- combat; inventory category/quest filters, party switching, scrolling, and
+  arbitrary item effects; the general equipment screen/variants; saves; and
+  area transitions.
 
 The current door-opening presentation remains a temporary Godot tween. Script
 targeting and XP effects are source-backed; the door animation and the script's
