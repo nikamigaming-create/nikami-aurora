@@ -6,8 +6,12 @@ namespace Nikami.Aurora.GodotRuntime;
 
 public sealed partial class KotorModuleBoot
 {
-    private static readonly Color KotorBlue = new(0.0f, 0.65882355f, 0.98039216f);
-    private static readonly Color KotorYellow = new(0.9843137f, 1.0f, 0.0f);
+    private Color KotorBlue => RuntimeColor(
+        runtimeConfiguration.Presentation.FallbackTextColor);
+    private Color KotorYellow => RuntimeColor(
+        runtimeConfiguration.Presentation.EmphasisColor);
+    private Color SelectedRowTint => RuntimeColor(
+        runtimeConfiguration.Presentation.SelectedTint);
     private readonly Dictionary<string, Texture2D> flatUiTextures =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (FontFile Font, int Size, int Baseline, int NativeSize)> flatUiFonts =
@@ -26,7 +30,8 @@ public sealed partial class KotorModuleBoot
     private TextureRect? inventoryScrollThumb;
     private VSlider? inventoryScrollSlider;
     private KotorUiExtent? inventoryScrollExtent;
-    private int inventoryRowHeight = 50;
+    private KotorUiExtent? inventoryRowExtent;
+    private int inventoryRowHeight;
     private bool updatingInventoryScrollSlider;
     private Label? inventoryDescription;
     private Label? inventoryCredits;
@@ -50,6 +55,7 @@ public sealed partial class KotorModuleBoot
     private readonly Dictionary<KotorEquipmentSlot, TextureRect> equipmentSlotFrames = [];
     private readonly Dictionary<KotorEquipmentSlot, TextureRect> equipmentSlotIcons = [];
     private IReadOnlyList<KotorEquipmentChoice> visibleEquipmentChoices = [];
+    private KotorUiExtent? equipmentRowExtent;
     private KotorEquipmentSlot selectedEquipmentSlot = KotorEquipmentSlot.Armor;
     private int selectedEquipmentIndex;
     private TextureProgressBar? loadingProgress;
@@ -71,13 +77,21 @@ public sealed partial class KotorModuleBoot
     {
         var requested = System.Environment.GetEnvironmentVariable(
             "NIKAMI_AURORA_FLAT_UI_REFERENCE_VIEWPORT");
-        if (!string.Equals(requested, "800x600", StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(requested))
             return;
+        var dimensions = requested.Split(
+            'x', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (dimensions.Length != 2 ||
+            !int.TryParse(dimensions[0], out var width) || width <= 0 ||
+            !int.TryParse(dimensions[1], out var height) || height <= 0)
+            throw new InvalidDataException(
+                $"Invalid KOTOR reference viewport request: {requested}");
         var root = GetTree().Root;
-        root.ContentScaleSize = new Vector2I(800, 600);
+        root.ContentScaleSize = new Vector2I(width, height);
         root.ContentScaleAspect = Window.ContentScaleAspectEnum.Ignore;
-        root.Size = new Vector2I(800, 600);
-        GD.Print("NIKAMI_AURORA_FLAT_VIEWPORT status=configured size=800x600 aspect=ignore");
+        root.Size = new Vector2I(width, height);
+        GD.Print($"NIKAMI_AURORA_FLAT_VIEWPORT status=configured " +
+                 $"size={width}x{height} aspect=ignore");
     }
 
     private void ConfigureFlatPresentation(KotorUiRecord ui, string manifestDirectory)
@@ -181,7 +195,7 @@ public sealed partial class KotorModuleBoot
             Name = "RetailLoadingProgress",
             MinValue = 0,
             MaxValue = 100,
-            Value = 4,
+            Value = runtimeConfiguration.Presentation.Loading.InitialProgress * 100,
             TextureProgress = Texture(source.Progress.Resref),
             FillMode = (int)TextureProgressBar.FillModeEnum.LeftToRight,
             MouseFilter = Control.MouseFilterEnum.Ignore
@@ -194,7 +208,7 @@ public sealed partial class KotorModuleBoot
             source.LoadingText,
             loadingControl.Text,
             RequireExtent(loadingControl),
-            16);
+            runtimeConfiguration.Presentation.FallbackFontSize);
         surface.AddChild(status);
 
         var hintControl = RequireControl(source.Controls, "LBL_HINT");
@@ -202,7 +216,7 @@ public sealed partial class KotorModuleBoot
             source.HintText,
             hintControl.Text,
             RequireExtent(hintControl),
-            16,
+            runtimeConfiguration.Presentation.FallbackFontSize,
             true);
         surface.AddChild(details);
         loadingMusicPlayer?.QueueFree();
@@ -210,7 +224,7 @@ public sealed partial class KotorModuleBoot
         {
             Name = "RetailLoadingMusic",
             Stream = LoadAndValidateUiAudio(source.Music),
-            VolumeDb = -3.0f
+            VolumeDb = runtimeConfiguration.Presentation.Loading.MusicVolumeDb
         };
         loadingBackdrop.AddChild(loadingMusicPlayer);
         loadingMusicPlayer.Play();
@@ -336,7 +350,8 @@ public sealed partial class KotorModuleBoot
         equipmentHotspot.Pressed += ShowEquipment;
         surface.AddChild(equipmentHotspot);
         GD.Print($"NIKAMI_AURORA_HUD status=ready layout={source.Layout.Resref} " +
-                 $"reference=800x600 portraits={source.PartyPortraits.Count} " +
+                 $"reference={source.Layout.Extent.Width}x{source.Layout.Extent.Height} " +
+                 $"portraits={source.PartyPortraits.Count} " +
                  "playerVitality=profile force=empty");
     }
 
@@ -344,11 +359,15 @@ public sealed partial class KotorModuleBoot
     {
         hudMinimapRecord = source.Minimap;
         var border = RequireExtent(RequireControl(source.Controls, "LBL_MAPBORDER"));
+        var inset = runtimeConfiguration.Presentation.Hud.MinimapInset;
         var interior = new KotorUiExtent(
-            border.Left + 4,
-            border.Top + 4,
-            border.Width - 8,
-            border.Height - 9);
+            border.Left + inset.Left,
+            border.Top + inset.Top,
+            border.Width - inset.Left - inset.Right,
+            border.Height - inset.Top - inset.Bottom);
+        if (interior.Width <= 0 || interior.Height <= 0)
+            throw new InvalidDataException(
+                "Configured KOTOR minimap inset consumes the source border");
         hudMinimapClip = new Control
         {
             Name = "RetailMinimapClip",
@@ -417,7 +436,8 @@ public sealed partial class KotorModuleBoot
 
         var dim = new ColorRect
         {
-            Color = new Color(0, 0, 0, 0.86f),
+            Color = new Color(
+                0, 0, 0, runtimeConfiguration.Presentation.ModalDimOpacity),
             MouseFilter = Control.MouseFilterEnum.Stop
         };
         dim.SetAnchorsPreset(Control.LayoutPreset.FullRect);
@@ -438,20 +458,23 @@ public sealed partial class KotorModuleBoot
                 AddTexture(inventoryReferenceSurface, fill, RequireExtent(control));
         }
 
-        var playerPartyMember = source.PartyMembers.Single(member =>
-            member.Id.Equals(
-                KotorGameplaySimulation.PlayerPartyMemberId,
-                StringComparison.OrdinalIgnoreCase));
+        var playerPartyMember = source.PartyMembers.Single(member => member.IsPlayer);
         var portraitControl = RequireControl(source.Controls, "LBL_PORT");
         inventoryPortrait = AddTexture(
             inventoryReferenceSurface,
             playerPartyMember.Portrait.Resref,
             RequireExtent(portraitControl));
-        var partyTags = new[] { "BTN_CHANGE1", "BTN_CHANGE2" };
-        for (var index = 0; index < Math.Min(partyTags.Length, source.PartyMembers.Count); index++)
+        var partyControls = source.Controls
+            .Where(control => control.Tag.StartsWith(
+                "BTN_CHANGE", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(control => control.Tag, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        for (var index = 0;
+             index < Math.Min(partyControls.Length, source.PartyMembers.Count);
+             index++)
         {
             var member = source.PartyMembers[index];
-            var memberControl = RequireControl(source.Controls, partyTags[index]);
+            var memberControl = partyControls[index];
             AddTexture(
                 inventoryReferenceSurface,
                 member.Portrait.Resref,
@@ -470,21 +493,32 @@ public sealed partial class KotorModuleBoot
             inventoryPartyButtons.Add(member.Id, button);
         }
 
-        AddSourceLabel(inventoryReferenceSurface, source.Controls, "LBL_INV", 16);
-        AddSourceLabel(inventoryReferenceSurface, source.Controls, "LBL_CREDITS", 16);
+        var fontSize = runtimeConfiguration.Presentation.FallbackFontSize;
+        var configuredPlayer = runtimeConfiguration.Gameplay.PlayerPartyMember;
+        AddSourceLabel(inventoryReferenceSurface, source.Controls, "LBL_INV", fontSize);
+        AddSourceLabel(inventoryReferenceSurface, source.Controls, "LBL_CREDITS", fontSize);
 
         var creditsControl = RequireControl(source.Controls, "LBL_CREDITS_VALUE");
         inventoryCredits = CreateKotorLabel(
-            "0", creditsControl.Text, RequireExtent(creditsControl), 16);
+            runtimeConfiguration.Gameplay.PlayerCredits.ToString(),
+            creditsControl.Text,
+            RequireExtent(creditsControl),
+            fontSize);
         inventoryReferenceSurface.AddChild(inventoryCredits);
 
         var vitControl = RequireControl(source.Controls, "LBL_VIT");
         inventoryVitality = CreateKotorLabel(
-            "20/20", vitControl.Text, RequireExtent(vitControl), 16);
+            $"{configuredPlayer.CurrentVitality}/{configuredPlayer.MaximumVitality}",
+            vitControl.Text,
+            RequireExtent(vitControl),
+            fontSize);
         inventoryReferenceSurface.AddChild(inventoryVitality);
         var defenseControl = RequireControl(source.Controls, "LBL_DEF");
         inventoryDefense = CreateKotorLabel(
-            "10", defenseControl.Text, RequireExtent(defenseControl), 16);
+            configuredPlayer.Defense.ToString(),
+            defenseControl.Text,
+            RequireExtent(defenseControl),
+            fontSize);
         inventoryReferenceSurface.AddChild(inventoryDefense);
 
         var listControl = RequireControl(source.Controls, "LB_ITEMS");
@@ -492,6 +526,9 @@ public sealed partial class KotorModuleBoot
         var prototype = listControl.Prototype ?? throw new InvalidDataException(
             "KOTOR inventory layout has no list prototype");
         var prototypeExtent = RequireExtent(prototype);
+        runtimeConfiguration.Presentation.Inventory.Row.ValidateWithin(
+            prototypeExtent.Width, prototypeExtent.Height);
+        inventoryRowExtent = prototypeExtent;
         inventoryRowHeight = prototypeExtent.Height;
         inventoryScroll = new ScrollContainer
         {
@@ -523,13 +560,20 @@ public sealed partial class KotorModuleBoot
             throw new InvalidDataException(
                 "KOTOR inventory description has no source prototype");
         var descriptionOuter = RequireExtent(descriptionControl);
+        var descriptionHeight = descriptionOuter.Height -
+                                runtimeConfiguration.Presentation.Inventory.DescriptionBottomInset;
+        if (descriptionHeight <= 0)
+            throw new InvalidDataException(
+                "Configured KOTOR inventory description inset consumes its source extent");
         var descriptionInner = RequireExtent(descriptionPrototype) with
         {
-            Height = descriptionOuter.Height - 8
+            Height = descriptionHeight
         };
         inventoryDescription = CreateKotorLabel(
             "", descriptionPrototype.Text,
-            descriptionInner, 10, true);
+            descriptionInner,
+            runtimeConfiguration.Presentation.DescriptionFontSize,
+            true);
         inventoryReferenceSurface.AddChild(inventoryDescription);
 
         inventoryQuestItemsButton = AddSourceButton(
@@ -537,11 +581,19 @@ public sealed partial class KotorModuleBoot
             source.Controls,
             "BTN_QUESTITEMS",
             ToggleInventoryQuestItems,
-            16);
+            fontSize);
         inventoryUseButton = AddSourceButton(
-            inventoryReferenceSurface, source.Controls, "BTN_USEITEM", UseSelectedInventoryItem, 16);
+            inventoryReferenceSurface,
+            source.Controls,
+            "BTN_USEITEM",
+            UseSelectedInventoryItem,
+            fontSize);
         AddSourceButton(
-            inventoryReferenceSurface, source.Controls, "BTN_EXIT", HideInventory, 16);
+            inventoryReferenceSurface,
+            source.Controls,
+            "BTN_EXIT",
+            HideInventory,
+            fontSize);
         GD.Print($"NIKAMI_AURORA_INVENTORY_UI status=ready " +
                  $"layout={source.Layout.Resref} items={source.Items.Count} " +
                  $"top={source.TopLayout.Resref} party={source.PartyMembers.Count} " +
@@ -566,6 +618,10 @@ public sealed partial class KotorModuleBoot
                 "KOTOR inventory scrollbar images are incomplete");
 
         var arrowSize = extent.Width;
+        var thumbInset = runtimeConfiguration.Presentation.Inventory.ScrollThumbHorizontalInset;
+        if (thumbInset * 2 >= arrowSize)
+            throw new InvalidDataException(
+                "Configured KOTOR inventory scrollbar inset consumes its source width");
         inventorySourceScrollbar = new Control
         {
             Name = "RetailInventorySourceScrollbar",
@@ -587,7 +643,11 @@ public sealed partial class KotorModuleBoot
         inventoryScrollThumb = AddTexture(
             inventorySourceScrollbar,
             thumb.Image,
-            new KotorUiExtent(4, arrowSize, Math.Max(1, arrowSize - 8), arrowSize));
+            new KotorUiExtent(
+                thumbInset,
+                arrowSize,
+                arrowSize - thumbInset * 2,
+                arrowSize));
         inventoryScrollSlider = new VSlider
         {
             Name = "RetailInventoryScrollDrag",
@@ -659,10 +719,11 @@ public sealed partial class KotorModuleBoot
         var travel = Math.Max(0.0f, trackHeight - thumbHeight);
         var normalized = inventoryScroll.ScrollVertical / maximum;
         inventoryScrollThumb.Position = new Vector2(
-            4,
+            runtimeConfiguration.Presentation.Inventory.ScrollThumbHorizontalInset,
             arrowSize + travel * normalized);
+        var thumbInset = runtimeConfiguration.Presentation.Inventory.ScrollThumbHorizontalInset;
         inventoryScrollThumb.Size = new Vector2(
-            Math.Max(1, arrowSize - 8),
+            arrowSize - thumbInset * 2,
             thumbHeight);
         if (inventoryScrollSlider is not null)
         {
@@ -704,7 +765,8 @@ public sealed partial class KotorModuleBoot
 
         var dim = new ColorRect
         {
-            Color = new Color(0, 0, 0, 0.86f),
+            Color = new Color(
+                0, 0, 0, runtimeConfiguration.Presentation.ModalDimOpacity),
             MouseFilter = Control.MouseFilterEnum.Stop
         };
         dim.SetAnchorsPreset(Control.LayoutPreset.FullRect);
@@ -732,13 +794,19 @@ public sealed partial class KotorModuleBoot
             equipmentReferenceSurface,
             source.Portrait.Resref,
             RequireExtent(portraitControl));
-        var partyTags = new[] { "BTN_CHANGE1", "BTN_CHANGE2" };
-        for (var index = 0; index < Math.Min(partyTags.Length, source.PartyPortraits.Count); index++)
+        var partyControls = source.Controls
+            .Where(control => control.Tag.StartsWith(
+                "BTN_CHANGE", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(control => control.Tag, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        for (var index = 0;
+             index < Math.Min(partyControls.Length, source.PartyPortraits.Count);
+             index++)
         {
             AddTexture(
                 equipmentReferenceSurface,
                 source.PartyPortraits[index].Resref,
-                RequireExtent(RequireControl(source.Controls, partyTags[index])));
+                RequireExtent(partyControls[index]));
         }
 
         foreach (var (buttonTag, labelTag, slot) in EquipmentSlotBindings())
@@ -757,11 +825,18 @@ public sealed partial class KotorModuleBoot
                     $"KOTOR equipment slot has no source frame: {buttonTag}"),
                 buttonExtent);
             equipmentSlotFrames.Add(slot, frame);
+            var iconInset = runtimeConfiguration.Presentation.Equipment.SlotIconInset;
+            if (iconInset * 2 >= buttonExtent.Width || iconInset * 2 >= buttonExtent.Height)
+                throw new InvalidDataException(
+                    $"Configured KOTOR equipment icon inset consumes slot {buttonTag}");
             var icon = new TextureRect
             {
                 Name = $"EquippedIcon_{slot}",
-                Position = new Vector2(buttonExtent.Left + 8, buttonExtent.Top + 8),
-                Size = new Vector2(buttonExtent.Width - 16, buttonExtent.Height - 16),
+                Position = new Vector2(
+                    buttonExtent.Left + iconInset, buttonExtent.Top + iconInset),
+                Size = new Vector2(
+                    buttonExtent.Width - iconInset * 2,
+                    buttonExtent.Height - iconInset * 2),
                 ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
                 StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
                 MouseFilter = Control.MouseFilterEnum.Ignore,
@@ -781,36 +856,50 @@ public sealed partial class KotorModuleBoot
             equipmentReferenceSurface.AddChild(hotspot);
         }
 
-        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TITLE", 16);
-        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_DAMAGE", 16);
-        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHIT", 16);
-        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_ATKL", 16);
-        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_ATKR", 16);
-        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHITL", 16);
-        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHITR", 16);
+        var fontSize = runtimeConfiguration.Presentation.FallbackFontSize;
+        var configuredPlayer = runtimeConfiguration.Gameplay.PlayerPartyMember;
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TITLE", fontSize);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_DAMAGE", fontSize);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHIT", fontSize);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_ATKL", fontSize);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_ATKR", fontSize);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHITL", fontSize);
+        AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHITR", fontSize);
 
         var vitalityControl = RequireControl(source.Controls, "LBL_VITALITY");
         equipmentVitality = CreateKotorLabel(
-            "20/20", vitalityControl.Text, RequireExtent(vitalityControl), 16);
+            $"{configuredPlayer.CurrentVitality}/{configuredPlayer.MaximumVitality}",
+            vitalityControl.Text,
+            RequireExtent(vitalityControl),
+            fontSize);
         equipmentReferenceSurface.AddChild(equipmentVitality);
         var defenseControl = RequireControl(source.Controls, "LBL_DEF");
         equipmentDefense = CreateKotorLabel(
-            "10", defenseControl.Text, RequireExtent(defenseControl), 16);
+            configuredPlayer.Defense.ToString(),
+            defenseControl.Text,
+            RequireExtent(defenseControl),
+            fontSize);
         equipmentReferenceSurface.AddChild(equipmentDefense);
         var slotControl = RequireControl(source.Controls, "LBL_SLOTNAME");
         equipmentSlotName = CreateKotorLabel(
-            "", slotControl.Text, RequireExtent(slotControl), 16);
+            "", slotControl.Text, RequireExtent(slotControl), fontSize);
         equipmentReferenceSurface.AddChild(equipmentSlotName);
 
         var listControl = RequireControl(source.Controls, "LB_ITEMS");
         var prototype = listControl.Prototype ?? throw new InvalidDataException(
             "KOTOR equipment layout has no item-list prototype");
         var prototypeExtent = RequireExtent(prototype);
+        runtimeConfiguration.Presentation.Equipment.Row.ValidateWithin(
+            prototypeExtent.Width, prototypeExtent.Height);
+        equipmentRowExtent = prototypeExtent;
+        var listExtent = RequireExtent(listControl);
         equipmentRows = new VBoxContainer
         {
             Name = "RetailEquipmentRows",
             Position = new Vector2(prototypeExtent.Left, prototypeExtent.Top),
-            Size = new Vector2(prototypeExtent.Width, 270)
+            Size = new Vector2(
+                prototypeExtent.Width,
+                listExtent.Top + listExtent.Height - prototypeExtent.Top)
         };
         equipmentRows.AddThemeConstantOverride("separation", 0);
         equipmentReferenceSurface.AddChild(equipmentRows);
@@ -820,12 +909,21 @@ public sealed partial class KotorModuleBoot
             throw new InvalidDataException(
                 "KOTOR equipment description has no source prototype");
         var descriptionOuter = RequireExtent(descriptionControl);
+        var descriptionHeight = descriptionOuter.Height -
+                                runtimeConfiguration.Presentation.Equipment.DescriptionBottomInset;
+        if (descriptionHeight <= 0)
+            throw new InvalidDataException(
+                "Configured KOTOR equipment description inset consumes its source extent");
         var descriptionInner = RequireExtent(descriptionPrototype) with
         {
-            Height = descriptionOuter.Height - 8
+            Height = descriptionHeight
         };
         equipmentDescription = CreateKotorLabel(
-            "", descriptionPrototype.Text, descriptionInner, 10, true);
+            "",
+            descriptionPrototype.Text,
+            descriptionInner,
+            runtimeConfiguration.Presentation.DescriptionFontSize,
+            true);
         equipmentDescription.Visible = false;
         equipmentReferenceSurface.AddChild(equipmentDescription);
 
@@ -834,13 +932,13 @@ public sealed partial class KotorModuleBoot
             source.Controls,
             "BTN_EQUIP",
             CommitEquipmentSelection,
-            16);
+            fontSize);
         AddSourceButton(
             equipmentReferenceSurface,
             source.Controls,
             "BTN_BACK",
             HideEquipment,
-            16);
+            fontSize);
         GD.Print($"NIKAMI_AURORA_EQUIPMENT_UI status=ready " +
                  $"layout={source.Layout.Resref} items={source.Items.Count} " +
                  $"top={source.TopLayout.Resref} slots={EquipmentSlotBindings().Length} " +
@@ -1084,25 +1182,25 @@ public sealed partial class KotorModuleBoot
                 $"{selectedPartyMember.CurrentVitality}/{selectedPartyMember.MaximumVitality}";
         if (inventoryDefense is not null)
             inventoryDefense.Text = selectedPartyMember.Defense.ToString();
-        var sourceItems = flatUiRecord.Inventory.Items
-            .Where(item =>
-                snapshot.PlayerInventory.ContainsKey(item.Resref) &&
-                (!inventoryQuestItemsOnly || item.Plot))
-            .ToArray();
         var repeatText = System.Environment.GetEnvironmentVariable(
             "NIKAMI_AURORA_TEST_INVENTORY_SCROLL_REPEAT");
-        if (int.TryParse(repeatText, out var repeat) && repeat is >= 2 and <= 12)
+        var repeat = InventoryProjectionRepeat(repeatText);
+        var projection = KotorInventoryProjection.Project(
+            flatUiRecord.Inventory.Items,
+            snapshot.PlayerInventory,
+            item => item.Resref,
+            item => item.Plot,
+            inventoryQuestItemsOnly,
+            repeat);
+        visibleInventoryItems = projection.Items;
+        GD.Print($"NIKAMI_AURORA_COMPLEXITY_SAMPLE component=inventory-projection " +
+                 $"input={projection.DefinitionVisits} rows={projection.RowsMaterialized} " +
+                 $"work={projection.WorkUnits}");
+        if (repeat > 1)
         {
-            visibleInventoryItems = Enumerable.Range(0, repeat)
-                .SelectMany(_ => sourceItems)
-                .ToArray();
             GD.Print($"NIKAMI_AURORA_INVENTORY_SCROLL_SIMULATION status=materialized " +
-                     $"sourceItems={sourceItems.Length} repeat={repeat} " +
+                     $"sourceItems={projection.RowsMaterialized / repeat} repeat={repeat} " +
                      $"rows={visibleInventoryItems.Count}");
-        }
-        else
-        {
-            visibleInventoryItems = sourceItems;
         }
         selectedInventoryIndex = visibleInventoryItems.Count == 0
             ? 0
@@ -1120,6 +1218,32 @@ public sealed partial class KotorModuleBoot
         UpdateInventorySourceScrollbar();
     }
 
+    private int InventoryProjectionRepeat(string? requested = null)
+    {
+        requested ??= System.Environment.GetEnvironmentVariable(
+            "NIKAMI_AURORA_TEST_INVENTORY_SCROLL_REPEAT");
+        if (string.IsNullOrWhiteSpace(requested))
+            return 1;
+        if (requested != "1")
+            throw new InvalidDataException(
+                "KOTOR inventory overflow simulation accepts only the configured policy");
+        return runtimeConfiguration.Presentation.Inventory.OverflowAcceptanceRepeat;
+    }
+
+    private int ExpectedInventoryRowCount(bool questItemsOnly)
+    {
+        if (flatUiRecord is null || gameplaySimulation is null)
+            throw new InvalidDataException("KOTOR inventory state is unavailable");
+        var projection = KotorInventoryProjection.Project(
+            flatUiRecord.Inventory.Items,
+            gameplaySimulation.CaptureSnapshot().PlayerInventory,
+            item => item.Resref,
+            item => item.Plot,
+            questItemsOnly,
+            InventoryProjectionRepeat());
+        return projection.RowsMaterialized;
+    }
+
     private Button CreateInventoryRow(
         KotorUiInventoryItemRecord item,
         int quantity,
@@ -1129,10 +1253,14 @@ public sealed partial class KotorModuleBoot
             .Single(control => control.Tag.Equals(
                 "LB_ITEMS", StringComparison.OrdinalIgnoreCase))
             .Prototype?.Text;
+        var prototypeExtent = inventoryRowExtent ?? throw new InvalidDataException(
+            "KOTOR inventory row source extent is unavailable");
+        var configuredRow = runtimeConfiguration.Presentation.Inventory.Row;
         var row = new Button
         {
             Name = $"InventoryRow{index}",
-            CustomMinimumSize = new Vector2(245, 50),
+            CustomMinimumSize = new Vector2(
+                prototypeExtent.Width, prototypeExtent.Height),
             Flat = true,
             FocusMode = Control.FocusModeEnum.All,
             MouseDefaultCursorShape = Control.CursorShape.PointingHand
@@ -1141,35 +1269,34 @@ public sealed partial class KotorModuleBoot
         var icon = new TextureRect
         {
             Texture = Texture(item.Icon.Resref),
-            Position = new Vector2(3, 1),
-            Size = new Vector2(48, 48),
             ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
             StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
+        Place(icon, ConfiguredExtent(configuredRow.Icon));
         row.AddChild(icon);
         var name = new Label
         {
             Text = item.DisplayName,
-            Position = new Vector2(57, 0),
-            Size = new Vector2(180, 50),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        ApplyKotorFont(name, prototypeText, 16);
+        Place(name, ConfiguredExtent(configuredRow.Name));
+        ApplyKotorFont(
+            name, prototypeText, runtimeConfiguration.Presentation.FallbackFontSize);
         name.AddThemeColorOverride("font_color", KotorTextColor(prototypeText));
         row.AddChild(name);
         var count = new Label
         {
             Text = quantity > 1 ? quantity.ToString() : "",
-            Position = new Vector2(205, 0),
-            Size = new Vector2(32, 50),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        ApplyKotorFont(count, prototypeText, 16);
+        Place(count, ConfiguredExtent(configuredRow.Quantity));
+        ApplyKotorFont(
+            count, prototypeText, runtimeConfiguration.Presentation.FallbackFontSize);
         count.AddThemeColorOverride("font_color", KotorYellow);
         row.AddChild(count);
         return row;
@@ -1188,7 +1315,7 @@ public sealed partial class KotorModuleBoot
         selectedInventoryIndex = Math.Clamp(index, 0, visibleInventoryItems.Count - 1);
         for (var rowIndex = 0; rowIndex < inventoryRowButtons.Count; rowIndex++)
             inventoryRowButtons[rowIndex].Modulate = rowIndex == selectedInventoryIndex
-                ? new Color(0.78f, 1.0f, 1.0f)
+                ? SelectedRowTint
                 : Colors.White;
         var selected = visibleInventoryItems[selectedInventoryIndex];
         SetInventoryDescription(selected.Description);
@@ -1199,7 +1326,7 @@ public sealed partial class KotorModuleBoot
                 ? null
                 : snapshot.PartyMembers[snapshot.SelectedPartyMemberId];
             inventoryUseButton.Disabled =
-                selected.BaseItem != 55 ||
+                selected.BaseItem != KotorBaseItemIds.MedicalEquipment ||
                 selectedPartyMember is null ||
                 selectedPartyMember.CurrentVitality >= selectedPartyMember.MaximumVitality;
         }
@@ -1228,7 +1355,7 @@ public sealed partial class KotorModuleBoot
     {
         if (visibleInventoryItems.Count == 0 || gameplaySimulation is null) return;
         var selected = visibleInventoryItems[selectedInventoryIndex];
-        if (selected.BaseItem != 55)
+        if (selected.BaseItem != KotorBaseItemIds.MedicalEquipment)
         {
             GD.Print($"NIKAMI_AURORA_INVENTORY_UI status=unsupported-use " +
                      $"resref={selected.Resref} baseItem={selected.BaseItem}");
@@ -1367,10 +1494,14 @@ public sealed partial class KotorModuleBoot
             "KOTOR equipment UI record is unavailable");
         var prototypeText = source.Controls.Single(control => control.Tag.Equals(
             "LB_ITEMS", StringComparison.OrdinalIgnoreCase)).Prototype?.Text;
+        var prototypeExtent = equipmentRowExtent ?? throw new InvalidDataException(
+            "KOTOR equipment row source extent is unavailable");
+        var configuredRow = runtimeConfiguration.Presentation.Equipment.Row;
         var row = new Button
         {
             Name = $"EquipmentRow{index}",
-            CustomMinimumSize = new Vector2(246, 52),
+            CustomMinimumSize = new Vector2(
+                prototypeExtent.Width, prototypeExtent.Height),
             Flat = true,
             FocusMode = Control.FocusModeEnum.All,
             MouseDefaultCursorShape = Control.CursorShape.PointingHand
@@ -1380,12 +1511,11 @@ public sealed partial class KotorModuleBoot
         var icon = new TextureRect
         {
             Texture = Texture(iconSource.Resref),
-            Position = new Vector2(2, 2),
-            Size = new Vector2(48, 48),
             ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
             StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
+        Place(icon, ConfiguredExtent(configuredRow.Icon));
         row.AddChild(icon);
         var itemName = choice.Item?.DisplayName ?? source.None.Text;
         if (choice.Item is not null && choice.Equipped)
@@ -1393,13 +1523,13 @@ public sealed partial class KotorModuleBoot
         var name = new Label
         {
             Text = itemName,
-            Position = new Vector2(55, 0),
-            Size = new Vector2(185, 52),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        ApplyKotorFont(name, prototypeText, 16);
+        Place(name, ConfiguredExtent(configuredRow.Name));
+        ApplyKotorFont(
+            name, prototypeText, runtimeConfiguration.Presentation.FallbackFontSize);
         name.AddThemeColorOverride(
             "font_color",
             choice.Equipped ? KotorYellow : KotorTextColor(prototypeText));
@@ -1414,7 +1544,7 @@ public sealed partial class KotorModuleBoot
         selectedEquipmentIndex = Math.Clamp(index, 0, visibleEquipmentChoices.Count - 1);
         for (var rowIndex = 0; rowIndex < equipmentRowButtons.Count; rowIndex++)
             equipmentRowButtons[rowIndex].Modulate = rowIndex == selectedEquipmentIndex
-                ? new Color(0.78f, 1.0f, 1.0f)
+                ? SelectedRowTint
                 : Colors.White;
         var selected = visibleEquipmentChoices[selectedEquipmentIndex];
         SetEquipmentDescription(selected.Item?.Description ?? "");
@@ -1686,10 +1816,16 @@ public sealed partial class KotorModuleBoot
                 : VerticalAlignment.Top;
     }
 
-    private static Color KotorTextColor(KotorUiTextRecord? source) =>
+    private Color KotorTextColor(KotorUiTextRecord? source) =>
         source?.Color is { Count: >= 3 } color
             ? new Color(color[0], color[1], color[2])
             : KotorBlue;
+
+    private static Color RuntimeColor(KotorColorConfiguration source) =>
+        new(source.Red, source.Green, source.Blue);
+
+    private static KotorUiExtent ConfiguredExtent(KotorUiBoxConfiguration source) =>
+        new(source.Left, source.Top, source.Width, source.Height);
 
     private Texture2D Texture(string resref) =>
         flatUiTextures.TryGetValue(resref, out var texture)
@@ -1799,6 +1935,7 @@ public sealed partial class KotorModuleBoot
         int CurrentVitality,
         int MaximumVitality,
         int Defense,
+        bool IsPlayer,
         string SourceKind,
         string? UtcSha256,
         string? ArmorResref,

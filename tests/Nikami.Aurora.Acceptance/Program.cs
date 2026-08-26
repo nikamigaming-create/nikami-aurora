@@ -31,6 +31,8 @@ internal static class Program
             passed++;
             KotorGameplayOwnsOpeningState();
             passed++;
+            KotorInventoryProjectionStaysLinear();
+            passed++;
             Console.WriteLine($"NIKAMI_AURORA_ACCEPTANCE_PASS tests={passed}");
             return 0;
         }
@@ -253,17 +255,21 @@ internal static class Program
             "g_i_medeqpmnt01", "Medpac", "g_i_medeqpmnt01",
             "A6449C3EA78042B3E0B09440EAFEAA209C5AA207DE0AFA0CFBCC9296583D9972",
             baseItemsSha256,
-            55, 0, 1, 2, 0, 0, 0, "I_MedEqpmnt", 0, "I_Null", "ii_device");
+            KotorBaseItemIds.MedicalEquipment,
+            0, 1, 2, 0, 0, 0, "I_MedEqpmnt", 0, "I_Null", "ii_device");
         var clothing = new KotorItemDefinition(
             "g_a_clothes01", "Clothing", "G_A_CLOTHES01",
             "FC8AB4485644BEC2FAE71C99BBD8853170C1A5D739953B62EB95266173443CF1",
             baseItemsSha256,
-            85, 0, 1, 0, 2, 1, 0x00002, "a_cloths", 1, "I_Null", "ia_armor");
+            85, 0, 1, 0, 2, 1, (int)KotorEquipmentSlot.Armor,
+            "a_cloths", 1, "I_Null", "ia_armor");
         var shortSword = new KotorItemDefinition(
             "g_w_shortswrd01", "Short Sword", "G_w_Shortswrd01",
             "9EC88EBA45CB0ED430483362121672F48CDD9C541ADFE4CF7442F76C14BFD652",
             baseItemsSha256,
-            4, 0, 1, 1, 0, 0, 0x00030, "w_Shortswrd", 0,
+            4, 0, 1, 1, 0, 0,
+            (int)(KotorEquipmentSlot.RightHand | KotorEquipmentSlot.LeftHand),
+            "w_Shortswrd", 0,
             "w_Shortswrd_001", "iw_sword");
         var simulation = new KotorGameplaySimulation(
             contracts,
@@ -278,6 +284,15 @@ internal static class Program
                     new KotorItemStack(clothing, 1, false, false),
                     new KotorItemStack(shortSword, 1, false, false)
                 ])],
+            new KotorGameplayInitialState(
+                0,
+                0,
+                [
+                    new KotorPartyMemberDefinition(
+                        "player", "Player", 20, 20, 10, IsPlayer: true),
+                    new KotorPartyMemberDefinition(
+                        "end_trask", "Trask", 30, 36, 12, IsPlayer: false)
+                ]),
             triggers: [new KotorTriggerDefinition(
                 "trigger:0000",
                 "end_trig02",
@@ -287,12 +302,7 @@ internal static class Program
                     new System.Numerics.Vector3(5, 1, 0),
                     new System.Numerics.Vector3(4, 1, 0)
                 ],
-                "k_pend_trig02")],
-            initialPartyMembers:
-            [
-                new KotorPartyMemberDefinition(
-                    "end_trask", "Trask", 30, 36, 12)
-            ]);
+                "k_pend_trig02")]);
 
         var locker = simulation.UsePlaceable("PLACEABLE:0000");
         Expect(locker.Before.PlayerExperience == 0 && locker.After.PlayerExperience == 50,
@@ -331,10 +341,11 @@ internal static class Program
                     new KotorItemStack(medpac, 2, false, false),
                     new KotorItemStack(clothing, 1, false, false)
                 ])],
-            initialCurrentVitality: 5,
-            initialMaximumVitality: 20,
-            initialDefense: 10,
-            initialCredits: 0);
+            new KotorGameplayInitialState(
+                0,
+                0,
+                [new KotorPartyMemberDefinition(
+                    "healing-player", "Healing Player", 5, 20, 10, IsPlayer: true)]));
         healingSimulation.UsePlaceable("placeable:healing");
         var healed = healingSimulation.UseMedpac(
             "g_i_medeqpmnt01", wisdomModifier: 1, treatInjurySkill: 2);
@@ -481,13 +492,14 @@ internal static class Program
                closeDoor.After.PlayerExperience == 150,
             "direct door toggle did not preserve the profile-owned story state");
 
+        var playerPartyMemberId = simulation.CaptureSnapshot().PlayerPartyMemberId;
         var selectTrask = simulation.SelectPartyMember("END_TRASK");
         Expect(selectTrask.Before.SelectedPartyMemberId ==
-               KotorGameplaySimulation.PlayerPartyMemberId &&
+               playerPartyMemberId &&
                selectTrask.After.SelectedPartyMemberId == "end_trask" &&
                selectTrask.After.PartyMembers["end_trask"].CurrentVitality == 30 &&
                selectTrask.Events.Single() is KotorPartyMemberSelected selected &&
-               selected.BeforeId == KotorGameplaySimulation.PlayerPartyMemberId &&
+               selected.BeforeId == playerPartyMemberId &&
                selected.AfterId == "end_trask",
             "inventory party selection did not persist the profile-owned member");
         var healTrask = simulation.UseMedpac("g_i_medeqpmnt01");
@@ -499,16 +511,62 @@ internal static class Program
                partyUse.VitalityBefore == 30 && partyUse.VitalityAfter == 36,
             "inventory Medpac did not target the selected party member");
         var selectPlayer = simulation.SelectPartyMember(
-            KotorGameplaySimulation.PlayerPartyMemberId);
+            playerPartyMemberId);
         Expect(selectPlayer.After.SelectedPartyMemberId ==
-               KotorGameplaySimulation.PlayerPartyMemberId &&
+               playerPartyMemberId &&
                selectPlayer.After.PartyMembers["end_trask"].CurrentVitality == 36,
             "inventory party selection did not preserve companion vitality");
-        var repeatedPlayerSelection = simulation.SelectPartyMember("PLAYER");
+        var repeatedPlayerSelection = simulation.SelectPartyMember(
+            playerPartyMemberId.ToUpperInvariant());
         Expect(repeatedPlayerSelection.Events.Count == 0 &&
                repeatedPlayerSelection.After.SelectedPartyMemberId ==
-               KotorGameplaySimulation.PlayerPartyMemberId,
+               playerPartyMemberId,
             "repeated inventory party selection was not idempotent");
+    }
+
+    private static void KotorInventoryProjectionStaysLinear()
+    {
+        var configuration = KotorRuntimeConfiguration.Load(Path.Combine(
+            AppContext.BaseDirectory, "config", "kotor-runtime.json"));
+        var samples = new List<(int Input, long Work)>();
+        foreach (var size in configuration.Complexity.InventoryProjectionSampleSizes)
+        {
+            var definitions = Enumerable.Range(0, size)
+                .Select(index => $"item-{index}")
+                .ToArray();
+            var inventory = definitions.ToDictionary(
+                item => item,
+                _ => 1,
+                StringComparer.OrdinalIgnoreCase);
+            var projection = KotorInventoryProjection.Project(
+                definitions,
+                inventory,
+                item => item,
+                _ => false,
+                questItemsOnly: false,
+                configuration.Presentation.Inventory.OverflowAcceptanceRepeat);
+            Expect(
+                projection.Items.Count ==
+                size * configuration.Presentation.Inventory.OverflowAcceptanceRepeat,
+                "inventory complexity fixture did not materialize the configured rows");
+            samples.Add((size, projection.WorkUnits));
+        }
+
+        var measuredMaximumExponent = 0.0;
+        foreach (var (before, after) in samples.Zip(samples.Skip(1)))
+        {
+            var exponent = Math.Log(after.Work / (double)before.Work) /
+                           Math.Log(after.Input / (double)before.Input);
+            measuredMaximumExponent = Math.Max(measuredMaximumExponent, exponent);
+            Expect(exponent <= configuration.Complexity.MaximumExponent,
+                $"inventory projection exceeded configured O(N) curve: {exponent:F4}");
+        }
+        Console.WriteLine(
+            "NIKAMI_AURORA_COMPLEXITY_PASS component=inventory-projection curve=O(N) " +
+            $"samples={string.Join(',', samples.Select(sample =>
+                $"{sample.Input}:{sample.Work}"))} " +
+            $"measuredExponent={measuredMaximumExponent:F4} " +
+            $"limit={configuration.Complexity.MaximumExponent:F4}");
     }
 
     private static void MaterializeMarkers(string root, GameProfileDescriptor descriptor)

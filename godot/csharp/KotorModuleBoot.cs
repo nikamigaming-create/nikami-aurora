@@ -118,10 +118,11 @@ public sealed partial class KotorModuleBoot : Node3D
     private readonly Dictionary<int, CameraRecord> dialogueCameras = [];
     private readonly HashSet<string> reportedUnsupportedScripts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> playedDialogueMedia = new(StringComparer.OrdinalIgnoreCase);
+    private KotorRuntimeConfiguration runtimeConfiguration = null!;
     private KotorGameplaySimulation? gameplaySimulation;
     private int capturedFrames;
     private int captureMatchedFrames;
-    private int captureTargetFrame = 60;
+    private int captureTargetFrame;
     private bool captureCompleted;
     private int readyFrames;
     private bool moduleReady;
@@ -252,7 +253,8 @@ public sealed partial class KotorModuleBoot : Node3D
         if (moduleReady)
         {
             readyFrames++;
-            if (!automatedDoorApplied && readyFrames >= 10 &&
+            if (!automatedDoorApplied &&
+                readyFrames >= runtimeConfiguration.Automation.DoorFrame &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_OPEN_DOOR") == "1" &&
                 interactiveDoors.Count > 0)
             {
@@ -263,14 +265,16 @@ public sealed partial class KotorModuleBoot : Node3D
                 else
                     GD.Print($"NIKAMI_AURORA_DOOR status=already-open tag={openingDoor.Source.Tag}");
             }
-            if (!automatedLockerApplied && readyFrames >= 30 &&
+            if (!automatedLockerApplied &&
+                readyFrames >= runtimeConfiguration.Automation.StateFrame &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_OPEN_LOCKER") == "1" &&
                 materializedPlaceables.Count > 0)
             {
                 automatedLockerApplied = true;
                 UsePlaceable(materializedPlaceables[0]);
             }
-            if (!automatedInventoryOpened && readyFrames >= 45 &&
+            if (!automatedInventoryOpened &&
+                readyFrames >= runtimeConfiguration.Automation.MenuOpenFrame &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_TEST_INVENTORY_SCREEN") == "1")
             {
@@ -281,7 +285,8 @@ public sealed partial class KotorModuleBoot : Node3D
                     "NIKAMI_AURORA_TEST_INVENTORY_QUEST_FILTER") == "1" &&
                 inventoryScreen?.Visible == true)
             {
-                if (automatedInventoryQuestFilterStage == 0 && readyFrames >= 50)
+                if (automatedInventoryQuestFilterStage == 0 &&
+                    readyFrames >= runtimeConfiguration.Automation.PrimaryFrame)
                 {
                     ToggleInventoryQuestItems();
                     if (visibleInventoryItems.Count != 0 ||
@@ -290,23 +295,28 @@ public sealed partial class KotorModuleBoot : Node3D
                             "Opening inventory quest-only filter did not produce its source-empty state");
                     automatedInventoryQuestFilterStage = 1;
                 }
-                else if (automatedInventoryQuestFilterStage == 1 && readyFrames >= 55)
+                else if (automatedInventoryQuestFilterStage == 1 &&
+                         readyFrames >= runtimeConfiguration.Automation.SecondaryFrame)
                 {
                     ToggleInventoryQuestItems();
-                    if (visibleInventoryItems.Count != 3 || inventoryQuestItemsOnly)
+                    var expectedAllItems = ExpectedInventoryRowCount(questItemsOnly: false);
+                    if (visibleInventoryItems.Count != expectedAllItems || inventoryQuestItemsOnly)
                         throw new InvalidDataException(
-                            "Opening inventory all-items filter did not restore three item types");
+                            "Opening inventory all-items filter did not restore source item types");
                     automatedInventoryQuestFilterStage = 2;
-                    GD.Print("NIKAMI_AURORA_INVENTORY_FILTER status=pass " +
-                             "all=3 quest=0 all-restored=3");
+                    GD.Print($"NIKAMI_AURORA_INVENTORY_FILTER status=pass " +
+                             $"all={expectedAllItems} quest=0 " +
+                             $"all-restored={expectedAllItems}");
                 }
             }
-            if (!automatedInventoryScrollVerified && readyFrames >= 50 &&
+            if (!automatedInventoryScrollVerified &&
+                readyFrames >= runtimeConfiguration.Automation.PrimaryFrame &&
                 System.Environment.GetEnvironmentVariable(
-                    "NIKAMI_AURORA_TEST_INVENTORY_SCROLL_REPEAT") == "3" &&
+                    "NIKAMI_AURORA_TEST_INVENTORY_SCROLL_REPEAT") == "1" &&
                 inventoryScreen?.Visible == true)
             {
-                if (visibleInventoryItems.Count != 9 ||
+                var expectedRows = ExpectedInventoryRowCount(questItemsOnly: false);
+                if (visibleInventoryItems.Count != expectedRows ||
                     inventorySourceScrollbar?.Visible != true ||
                     inventoryScrollThumb is null || inventoryScroll is null)
                     throw new InvalidDataException(
@@ -317,9 +327,9 @@ public sealed partial class KotorModuleBoot : Node3D
                     inventoryScrollThumb.Position.Y <= thumbBefore)
                     throw new InvalidDataException(
                         "Inventory source scrollbar did not advance one item row");
-                ScrollInventoryBy(10_000);
                 var expectedBottom = visibleInventoryItems.Count * inventoryRowHeight -
                                      (int)inventoryScroll.Size.Y;
+                ScrollInventoryBy(expectedBottom);
                 if (inventoryScroll.ScrollVertical != expectedBottom)
                     throw new InvalidDataException(
                         "Inventory source scrollbar did not clamp to its final item row");
@@ -339,7 +349,8 @@ public sealed partial class KotorModuleBoot : Node3D
                          $"rows={visibleInventoryItems.Count} rowHeight={inventoryRowHeight} " +
                          $"bottom={expectedBottom} input=arrows,drag");
             }
-            if (!automatedInventoryPartySelectionVerified && readyFrames >= 50 &&
+            if (!automatedInventoryPartySelectionVerified &&
+                readyFrames >= runtimeConfiguration.Automation.PrimaryFrame &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_TEST_INVENTORY_PARTY_SELECTION") == "1" &&
                 inventoryScreen?.Visible == true)
@@ -354,10 +365,12 @@ public sealed partial class KotorModuleBoot : Node3D
                         "Opening inventory party selection has no profile state");
                 var selected = snapshot.PartyMembers[snapshot.SelectedPartyMemberId];
                 if (!selected.Id.Equals(memberSource.Id, StringComparison.OrdinalIgnoreCase) ||
-                    selected.CurrentVitality != 30 || selected.MaximumVitality != 36 ||
-                    selected.Defense != 12 ||
-                    inventoryVitality?.Text != "30/36" ||
-                    inventoryDefense?.Text != "12" ||
+                    selected.CurrentVitality != memberSource.CurrentVitality ||
+                    selected.MaximumVitality != memberSource.MaximumVitality ||
+                    selected.Defense != memberSource.Defense ||
+                    inventoryVitality?.Text !=
+                    $"{memberSource.CurrentVitality}/{memberSource.MaximumVitality}" ||
+                    inventoryDefense?.Text != memberSource.Defense.ToString() ||
                     !ReferenceEquals(
                         inventoryPortrait?.Texture,
                         Texture(memberSource.Portrait.Resref)) ||
@@ -366,11 +379,14 @@ public sealed partial class KotorModuleBoot : Node3D
                     throw new InvalidDataException(
                         "Opening inventory party selection drifted from Trask's UTC state");
                 automatedInventoryPartySelectionVerified = true;
-                GD.Print("NIKAMI_AURORA_INVENTORY_PARTY status=pass " +
-                         "selected=end_trask vitality=30/36 defense=12 " +
-                         "medpacTarget=enabled");
+                GD.Print($"NIKAMI_AURORA_INVENTORY_PARTY status=pass " +
+                         $"selected={memberSource.Id} " +
+                         $"vitality={memberSource.CurrentVitality}/" +
+                         $"{memberSource.MaximumVitality} defense={memberSource.Defense} " +
+                         $"medpacTarget=enabled");
             }
-            if (!automatedEquipmentScreenOpened && readyFrames >= 45 &&
+            if (!automatedEquipmentScreenOpened &&
+                readyFrames >= runtimeConfiguration.Automation.MenuOpenFrame &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_TEST_EQUIPMENT_SCREEN") == "1")
             {
@@ -381,7 +397,8 @@ public sealed partial class KotorModuleBoot : Node3D
                     "NIKAMI_AURORA_TEST_EQUIPMENT_MENU_TRANSACTION") == "1" &&
                 equipmentScreen?.Visible == true)
             {
-                if (automatedEquipmentMenuStage == 0 && readyFrames >= 50)
+                if (automatedEquipmentMenuStage == 0 && readyFrames >=
+                    runtimeConfiguration.Automation.EquipmentTransactionFrames[0])
                 {
                     if (equipmentOkButton?.Visible == true)
                         throw new InvalidDataException(
@@ -397,13 +414,15 @@ public sealed partial class KotorModuleBoot : Node3D
                             "Equipment OK remained visible after commit");
                     automatedEquipmentMenuStage = 1;
                 }
-                else if (automatedEquipmentMenuStage == 1 && readyFrames >= 55)
+                else if (automatedEquipmentMenuStage == 1 && readyFrames >=
+                         runtimeConfiguration.Automation.EquipmentTransactionFrames[1])
                 {
                     SelectEquipmentRow(0);
                     CommitEquipmentSelection();
                     automatedEquipmentMenuStage = 2;
                 }
-                else if (automatedEquipmentMenuStage == 2 && readyFrames >= 60)
+                else if (automatedEquipmentMenuStage == 2 && readyFrames >=
+                         runtimeConfiguration.Automation.EquipmentTransactionFrames[2])
                 {
                     SelectEquipmentSlot(KotorEquipmentSlot.LeftHand);
                     if (visibleEquipmentChoices.Count != 2)
@@ -413,35 +432,40 @@ public sealed partial class KotorModuleBoot : Node3D
                     CommitEquipmentSelection();
                     automatedEquipmentMenuStage = 3;
                 }
-                else if (automatedEquipmentMenuStage == 3 && readyFrames >= 65)
+                else if (automatedEquipmentMenuStage == 3 && readyFrames >=
+                         runtimeConfiguration.Automation.EquipmentTransactionFrames[3])
                 {
                     SelectEquipmentSlot(KotorEquipmentSlot.Armor);
                     SelectEquipmentRow(1);
                     CommitEquipmentSelection();
                     automatedEquipmentMenuStage = 4;
                 }
-                else if (automatedEquipmentMenuStage == 4 && readyFrames >= 70)
+                else if (automatedEquipmentMenuStage == 4 && readyFrames >=
+                         runtimeConfiguration.Automation.EquipmentTransactionFrames[4])
                 {
                     SelectEquipmentSlot(KotorEquipmentSlot.LeftHand);
                     SelectEquipmentRow(0);
                     CommitEquipmentSelection();
                     automatedEquipmentMenuStage = 5;
                 }
-                else if (automatedEquipmentMenuStage == 5 && readyFrames >= 75)
+                else if (automatedEquipmentMenuStage == 5 && readyFrames >=
+                         runtimeConfiguration.Automation.EquipmentTransactionFrames[5])
                 {
                     SelectEquipmentSlot(KotorEquipmentSlot.Armor);
                     SelectEquipmentRow(0);
                     CommitEquipmentSelection();
                     automatedEquipmentMenuStage = 6;
                 }
-                else if (automatedEquipmentMenuStage == 6 && readyFrames >= 80)
+                else if (automatedEquipmentMenuStage == 6 && readyFrames >=
+                         runtimeConfiguration.Automation.EquipmentTransactionFrames[6])
                 {
                     SelectEquipmentSlot(KotorEquipmentSlot.RightHand);
                     SelectEquipmentRow(1);
                     CommitEquipmentSelection();
                     automatedEquipmentMenuStage = 7;
                 }
-                else if (automatedEquipmentMenuStage == 7 && readyFrames >= 85)
+                else if (automatedEquipmentMenuStage == 7 && readyFrames >=
+                         runtimeConfiguration.Automation.EquipmentTransactionFrames[7])
                 {
                     SelectEquipmentSlot(KotorEquipmentSlot.Armor);
                     SelectEquipmentRow(1);
@@ -455,7 +479,8 @@ public sealed partial class KotorModuleBoot : Node3D
             if (System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_TEST_FLAT_MENU_NAVIGATION") == "1")
             {
-                if (automatedFlatMenuNavigationStage == 0 && readyFrames >= 50)
+                if (automatedFlatMenuNavigationStage == 0 &&
+                    readyFrames >= runtimeConfiguration.Automation.PrimaryFrame)
                 {
                     ShowInventory();
                     if (inventoryScreen?.Visible != true ||
@@ -465,7 +490,8 @@ public sealed partial class KotorModuleBoot : Node3D
                             "Equipment-to-inventory navigation visibility drifted");
                     automatedFlatMenuNavigationStage = 1;
                 }
-                else if (automatedFlatMenuNavigationStage == 1 && readyFrames >= 55)
+                else if (automatedFlatMenuNavigationStage == 1 &&
+                         readyFrames >= runtimeConfiguration.Automation.SecondaryFrame)
                 {
                     ShowEquipment();
                     if (equipmentScreen?.Visible != true ||
@@ -478,7 +504,8 @@ public sealed partial class KotorModuleBoot : Node3D
                              "path=hud,equipment,inventory,equipment");
                 }
             }
-            if (!automatedTutorialXpChain && readyFrames >= 30 &&
+            if (!automatedTutorialXpChain &&
+                readyFrames >= runtimeConfiguration.Automation.StateFrame &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_TUTORIAL_XP_CHAIN") == "1" &&
                 materializedPlaceables.Count > 0)
             {
@@ -491,14 +518,16 @@ public sealed partial class KotorModuleBoot : Node3D
                         $"Tutorial XP chain ended at {finalExperience}, expected 150");
                 GD.Print("NIKAMI_AURORA_NCS_CHAIN status=pass xp=0->50->150");
             }
-            if (!automatedEquipmentApplied && readyFrames >= 45 &&
+            if (!automatedEquipmentApplied &&
+                readyFrames >= runtimeConfiguration.Automation.MenuOpenFrame &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_TEST_EQUIP_OPENING_GEAR") == "1")
             {
                 automatedEquipmentApplied = true;
                 EquipOpeningGear(null);
             }
-            if (!automatedCorridorTrigger && readyFrames >= 30 &&
+            if (!automatedCorridorTrigger &&
+                readyFrames >= runtimeConfiguration.Automation.StateFrame &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRIGGER") == "1" &&
                 interactiveDoors.Count > 0)
@@ -513,7 +542,7 @@ public sealed partial class KotorModuleBoot : Node3D
                          $"from={start} to={playerBody.GlobalPosition} requested=10.000");
             }
             if (automatedCorridorTrigger && !automatedCorridorTriggerVerified &&
-                readyFrames >= 60)
+                readyFrames >= runtimeConfiguration.Automation.SceneReadyFrame)
             {
                 automatedCorridorTriggerVerified = true;
                 var snapshot = RequireGameplaySimulation().CaptureSnapshot();
@@ -547,7 +576,8 @@ public sealed partial class KotorModuleBoot : Node3D
                          "globals=END_CARTH_DLG:1,END_TRASK_DLG:11 map=revealed " +
                          "speaker=TRASK_ULGO choices=2");
             }
-            if (!firstEncounterStarted && readyFrames >= 60 &&
+            if (!firstEncounterStarted &&
+                readyFrames >= runtimeConfiguration.Automation.SceneReadyFrame &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_TEST_FIRST_ENCOUNTER") == "1")
                 StartFirstEncounter();
@@ -589,7 +619,8 @@ public sealed partial class KotorModuleBoot : Node3D
                          $"music={currentMusicResref}");
             }
             var configuredChoice = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_DIALOGUE_CHOICE");
-            if (!automatedChoiceApplied && readyFrames >= 20 &&
+            if (!automatedChoiceApplied &&
+                readyFrames >= runtimeConfiguration.Automation.ChoiceFrame &&
                 int.TryParse(configuredChoice, out var choice) &&
                 choice >= 0 && choice < activeChoiceButtons.Count)
             {
@@ -598,7 +629,8 @@ public sealed partial class KotorModuleBoot : Node3D
                 GD.Print($"NIKAMI_AURORA_DIALOGUE_CHOICE status=selected index={choice}");
             }
             var configuredMove = System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_MOVE_METERS");
-            if (!automatedMoveApplied && readyFrames >= 30 &&
+            if (!automatedMoveApplied &&
+                readyFrames >= runtimeConfiguration.Automation.StateFrame &&
                 double.TryParse(configuredMove, System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var meters) && Math.Abs(meters) > 0.001)
             {
@@ -608,21 +640,21 @@ public sealed partial class KotorModuleBoot : Node3D
                 GD.Print($"NIKAMI_AURORA_NAV_TEST status={(accepted ? "accepted" : "rejected")} " +
                          $"from={start} to={playerBody.GlobalPosition} requested={meters:F3}");
             }
-            if (readyFrames == 40 &&
+            if (readyFrames == runtimeConfiguration.Automation.CapturePreparationFrame &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_CLEAN") == "1")
                 overlayLayer.Visible = false;
-            if (readyFrames == 40 &&
+            if (readyFrames == runtimeConfiguration.Automation.CapturePreparationFrame &&
                 System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP") == "1")
                 FrameLipSyncCloseup(dialogueOwnerActor);
-            if (readyFrames == 60 &&
+            if (readyFrames == runtimeConfiguration.Automation.SceneReadyFrame &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP") == "1")
                 FramePlayerEquipmentCloseup();
-            if (readyFrames == 60 &&
+            if (readyFrames == runtimeConfiguration.Automation.SceneReadyFrame &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP") == "1")
                 FrameChairCloseup();
-            if (readyFrames == 60 &&
+            if (readyFrames == runtimeConfiguration.Automation.SceneReadyFrame &&
                 System.Environment.GetEnvironmentVariable(
                     "NIKAMI_AURORA_CAPTURE_XR_BODY_LOOKDOWN") == "1")
                 FrameXrBodyLookDown();
@@ -641,15 +673,20 @@ public sealed partial class KotorModuleBoot : Node3D
             ++capturedFrames >= captureTargetFrame &&
             captureNodeMatches && (!xrSpectatorActive || captureMatchedFrames >= 2))
         {
+            captureCompleted = true;
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(capturePath))!);
-            var captureImage = GetViewport().GetTexture().GetImage();
-            var error = xrSpectatorActive && !HasVisibleCapturePixels(captureImage)
+            var captureImage = DisplayServer.GetName().Equals(
+                "headless", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : GetViewport().GetTexture().GetImage();
+            var error = captureImage is null ||
+                        xrSpectatorActive && !HasVisibleCapturePixels(captureImage)
                 ? Error.Failed
                 : captureImage.SavePng(capturePath);
-            captureCompleted = true;
             if (error != Error.Ok)
                 GD.PushError("NIKAMI_AURORA_CAPTURE status=fail " +
-                             "source=xr-spectator reason=near-black");
+                             $"source={(xrSpectatorActive ? "xr-spectator" : "root")} " +
+                             $"reason={(captureImage is null ? "no-render-target" : "near-black")}");
             GD.Print($"NIKAMI_AURORA_CAPTURE status={error} " +
                      $"source={(xrSpectatorActive ? "xr-spectator" : "root")} " +
                      $"path={capturePath}");
@@ -776,10 +813,13 @@ public sealed partial class KotorModuleBoot : Node3D
                 ?? throw new InvalidDataException("KOTOR module manifest is empty");
             if (manifest.Schema != "nikami-aurora-kotor-module-v1")
                 throw new InvalidDataException($"Unsupported module manifest schema: {manifest.Schema}");
+            runtimeConfiguration = manifest.RuntimeConfiguration.Validate(requireSourceHash: true);
+            if (captureTargetFrame == 0)
+                captureTargetFrame = runtimeConfiguration.Automation.SceneReadyFrame;
 
             var manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
             ConfigureFlatPresentation(manifest.Ui, manifestDirectory);
-            UpdateLoadingProgress(0.35f);
+            UpdateLoadingProgress(runtimeConfiguration.Presentation.Loading.RoomLoadingStart);
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             if (await CaptureLoadingPresentationIfRequested())
                 return;
@@ -790,7 +830,7 @@ public sealed partial class KotorModuleBoot : Node3D
             dialogueFieldOfView = manifest.CameraStyle.ViewAngle;
             gameplayFieldOfView = manifest.CameraStyle.ViewAngle;
             camera.Fov = gameplayFieldOfView;
-            var initialPlayerExperience = 0;
+            var initialPlayerExperience = runtimeConfiguration.Gameplay.PlayerExperience;
             if (int.TryParse(System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_TEST_PLAYER_XP"),
                     out var configuredPlayerXp))
                 initialPlayerExperience = Math.Max(0, configuredPlayerXp);
@@ -839,7 +879,9 @@ public sealed partial class KotorModuleBoot : Node3D
                 damagedEndSmokeReady |= emitterReport.DamagedEnd;
                 loadedRooms++;
                 UpdateLoadingProgress(
-                    0.35f + 0.45f * loadedRooms / Math.Max(1, manifest.Rooms.Count));
+                    runtimeConfiguration.Presentation.Loading.RoomLoadingStart +
+                    runtimeConfiguration.Presentation.Loading.RoomLoadingSpan *
+                    loadedRooms / Math.Max(1, manifest.Rooms.Count));
                 await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             }
             if (lightmappedOpaqueMaterials == 0 || baseOpaqueMaterials == 0 ||
@@ -889,7 +931,8 @@ public sealed partial class KotorModuleBoot : Node3D
                 cameraPivot.Rotation = new Vector3(pitch, 0, 0);
             }
 
-            UpdateLoadingProgress(1.0f);
+            UpdateLoadingProgress(
+                runtimeConfiguration.Presentation.Loading.CompleteProgress);
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             loadingBackdrop.Visible = false;
             StopRetailLoadingMusic();
@@ -3873,19 +3916,18 @@ public sealed partial class KotorModuleBoot : Node3D
                     trigger.OnEnterScript, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
         var partySources = manifest.Ui.Inventory.PartyMembers;
-        var playerPartySource = partySources.Single(member => member.Id.Equals(
-            KotorGameplaySimulation.PlayerPartyMemberId,
-            StringComparison.OrdinalIgnoreCase));
-        if (partySources.Count != 2 ||
-            playerPartySource.SourceKind != "profile" ||
-            playerPartySource.CurrentVitality != 20 ||
-            playerPartySource.MaximumVitality != 20 ||
-            playerPartySource.Defense != 10)
+        var playerPartySource = partySources.Single(member => member.IsPlayer);
+        var configuredPlayer = manifest.RuntimeConfiguration.Gameplay.PlayerPartyMember;
+        if (!playerPartySource.Id.Equals(configuredPlayer.Id, StringComparison.OrdinalIgnoreCase) ||
+            !playerPartySource.DisplayName.Equals(
+                configuredPlayer.DisplayName, StringComparison.Ordinal) ||
+            !playerPartySource.SourceKind.Equals("profile", StringComparison.OrdinalIgnoreCase) ||
+            playerPartySource.CurrentVitality != configuredPlayer.CurrentVitality ||
+            playerPartySource.MaximumVitality != configuredPlayer.MaximumVitality ||
+            playerPartySource.Defense != configuredPlayer.Defense)
             throw new InvalidDataException(
                 "Opening inventory player party baseline is incomplete");
-        var companionSources = partySources.Where(member => !member.Id.Equals(
-                KotorGameplaySimulation.PlayerPartyMemberId,
-                StringComparison.OrdinalIgnoreCase))
+        var companionSources = partySources.Where(member => !member.IsPlayer)
             .ToArray();
         if (companionSources.Any(member =>
                 member.SourceKind != "utc" ||
@@ -3895,20 +3937,23 @@ public sealed partial class KotorModuleBoot : Node3D
                 member.BaseItemsSha256?.Length != 64))
             throw new InvalidDataException(
                 "Opening inventory companion evidence is incomplete");
-        var partyMembers = companionSources.Select(member =>
+        var partyMembers = partySources.Select(member =>
             new KotorPartyMemberDefinition(
                 member.Id,
                 member.DisplayName,
                 member.CurrentVitality,
                 member.MaximumVitality,
-                member.Defense));
+                member.Defense,
+                member.IsPlayer)).ToArray();
         return new KotorGameplaySimulation(
             contracts,
             doors,
             placeables,
-            initialPlayerExperience,
-            triggers,
-            initialPartyMembers: partyMembers);
+            new KotorGameplayInitialState(
+                initialPlayerExperience,
+                manifest.RuntimeConfiguration.Gameplay.PlayerCredits,
+                partyMembers),
+            triggers);
     }
 
     private static void ValidatePlayerEquipmentVariants(ModuleManifest manifest)
@@ -4004,6 +4049,7 @@ public sealed partial class KotorModuleBoot : Node3D
         TargetRecord Target,
         AreaLightingRecord Lighting,
         CameraStyleRecord CameraStyle,
+        KotorRuntimeConfiguration RuntimeConfiguration,
         KotorUiRecord Ui,
         PlayerRecord Player,
         IReadOnlyList<RoomRecord> Rooms,

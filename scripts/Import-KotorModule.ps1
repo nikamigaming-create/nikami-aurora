@@ -9,6 +9,8 @@ param(
 
     [string]$MdlOps,
 
+    [string]$RuntimeConfig,
+
     [string]$Python = "py"
 )
 
@@ -23,8 +25,14 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 if ([string]::IsNullOrWhiteSpace($MdlOps)) {
     $MdlOps = Join-Path $repo "local\tools\mdlops\mdlops.exe"
 }
+if ([string]::IsNullOrWhiteSpace($RuntimeConfig)) {
+    $RuntimeConfig = Join-Path $repo "config\kotor-runtime.json"
+}
 if (-not (Test-Path -LiteralPath $MdlOps -PathType Leaf)) {
     throw "MDLOps not found: $MdlOps. Run scripts/Bootstrap-MDLOps.ps1 first."
+}
+if (-not (Test-Path -LiteralPath $RuntimeConfig -PathType Leaf)) {
+    throw "KOTOR runtime configuration not found: $RuntimeConfig"
 }
 
 $arguments = @()
@@ -36,7 +44,8 @@ $arguments += @(
     "--game-root", $GameRoot,
     "--module", $Module,
     "--output", $OutputRoot,
-    "--mdlops", $MdlOps
+    "--mdlops", $MdlOps,
+    "--runtime-config", $RuntimeConfig
 )
 
 & $Python @arguments

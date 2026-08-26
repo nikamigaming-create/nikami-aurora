@@ -67,6 +67,129 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest().upper()
 
 
+def load_runtime_configuration(path: Path) -> dict[str, Any]:
+    """Load and fail-closed validate public profile policy before owned-data import."""
+    payload = path.read_bytes()
+    configuration = json.loads(payload)
+    if not isinstance(configuration, dict):
+        raise RuntimeError("KOTOR runtime configuration must be a JSON object")
+    if configuration.get("schema") != "nikami-aurora-kotor-runtime-config-v1":
+        raise RuntimeError("Unsupported KOTOR runtime configuration schema")
+
+    def require_object(parent: dict[str, Any], name: str) -> dict[str, Any]:
+        value = parent.get(name)
+        if not isinstance(value, dict):
+            raise RuntimeError(f"KOTOR runtime configuration {name} must be an object")
+        return value
+
+    def require_int(parent: dict[str, Any], name: str, minimum: int = 0) -> int:
+        value = parent.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise RuntimeError(
+                f"KOTOR runtime configuration {name} must be an integer >= {minimum}")
+        return value
+
+    def require_number(
+        parent: dict[str, Any], name: str, minimum: float, maximum: float | None = None
+    ) -> float:
+        value = parent.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RuntimeError(f"KOTOR runtime configuration {name} must be numeric")
+        number = float(value)
+        if not math.isfinite(number) or number < minimum or (
+                maximum is not None and number > maximum):
+            raise RuntimeError(f"KOTOR runtime configuration {name} is out of range")
+        return number
+
+    def require_box(parent: dict[str, Any], name: str) -> None:
+        box = require_object(parent, name)
+        require_int(box, "left")
+        require_int(box, "top")
+        require_int(box, "width", 1)
+        require_int(box, "height", 1)
+
+    gameplay = require_object(configuration, "gameplay")
+    require_int(gameplay, "playerExperience")
+    require_int(gameplay, "playerCredits")
+    player = require_object(gameplay, "playerPartyMember")
+    if not isinstance(player.get("id"), str) or not player["id"].strip():
+        raise RuntimeError("Configured KOTOR player party-member ID is empty")
+    if not isinstance(player.get("displayName"), str) or not player["displayName"].strip():
+        raise RuntimeError("Configured KOTOR player party-member name is empty")
+    current_vitality = require_int(player, "currentVitality")
+    maximum_vitality = require_int(player, "maximumVitality", 1)
+    require_int(player, "defense")
+    if current_vitality > maximum_vitality:
+        raise RuntimeError("Configured KOTOR player vitality exceeds its maximum")
+
+    presentation = require_object(configuration, "presentation")
+    require_int(presentation, "fallbackFontSize", 1)
+    require_int(presentation, "descriptionFontSize", 1)
+    require_number(presentation, "modalDimOpacity", 0.0, 1.0)
+    for color_name in ("fallbackTextColor", "emphasisColor", "selectedTint"):
+        color = require_object(presentation, color_name)
+        for channel in ("red", "green", "blue"):
+            require_number(color, channel, 0.0, 1.0)
+    loading = require_object(presentation, "loading")
+    loading_values = [
+        require_number(loading, "initialProgress", 0.0, 1.0),
+        require_number(loading, "roomLoadingStart", 0.0, 1.0),
+        require_number(loading, "roomLoadingSpan", 0.0, 1.0),
+        require_number(loading, "completeProgress", 0.0, 1.0),
+    ]
+    require_number(loading, "musicVolumeDb", -100.0, 100.0)
+    if (loading_values[0] > loading_values[1] or
+            loading_values[1] + loading_values[2] > loading_values[3] or
+            loading_values[3] <= 0):
+        raise RuntimeError("Configured KOTOR loading presentation is invalid")
+    hud = require_object(presentation, "hud")
+    minimap_inset = require_object(hud, "minimapInset")
+    for edge in ("left", "top", "right", "bottom"):
+        require_int(minimap_inset, edge)
+    inventory = require_object(presentation, "inventory")
+    require_int(inventory, "descriptionBottomInset")
+    require_int(inventory, "scrollThumbHorizontalInset")
+    require_int(inventory, "overflowAcceptanceRepeat", 2)
+    inventory_row = require_object(inventory, "row")
+    for box_name in ("icon", "name", "quantity"):
+        require_box(inventory_row, box_name)
+    equipment = require_object(presentation, "equipment")
+    require_int(equipment, "descriptionBottomInset")
+    require_int(equipment, "slotIconInset")
+    equipment_row = require_object(equipment, "row")
+    for box_name in ("icon", "name"):
+        require_box(equipment_row, box_name)
+
+    automation = require_object(configuration, "automation")
+    milestone_names = (
+        "doorFrame", "choiceFrame", "stateFrame", "capturePreparationFrame",
+        "menuOpenFrame", "primaryFrame", "secondaryFrame", "sceneReadyFrame")
+    milestones = [require_int(automation, name, 1) for name in milestone_names]
+    if any(left >= right for left, right in zip(milestones, milestones[1:])):
+        raise RuntimeError("Configured KOTOR automation milestones must increase")
+    transaction_frames = automation.get("equipmentTransactionFrames")
+    if (not isinstance(transaction_frames, list) or len(transaction_frames) != 8 or
+            any(isinstance(frame, bool) or not isinstance(frame, int) or frame <= 0
+                for frame in transaction_frames) or
+            any(left >= right for left, right in
+                zip(transaction_frames, transaction_frames[1:]))):
+        raise RuntimeError("Configured KOTOR equipment transaction frames are invalid")
+
+    complexity = require_object(configuration, "complexity")
+    sample_sizes = complexity.get("inventoryProjectionSampleSizes")
+    if (not isinstance(sample_sizes, list) or len(sample_sizes) < 3 or
+            any(isinstance(size, bool) or not isinstance(size, int) or size <= 0
+                for size in sample_sizes) or
+            any(left >= right for left, right in zip(sample_sizes, sample_sizes[1:]))):
+        raise RuntimeError("Configured inventory projection sample sizes are invalid")
+    require_number(complexity, "maximumExponent", 1.0)
+
+    if "sourceSha256" in configuration:
+        raise RuntimeError("sourceSha256 is importer-owned and cannot be configured")
+    configuration["sourceSha256"] = sha256_bytes(payload)
+    return configuration
+
+
 def canonical_resref(value: Any) -> str:
     return str(value).strip()
 
@@ -264,6 +387,7 @@ def export_kotor_ui(
     textures: TextureCache,
     portrait_resref: str,
     inventory_items: list[dict[str, Any]],
+    runtime_configuration: dict[str, Any],
 ) -> dict[str, Any]:
     """Export source GUI contracts and owned textures for the flat runtime shell."""
     talktable = installation.talktable()
@@ -699,6 +823,7 @@ def export_kotor_ui(
             "utiSha256": item["utiSha256"],
         })
 
+    player_party_member = runtime_configuration["gameplay"]["playerPartyMember"]
     ui_contract: dict[str, Any] = {
         "schema": "nikami-aurora-kotor-ui-v1",
         "loading": {
@@ -729,12 +854,13 @@ def export_kotor_ui(
             "partyPortraitsSourceSha256": sha256_bytes(portraits_bytes),
             "partyMembers": [
                 {
-                    "id": "player",
-                    "displayName": "Player",
+                    "id": player_party_member["id"],
+                    "displayName": player_party_member["displayName"],
                     "portrait": export_texture(portrait_resref),
-                    "currentVitality": 20,
-                    "maximumVitality": 20,
-                    "defense": 10,
+                    "currentVitality": player_party_member["currentVitality"],
+                    "maximumVitality": player_party_member["maximumVitality"],
+                    "defense": player_party_member["defense"],
+                    "isPlayer": True,
                     "sourceKind": "profile",
                     "utcSha256": None,
                     "armorResref": None,
@@ -748,6 +874,7 @@ def export_kotor_ui(
                     "currentVitality": int(trask.current_hp),
                     "maximumVitality": int(trask.max_hp),
                     "defense": trask_defense,
+                    "isPlayer": False,
                     "sourceKind": "utc",
                     "utcSha256": sha256_bytes(trask_utc_bytes),
                     "armorResref": trask_armor_resref,
@@ -2616,7 +2743,13 @@ def export_opening_script_contracts(
     ]
 
 
-def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path) -> Path:
+def import_module(
+    game_root: Path,
+    module: str,
+    output_root: Path,
+    mdlops: Path,
+    runtime_configuration_path: Path,
+) -> Path:
     executable = game_root / "swkotor.exe"
     if not executable.is_file():
         raise RuntimeError(f"KOTOR executable not found: {executable}")
@@ -2625,6 +2758,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
     if not base_rim.is_file() or not story_rim.is_file():
         raise RuntimeError(f"Module RIM pair not found for {module}")
 
+    runtime_configuration = load_runtime_configuration(runtime_configuration_path)
     installation = Installation(game_root)
     ifo_resource = find_module_resource(installation, module, "IFO")
     git_resource = find_module_resource(installation, module, "GIT")
@@ -2766,6 +2900,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
         textures,
         player_actor["portraitResref"],
         opening_locker["inventory"],
+        runtime_configuration,
     )
     lip_capsule = (
         Capsule(game_root / "lips" / f"{module}_loc.mod")
@@ -3101,6 +3236,7 @@ def import_module(game_root: Path, module: str, output_root: Path, mdlops: Path)
             "height": float(camera_styles.get_cell(int(are.camera_style), "height")),
             "sourceSha256": sha256_bytes(resource_data(camera_style_resource)),
         },
+        "runtimeConfiguration": runtime_configuration,
         "ui": ui_contract,
         "player": player_actor,
         "rooms": room_records,
@@ -3148,6 +3284,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--module", default="end_m01aa")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mdlops", type=Path, required=True)
+    parser.add_argument(
+        "--runtime-config",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "config" / "kotor-runtime.json",
+    )
     return parser.parse_args()
 
 
@@ -3155,7 +3296,12 @@ def main() -> int:
     args = parse_args()
     try:
         import_module(
-            args.game_root.resolve(), args.module.lower(), args.output.resolve(), args.mdlops.resolve())
+            args.game_root.resolve(),
+            args.module.lower(),
+            args.output.resolve(),
+            args.mdlops.resolve(),
+            args.runtime_config.resolve(),
+        )
     except Exception as exc:
         print(f"KOTOR_IMPORT_FAIL: {exc}", file=sys.stderr)
         return 1

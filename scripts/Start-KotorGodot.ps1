@@ -4,7 +4,7 @@ param(
     [string]$Godot,
     [string]$CapturePath,
     [string]$CaptureDialogueNode,
-    [int]$CaptureFrame = 60,
+    [int]$CaptureFrame = 0,
     [int]$DialogueChoice = -1,
     [double]$TestMoveMeters = 0,
     [int]$TestPlayerXp = -1,
@@ -53,6 +53,16 @@ if ([string]::IsNullOrWhiteSpace($Manifest)) {
 }
 if (-not (Test-Path -LiteralPath $Manifest -PathType Leaf)) {
     throw "Module manifest not found: $Manifest. Run scripts/Import-KotorModule.ps1 first."
+}
+$manifestContract = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
+$referenceWidth = [int]$manifestContract.ui.hud.layout.extent.width
+$referenceHeight = [int]$manifestContract.ui.hud.layout.extent.height
+$configuredCaptureFrame = [int]$manifestContract.runtimeConfiguration.automation.sceneReadyFrame
+if ($referenceWidth -le 0 -or $referenceHeight -le 0 -or $configuredCaptureFrame -le 0) {
+    throw "Module manifest has no valid runtime/UI reference configuration. Re-import it."
+}
+if ($CaptureFrame -le 0) {
+    $CaptureFrame = $configuredCaptureFrame
 }
 if ([string]::IsNullOrWhiteSpace($Godot)) {
     $command = Get-Command "Godot_v4.7.1-stable_mono_win64.exe" -ErrorAction SilentlyContinue
@@ -231,7 +241,7 @@ if ($TestInventoryScroll) {
     if (-not $InventoryScreen) {
         throw "-TestInventoryScroll requires -InventoryScreen."
     }
-    $env:NIKAMI_AURORA_TEST_INVENTORY_SCROLL_REPEAT = "3"
+    $env:NIKAMI_AURORA_TEST_INVENTORY_SCROLL_REPEAT = "1"
 }
 if ($TestInventoryPartySelection) {
     if (-not $InventoryScreen) {
@@ -260,7 +270,8 @@ if ($TestFlatMenuNavigation) {
     $env:NIKAMI_AURORA_TEST_FLAT_MENU_NAVIGATION = "1"
 }
 if ($LoadingScreenCapture -or $HudScreen -or $InventoryScreen -or $EquipmentScreen) {
-    $env:NIKAMI_AURORA_FLAT_UI_REFERENCE_VIEWPORT = "800x600"
+    $env:NIKAMI_AURORA_FLAT_UI_REFERENCE_VIEWPORT =
+        "$($referenceWidth)x$($referenceHeight)"
 }
 
 try {
@@ -270,10 +281,13 @@ try {
     }
     $godotArguments = @("--path", (Join-Path $repo "godot"))
     if ($LoadingScreenCapture -or $HudScreen -or $InventoryScreen -or $EquipmentScreen) {
-        # mipc8x6 is KOTOR's owned 800x600 HUD contract.  Keeping flat
-        # acceptance captures at that exact viewport prevents widescreen
-        # stretching from being mistaken for source-layout drift.
-        $godotArguments += @("--windowed", "--resolution", "800x600")
+        # Use the imported HUD extent so acceptance cannot drift from the
+        # player's owned source contract when a different layout is selected.
+        $godotArguments += @(
+            "--windowed",
+            "--resolution",
+            "$($referenceWidth)x$($referenceHeight)"
+        )
     }
     if ($OpenXR) {
         $godotArguments += @("--xr-mode", "on")

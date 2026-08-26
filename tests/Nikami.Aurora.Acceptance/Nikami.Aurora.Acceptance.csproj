@@ -7,4 +7,9 @@
     <ProjectReference Include="../../src/Nikami.Aurora.Profiles.Kotor/Nikami.Aurora.Profiles.Kotor.csproj" />
     <ProjectReference Include="../../src/Nikami.Aurora.Profiles.DragonAgeOrigins/Nikami.Aurora.Profiles.DragonAgeOrigins.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="../../config/kotor-runtime.json"
+          Link="config/kotor-runtime.json"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
