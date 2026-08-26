@@ -233,7 +233,8 @@ public sealed record KotorPartyMemberDefinition(
     string DisplayName,
     int CurrentVitality,
     int MaximumVitality,
-    int Defense)
+    int Defense,
+    bool IsPlayer)
 {
     public KotorPartyMemberDefinition Validate()
     {
@@ -249,6 +250,29 @@ public sealed record KotorPartyMemberDefinition(
         if (Defense < 0)
             throw new ArgumentOutOfRangeException(nameof(Defense));
         return this;
+    }
+}
+
+public sealed record KotorGameplayInitialState(
+    int PlayerExperience,
+    int PlayerCredits,
+    IReadOnlyList<KotorPartyMemberDefinition> PartyMembers)
+{
+    public KotorGameplayInitialState Validate()
+    {
+        if (PlayerExperience < 0)
+            throw new ArgumentOutOfRangeException(nameof(PlayerExperience));
+        if (PlayerCredits < 0)
+            throw new ArgumentOutOfRangeException(nameof(PlayerCredits));
+        if (PartyMembers is null || PartyMembers.Count == 0)
+            throw new ArgumentException(
+                "KOTOR initial state requires a party", nameof(PartyMembers));
+        var validated = PartyMembers.Select(member => member.Validate()).ToArray();
+        if (validated.Count(member => member.IsPlayer) != 1)
+            throw new ArgumentException(
+                "KOTOR initial state requires exactly one player party member",
+                nameof(PartyMembers));
+        return this with { PartyMembers = validated };
     }
 }
 
@@ -272,6 +296,12 @@ public enum KotorEquipmentSlot
     Belt = 0x00400
 }
 
+public static class KotorBaseItemIds
+{
+    // Confirmed baseitems.2da row for Odyssey medical equipment.
+    public const int MedicalEquipment = 55;
+}
+
 public readonly record struct KotorEquipRequest(string Resref, KotorEquipmentSlot Slot);
 
 public sealed record KotorPlaceableDefinition(
@@ -293,6 +323,7 @@ public sealed record KotorGameplaySnapshot(
     IReadOnlyDictionary<string, bool> TriggerStates,
     IReadOnlyDictionary<string, int> GlobalNumbers,
     bool MapRevealed,
+    string PlayerPartyMemberId,
     string SelectedPartyMemberId,
     IReadOnlyDictionary<string, KotorPartyMemberSnapshot> PartyMembers);
 
@@ -371,8 +402,6 @@ public sealed record KotorGameplayTransition(
 
 public sealed class KotorGameplaySimulation
 {
-    public const string PlayerPartyMemberId = "player";
-
     private readonly Dictionary<string, KotorScriptContract> scripts;
     private readonly Dictionary<string, KotorDoorDefinition> doors;
     private readonly IReadOnlyList<KotorDoorDefinition> doorOrder;
@@ -389,34 +418,21 @@ public sealed class KotorGameplaySimulation
     private readonly Dictionary<string, int> globalNumbers =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, KotorPartyMemberSnapshot> partyMembers;
+    private readonly string playerPartyMemberId;
     private int playerExperience;
     private readonly int playerCredits;
-    private string selectedPartyMemberId = PlayerPartyMemberId;
+    private string selectedPartyMemberId;
     private bool mapRevealed;
 
     public KotorGameplaySimulation(
         IEnumerable<KotorScriptContract> scripts,
         IEnumerable<KotorDoorDefinition> doors,
         IEnumerable<KotorPlaceableDefinition> placeables,
-        int initialPlayerExperience = 0,
-        IEnumerable<KotorTriggerDefinition>? triggers = null,
-        int initialCurrentVitality = 20,
-        int initialMaximumVitality = 20,
-        int initialDefense = 10,
-        int initialCredits = 0,
-        IEnumerable<KotorPartyMemberDefinition>? initialPartyMembers = null)
+        KotorGameplayInitialState initialState,
+        IEnumerable<KotorTriggerDefinition>? triggers = null)
     {
-        if (initialPlayerExperience < 0)
-            throw new ArgumentOutOfRangeException(nameof(initialPlayerExperience));
-        if (initialMaximumVitality <= 0)
-            throw new ArgumentOutOfRangeException(nameof(initialMaximumVitality));
-        if (initialCurrentVitality < 0 ||
-            initialCurrentVitality > initialMaximumVitality)
-            throw new ArgumentOutOfRangeException(nameof(initialCurrentVitality));
-        if (initialDefense < 0)
-            throw new ArgumentOutOfRangeException(nameof(initialDefense));
-        if (initialCredits < 0)
-            throw new ArgumentOutOfRangeException(nameof(initialCredits));
+        ArgumentNullException.ThrowIfNull(initialState);
+        var validatedInitialState = initialState.Validate();
         this.scripts = UniqueByKey(scripts.Select(contract => contract.Validate()),
             contract => contract.Resref, "script contract");
         doorOrder = doors.ToArray();
@@ -451,37 +467,31 @@ public sealed class KotorGameplaySimulation
         triggerStates = this.triggers.Keys.ToDictionary(instanceId => instanceId, _ => false,
             StringComparer.OrdinalIgnoreCase);
         partyMembers = new Dictionary<string, KotorPartyMemberSnapshot>(
-            StringComparer.OrdinalIgnoreCase)
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var member in validatedInitialState.PartyMembers)
         {
-            [PlayerPartyMemberId] = new KotorPartyMemberSnapshot(
-                PlayerPartyMemberId,
-                "Player",
-                initialCurrentVitality,
-                initialMaximumVitality,
-                initialDefense)
-        };
-        foreach (var member in initialPartyMembers ?? [])
-        {
-            var valid = member.Validate();
             if (!partyMembers.TryAdd(
-                    valid.Id,
+                    member.Id,
                     new KotorPartyMemberSnapshot(
-                        valid.Id,
-                        valid.DisplayName,
-                        valid.CurrentVitality,
-                        valid.MaximumVitality,
-                        valid.Defense)))
+                        member.Id,
+                        member.DisplayName,
+                        member.CurrentVitality,
+                        member.MaximumVitality,
+                        member.Defense)))
                 throw new ArgumentException(
-                    $"Duplicate KOTOR party-member ID: {valid.Id}",
-                    nameof(initialPartyMembers));
+                    $"Duplicate KOTOR party-member ID: {member.Id}",
+                    nameof(initialState));
         }
-        playerExperience = initialPlayerExperience;
-        playerCredits = initialCredits;
+        playerPartyMemberId = validatedInitialState.PartyMembers.Single(member =>
+            member.IsPlayer).Id;
+        selectedPartyMemberId = playerPartyMemberId;
+        playerExperience = validatedInitialState.PlayerExperience;
+        playerCredits = validatedInitialState.PlayerCredits;
     }
 
     public KotorGameplaySnapshot CaptureSnapshot()
     {
-        var player = partyMembers[PlayerPartyMemberId];
+        var player = partyMembers[playerPartyMemberId];
         return new KotorGameplaySnapshot(
             playerExperience,
             player.CurrentVitality,
@@ -496,6 +506,7 @@ public sealed class KotorGameplaySimulation
             ReadOnlyCopy(triggerStates),
             ReadOnlyCopy(globalNumbers),
             mapRevealed,
+            playerPartyMemberId,
             selectedPartyMemberId,
             new ReadOnlyDictionary<string, KotorPartyMemberSnapshot>(
                 new Dictionary<string, KotorPartyMemberSnapshot>(
@@ -683,7 +694,7 @@ public sealed class KotorGameplaySimulation
         var events = new List<KotorGameplayEvent>();
         if (!itemDefinitions.TryGetValue(resref, out var item))
             throw new KeyNotFoundException($"Unknown KOTOR item: {resref}");
-        if (item.BaseItem != 55)
+        if (item.BaseItem != KotorBaseItemIds.MedicalEquipment)
             throw new InvalidOperationException(
                 $"KOTOR item {item.Resref} is not medical equipment");
         if (!playerInventory.TryGetValue(item.Resref, out var quantity) || quantity <= 0)

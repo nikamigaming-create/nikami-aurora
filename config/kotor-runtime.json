@@ -1,0 +1,123 @@
+{
+  "schema": "nikami-aurora-kotor-runtime-config-v1",
+  "gameplay": {
+    "playerExperience": 0,
+    "playerCredits": 0,
+    "playerPartyMember": {
+      "id": "player",
+      "displayName": "Player",
+      "currentVitality": 20,
+      "maximumVitality": 20,
+      "defense": 10
+    }
+  },
+  "presentation": {
+    "fallbackFontSize": 16,
+    "descriptionFontSize": 10,
+    "modalDimOpacity": 0.86,
+    "fallbackTextColor": {
+      "red": 0.0,
+      "green": 0.65882355,
+      "blue": 0.98039216
+    },
+    "emphasisColor": {
+      "red": 0.9843137,
+      "green": 1.0,
+      "blue": 0.0
+    },
+    "selectedTint": {
+      "red": 0.78,
+      "green": 1.0,
+      "blue": 1.0
+    },
+    "loading": {
+      "initialProgress": 0.04,
+      "roomLoadingStart": 0.35,
+      "roomLoadingSpan": 0.45,
+      "completeProgress": 1.0,
+      "musicVolumeDb": -3.0
+    },
+    "hud": {
+      "minimapInset": {
+        "left": 4,
+        "top": 4,
+        "right": 4,
+        "bottom": 5
+      }
+    },
+    "inventory": {
+      "descriptionBottomInset": 8,
+      "scrollThumbHorizontalInset": 4,
+      "overflowAcceptanceRepeat": 3,
+      "row": {
+        "icon": {
+          "left": 3,
+          "top": 1,
+          "width": 48,
+          "height": 48
+        },
+        "name": {
+          "left": 57,
+          "top": 0,
+          "width": 180,
+          "height": 50
+        },
+        "quantity": {
+          "left": 205,
+          "top": 0,
+          "width": 32,
+          "height": 50
+        }
+      }
+    },
+    "equipment": {
+      "descriptionBottomInset": 8,
+      "slotIconInset": 8,
+      "row": {
+        "icon": {
+          "left": 2,
+          "top": 2,
+          "width": 48,
+          "height": 48
+        },
+        "name": {
+          "left": 55,
+          "top": 0,
+          "width": 185,
+          "height": 52
+        }
+      }
+    }
+  },
+  "automation": {
+    "doorFrame": 10,
+    "choiceFrame": 20,
+    "stateFrame": 30,
+    "capturePreparationFrame": 40,
+    "menuOpenFrame": 45,
+    "primaryFrame": 50,
+    "secondaryFrame": 55,
+    "sceneReadyFrame": 60,
+    "equipmentTransactionFrames": [
+      50,
+      55,
+      60,
+      65,
+      70,
+      75,
+      80,
+      85
+    ]
+  },
+  "complexity": {
+    "inventoryProjectionSampleSizes": [
+      64,
+      128,
+      256,
+      512,
+      1024,
+      2048
+    ],
+    "maximumExponent": 1.05
+  }
+}

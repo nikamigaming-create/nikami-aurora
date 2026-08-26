@@ -200,6 +200,12 @@ py -3.12 -m pip install -r requirements-import.txt
   -GameRoot 'D:\SteamLibrary\steamapps\common\swkotor'
 ```
 
+Profile policy is exposed in `config/kotor-runtime.json`. The importer validates
+and hash-binds that configuration into the ignored local module manifest; pass
+`-RuntimeConfig` to import with another public configuration. See
+`docs/KOTOR-RUNTIME-CONFIGURATION.md` for the configuration/evidence boundary
+and deterministic O(N) inventory guard.
+
 Launch the new Godot runtime:
 
 ```powershell
@@ -219,12 +225,15 @@ assembly is implemented.
 - `src/Nikami.Aurora.Profiles.DragonAgeOrigins` — Eclipse/DAO profile.
 - `src/Nikami.Aurora.Cli` — deterministic profile and target tooling.
 - `godot` — shared Godot runtime and the active KOTOR vertical slice.
+- `config/kotor-runtime.json` — public KOTOR profile policy and guardrails.
 - `scripts` — owned-install import and launch commands.
 - `tests/Nikami.Aurora.Acceptance` — dependency-free synthetic acceptance.
 - `docs/ARCHITECTURE.md` — dependency and profile boundaries.
 - `docs/CLEAN_ROOM.md` — evidence and implementation separation.
 - `docs/ROADMAP.md` — KOTOR-first delivery gates and DAO migration.
 - `docs/KOTOR-GODOT-PROOF.md` — exact Endar Spire proof and limitations.
+- `docs/KOTOR-RUNTIME-CONFIGURATION.md` — policy, source, evidence, and O(N)
+  monitoring boundaries.
 
 ## Legal
 
