@@ -31,6 +31,10 @@ param(
     [double]$CharacterHoldSeconds = 3,
     [ValidateRange(0, 30)]
     [double]$GameplayHoldSeconds = 0,
+    [ValidateRange(0, 600)]
+    [int]$PlayableStartupFrames = 12,
+    [ValidateRange(0, 600)]
+    [int]$AlienageWarmupFrames = 24,
     [string]$DialogueChoices = '',
     [string]$DialogueChoiceHoldSeconds = '',
     [switch]$RunLocomotionSmoke,
@@ -143,6 +147,8 @@ $variables = @(
     'OPENDAO_ACCEPTANCE_MENU_HOLD_FRAMES'
     'OPENDAO_ACCEPTANCE_CHARACTER_HOLD_FRAMES'
     'OPENDAO_ACCEPTANCE_GAMEPLAY_HOLD_FRAMES'
+    'OPENDAO_ACCEPTANCE_PLAYABLE_STARTUP_FRAMES'
+    'OPENDAO_ACCEPTANCE_ALIENAGE_WARMUP_FRAMES'
 )
 $previous = @{}
 foreach ($name in $variables) {
@@ -192,6 +198,8 @@ try {
     }
     if ($RunPlayableSmoke) {
         $settings.OPENDAO_CITY_ELF_PLAYABLE_SMOKE = '1'
+        $settings.OPENDAO_ACCEPTANCE_PLAYABLE_STARTUP_FRAMES = [string]$PlayableStartupFrames
+        $settings.OPENDAO_ACCEPTANCE_ALIENAGE_WARMUP_FRAMES = [string]$AlienageWarmupFrames
     }
     if (-not [string]::IsNullOrWhiteSpace($OutputVideo)) {
         $settings.OPENDAO_ACCEPTANCE_MENU_HOLD_FRAMES = [string][Math]::Round($MenuHoldSeconds * $FramesPerSecond)
@@ -290,6 +298,7 @@ try {
     }
     if ($RunPlayableSmoke) {
         $requirements.playableCityElf = 'OPENDAO_CITY_ELF_PLAYABLE_SMOKE status=pass crate_use=pass transition=pass'
+        $requirements.alienageGameplay = 'OPENDAO_CITY_ELF_EXTERIOR_GAMEPLAY status=pass area=bec100ar_elven_alienage waypoint=bec100wp_from_home locomotion=pass player_control=1'
     }
     if ($route.cutscene) {
         $requirements.cutscene = "OPENDAO_CUTSCENE_ACCEPTANCE status=pass id=$($route.cutscene)"
