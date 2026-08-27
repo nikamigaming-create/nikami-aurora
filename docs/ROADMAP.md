@@ -3,6 +3,12 @@
 Progress is measured by evidence gates, not by file-count or launch-only
 claims.
 
+The canonical delivery target and claim boundary are defined in
+[`DUAL-PROFILE-HELLO-WORLD.md`](DUAL-PROFILE-HELLO-WORLD.md). The OpenDAO
+migration inventory is maintained in
+[`OPENDAO-HARVEST.md`](OPENDAO-HARVEST.md). If an older gate description
+conflicts with those contracts, the canonical contracts control.
+
 ## Gate 0 — repository baseline
 
 - Source-only build and synthetic acceptance pass on Windows and Linux.
@@ -35,18 +41,41 @@ claims.
 - TLK-backed dialogue graphs, plot state, party state, inventory, and saves.
 - Complete a deterministic dialogue and scripted transition in `end_m01aa`.
 
-## Gate 5 — opening completion
+## Gate 5 — KOTOR flat opening completion
 
-- Complete the Endar Spire opening with evidence-backed gameplay behavior.
-- Add desktop, controller, and OpenXR acceptance paths.
-- Ship a self-contained launcher whose only required user input is the legally
-  installed game folder; importer tooling remains internal to the release.
+- Replace PyKotor, MDLOps, and the Python conversion stack with public
+  Aurora-owned Odyssey readers and deterministic payload generation.
+- Run the game-native startup/menu/New Game path into the Endar Spire.
+- Replace showcase/test progression with a human-driven route.
+- Complete real first combat, level-1 state, save/Continue, desktop keyboard/
+  mouse and controller behavior, and matched retail acceptance.
 
-## Gate 6 — dual-profile proof
+## Gate 6 — DAO flat opening completion
 
-- Migrate generic OpenDAO services without importing DAO assumptions into Core.
-- Boot one KOTOR and one Dragon Age area through the same runtime executable.
-- Keep format, script ABI, rules, and presentation parity independently gated.
+- Harvest provenance-clean OpenDAO components according to the migration ledger.
+- Replace the private/Haven importer boundary with a public Aurora-owned Eclipse
+  importer and deterministic payload generation.
+- Run the DAO-native startup/menu/New Game/character-creation path into the
+  selected Dalish origin rather than the old Redcliffe shortcut.
+- Complete its opening cinematic/dialogue, real level-1 action, save/Continue,
+  desktop input, and matched retail acceptance.
+
+## Gate 7 — dual-profile desktop Hello World release
+
+- One self-contained launcher selects KOTOR or DAO, validates a legally owned
+  installation, performs a staged atomic local import, and plays the accepted
+  route.
+- A clean machine needs no shell, repository, Python, private importer, Haven
+  Tools, PyKotor, MDLOps, xoreos, or external game-specific converter.
+- Package-content, dependency/license, performance, fresh-import, save/Continue,
+  and matched-retail gates pass for both profiles from merged `main`.
+- Publish only the accurately bounded opening-slice claim.
+
+## Gate 8 — post-desktop expansion
+
+- Resume physical OpenXR acceptance only after both flat routes pass.
+- Expand KOTOR and DAO slice by slice toward complete campaign coverage while
+  preserving independent profile gates.
 
 KOTOR II, Jade Empire, Dragon Age II, Neverwinter Nights, Neverwinter Nights 2,
-and The Witcher are expansion profiles, not Gate 0 promises.
+and The Witcher remain expansion profiles, not Hello World promises.

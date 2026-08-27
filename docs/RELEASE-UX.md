@@ -22,14 +22,22 @@ developer shell:
 - self-contained Windows executable and Godot runtime;
 - game/profile picker and native folder chooser;
 - install validation before import;
-- bundled or natively replaced importer dependencies;
+- public Aurora-owned import libraries built into the release;
 - visible import progress, cancellation, and recoverable errors;
 - per-game private cache with deterministic invalidation;
 - Play, cache rebuild, and diagnostic-log actions;
 - no proprietary assets in the package, repository, or telemetry.
 
+The import path must not download, clone, or execute Haven Tools, a private
+importer, PyKotor, MDLOps, xoreos, or another external game-specific RE or
+conversion tool. Godot/.NET and ordinary audited rendering or asset libraries
+remain permitted under the dependency policy in
+[`DUAL-PROFILE-HELLO-WORLD.md`](DUAL-PROFILE-HELLO-WORLD.md). Existing proof
+scripts are migration scaffolding, not components to bundle into the product.
+
 The checked-in PowerShell and Python entry points are development harnesses for
-the same pipeline. They are not the intended release interface.
+the current proof. They are not the intended release interface and cannot close
+the first-party fresh-import gate.
 
 ## Distribution gates
 
