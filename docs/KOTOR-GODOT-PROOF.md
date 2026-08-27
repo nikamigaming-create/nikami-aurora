@@ -133,7 +133,7 @@ gameplay frame:
   -CaptureAndExit
 ```
 
-After every final gate passes, create the one validated local VR-path MP4:
+After every final gate passes, create the one validated local desktop MP4:
 
 ```powershell
 ./scripts/Export-KotorShowcaseVideo.ps1 `
@@ -141,8 +141,10 @@ After every final gate passes, create the one validated local VR-path MP4:
 ```
 
 The wrapper refuses to overwrite a movie, records through Godot Movie Maker in
-a checked temporary directory, validates active XR plus audio/video streams,
-then removes the intermediate and leaves only the requested MP4.
+a checked temporary directory, validates route telemetry plus audio/video
+streams, then removes the intermediate and leaves only the requested MP4.
+Pass `-Presentation OpenXRSimulator` only for the separate simulator/spectator
+acceptance recording after the desktop route is accepted.
 
 ## Honest boundary
 
