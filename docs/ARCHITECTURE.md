@@ -3,6 +3,12 @@
 Nikami Aurora is one runtime with explicit game profiles. Similar ancestry is
 not treated as binary or behavioral identity.
 
+The first product proof is governed by
+[`DUAL-PROFILE-HELLO-WORLD.md`](DUAL-PROFILE-HELLO-WORLD.md). Shared
+architecture is accepted only when the KOTOR and DAO routes both exercise it;
+the prior OpenDAO tree is migrated through
+[`OPENDAO-HARVEST.md`](OPENDAO-HARVEST.md), not merged wholesale.
+
 ## Dependency direction
 
 ```text
@@ -20,6 +26,8 @@ Profiles.Kotor        Profiles.DragonAgeOrigins
 - A profile may depend on `Core`; profiles never depend on each other.
 - Runtime and tooling discover profiles through `IGameProfile`.
 - Importers consume owned installations and write ignored local bundles.
+- Accepted release importers are Aurora-owned public source and never invoke an
+  external game-specific RE/conversion tool or private importer.
 - Godot-facing nodes remain adapters; simulation and compatibility rules stay
   in ordinary C# services.
 - Desktop and OpenXR frontends emit the same KOTOR profile intent. KOTOR

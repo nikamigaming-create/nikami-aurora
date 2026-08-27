@@ -5,6 +5,13 @@ installed Aurora-family games and their Odyssey and Eclipse descendants.
 The first two profiles are *Star Wars: Knights of the Old Republic* and
 *Dragon Age: Origins*.
 
+The canonical first-release target is the
+[dual-profile desktop Hello World](docs/DUAL-PROFILE-HELLO-WORLD.md): one
+retail-matched opening route for KOTOR and one for Dragon Age: Origins, both
+running through the same asset-free launcher and public first-party import
+pipeline. Flat desktop completion is the product gate; additional VR work is
+parked until both routes pass.
+
 The project is at early vertical-slice stage. It can identify a target
 installation, validate profile-specific source markers, produce a SHA-256-bound
 target manifest, import the real KOTOR Endar Spire room geometry and textures,
@@ -151,10 +158,12 @@ The end-user contract is deliberately small:
 3. Aurora validates that installation and creates a machine-local cache.
 4. Press Play; later launches reuse or incrementally refresh that cache.
 
-Python, MDLOps, the Godot editor, repository checkout, and command-line import
-steps are development dependencies. They must be bundled or replaced inside a
-release and must not become end-user setup requirements. Game assets are never
-included in Nikami Aurora releases or uploaded from the user's machine. See
+Python, PyKotor, MDLOps, NumPy, Pillow, trimesh, the Godot editor, repository
+checkout, and command-line import steps are transitional proof dependencies.
+They must be replaced by Aurora-owned public import code before the dual-profile
+release and must never become end-user setup or downloaded tool requirements.
+Game assets are never included in Nikami Aurora releases or uploaded from the
+user's machine. See
 [`docs/RELEASE-UX.md`](docs/RELEASE-UX.md) for the packaging gate.
 
 ## Quick start
@@ -189,6 +198,10 @@ The first verified development target is the Steam KOTOR 1.0.3.0 executable:
 `34E6D971C034222A417995D8E1E8FDD9F8781795C9C289BD86C499A439F34C88`.
 
 ## Import and run the Endar Spire Godot proof
+
+The following is the current development-proof path, not the accepted release
+dependency envelope. The replacement work is tracked in the
+[dual-profile contract](docs/DUAL-PROFILE-HELLO-WORLD.md).
 
 Install the pinned importer dependencies into Python 3.12, then generate the
 ignored local bundle from a legally installed KOTOR copy:
@@ -230,7 +243,11 @@ assembly is implemented.
 - `tests/Nikami.Aurora.Acceptance` — dependency-free synthetic acceptance.
 - `docs/ARCHITECTURE.md` — dependency and profile boundaries.
 - `docs/CLEAN_ROOM.md` — evidence and implementation separation.
-- `docs/ROADMAP.md` — KOTOR-first delivery gates and DAO migration.
+- `docs/ROADMAP.md` — dual-profile desktop delivery and expansion gates.
+- `docs/DUAL-PROFILE-HELLO-WORLD.md` — canonical two-game desktop product,
+  architecture, dependency, parity, and release contract.
+- `docs/OPENDAO-HARVEST.md` — controlled migration ledger for the prior OpenDAO
+  implementation and evidence.
 - `docs/KOTOR-GODOT-PROOF.md` — exact Endar Spire proof and limitations.
 - `docs/KOTOR-RUNTIME-CONFIGURATION.md` — policy, source, evidence, and O(N)
   monitoring boundaries.
