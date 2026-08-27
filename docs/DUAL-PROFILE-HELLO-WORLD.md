@@ -8,6 +8,10 @@ roadmap, issue, pull request, or later conversation conflicts with it, this
 document controls until it is changed in a reviewed commit. A scope change must
 update this file and explain which acceptance gate changed and why.
 
+The active checkpoint status and repair order are maintained in
+[`DUAL-PROFILE-PARITY-CLOSURE.md`](DUAL-PROFILE-PARITY-CLOSURE.md). A proof
+capture cannot override a red row in that ledger.
+
 ## Product decision
 
 Nikami Aurora will first prove one complete, retail-matched desktop opening

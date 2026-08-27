@@ -73,7 +73,7 @@ def load_runtime_configuration(path: Path) -> dict[str, Any]:
     configuration = json.loads(payload)
     if not isinstance(configuration, dict):
         raise RuntimeError("KOTOR runtime configuration must be a JSON object")
-    if configuration.get("schema") != "nikami-aurora-kotor-runtime-config-v1":
+    if configuration.get("schema") != "nikami-aurora-kotor-runtime-config-v2":
         raise RuntimeError("Unsupported KOTOR runtime configuration schema")
 
     def require_object(parent: dict[str, Any], name: str) -> dict[str, Any]:
@@ -159,6 +159,22 @@ def load_runtime_configuration(path: Path) -> dict[str, Any]:
     equipment_row = require_object(equipment, "row")
     for box_name in ("icon", "name"):
         require_box(equipment_row, box_name)
+    first_encounter = require_object(presentation, "firstEncounter")
+    require_number(first_encounter, "fallbackMuzzleHeightMeters", 0.0, 10.0)
+    require_number(first_encounter, "fallbackTargetHeightMeters", 0.0, 10.0)
+    require_number(first_encounter, "projectileLengthMeters", 0.0001, 10.0)
+    require_number(first_encounter, "projectileSpeedMetersPerSecond", 0.0001, 1000.0)
+    require_number(first_encounter, "minimumProjectileTravelSeconds", 0.0001, 10.0)
+    require_number(first_encounter, "muzzleFlareScale", 0.0001, 1.0)
+    require_number(first_encounter, "impactSizeMeters", 0.0001, 10.0)
+    require_number(first_encounter, "impactLifetimeSeconds", 0.0001, 10.0)
+    require_number(first_encounter, "shotVolumeDb", -100.0, 24.0)
+    require_number(first_encounter, "impactVolumeDb", -100.0, 24.0)
+    for color_name in (
+            "projectileColor", "muzzleColor", "muzzleFlareColor", "impactColor"):
+        color = require_object(first_encounter, color_name)
+        for channel in ("red", "green", "blue"):
+            require_number(color, channel, 0.0, 1.0)
 
     automation = require_object(configuration, "automation")
     milestone_names = (

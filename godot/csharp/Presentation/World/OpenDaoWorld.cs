@@ -10,6 +10,7 @@ using OpenDAO.Domain.Sessions;
 using OpenDAO.Domain.Story;
 using OpenDAO.Domain.World;
 using OpenDAO.Infrastructure.World;
+using OpenDAO.Infrastructure.Configuration;
 using OpenDAO.Launcher;
 using OpenDAO.Presentation.Cinematics;
 using OpenDAO.Presentation.Player;
@@ -26,6 +27,7 @@ public partial class OpenDaoWorld : Node3D
     private const string GameplayHoldFramesVariable = "OPENDAO_ACCEPTANCE_GAMEPLAY_HOLD_FRAMES";
 
     private DaoRuntimeServices? services;
+    private DaoPresentationConfiguration presentationConfiguration = null!;
     private CancellationTokenSource? lifetime;
     private WorldProfile? profile;
     private CharacterProfile character = CharacterProfile.Default;
@@ -45,6 +47,7 @@ public partial class OpenDaoWorld : Node3D
         try
         {
             services = new DaoRuntimeServices();
+            presentationConfiguration = DaoPresentationConfiguration.Load();
             lifetime = new CancellationTokenSource();
             profile = services.GetRequired<IWorldProfileProvider>().Load();
             loadingPresentation = DaoLoadingPresentation.Show(
@@ -171,7 +174,7 @@ public partial class OpenDaoWorld : Node3D
             RestoreSession();
         if (!player.SnapToWalkableGround(player.GlobalPosition, $"world-load:{profile.AreaId}", false))
             GD.PushWarning($"Player spawn has no walkable surface in {profile.AreaId}: {player.GlobalPosition}");
-        player.ResetThirdPersonView();
+        player.ConfigureThirdPersonView(presentationConfiguration.GameplayCamera);
         player.SetAuthoredNavigation(result.Navigation);
         ConfigureLighting(result.AuthoredLights, result.Lighting);
         if (result.Lighting is not null)
@@ -386,7 +389,6 @@ public partial class OpenDaoWorld : Node3D
 
     private void ConfigureLighting(int authoredLights, AuthoredLightingProfile? lighting)
     {
-        player.SetThirdPersonDistance(authoredLights > 0 ? 1.35f : 4.2f);
         if (authoredLights <= 0) return;
         var sunCoefficients = lighting?.SunColor ?? Array.Empty<float>();
         var hasSun = HasRgbEnergy(sunCoefficients);
