@@ -25,6 +25,16 @@ walkmeshes and the first authored lockdown door is materialized and interactive.
 Validated NCS contracts now execute the opening dialogue-door and plot-XP
 branches. Full combat and general script execution remain active milestones.
 
+The same Godot project and neutral boot dispatcher now also run a bounded DAO
+development slice: female City Elf rogue Kallian, preset 4, from the native DAO
+main menu and character-creation screens through the owned Alienage loading
+art, `start_wake`, the Shianni dialogue, the native HUD, and controllable room
+movement. That flow uses public code harvested from OpenDAO commit `404bbaa`
+and reads all retail presentation from the selected installation or an ignored
+machine-local cache. It is a renderable automated integration proof, not yet a
+release path: Aurora still needs its own fresh DAO importer, human-driven route,
+combat/save completion, and matched-retail parity acceptance.
+
 The current player slice materializes a deterministic chargen player from the
 installed appearance/portrait tables, drives source idle/walk/run clips, and
 shares one player/cinematic camera authority between desktop SpringArm and
@@ -237,9 +247,13 @@ assembly is implemented.
 - `src/Nikami.Aurora.Profiles.Kotor` — Odyssey/KOTOR profile.
 - `src/Nikami.Aurora.Profiles.DragonAgeOrigins` — Eclipse/DAO profile.
 - `src/Nikami.Aurora.Cli` — deterministic profile and target tooling.
-- `godot` — shared Godot runtime and the active KOTOR vertical slice.
+- `godot` — shared Godot runtime and active KOTOR/DAO vertical slices.
+- `godot/config/dao` — public DAO cinematic and loading-presentation policy;
+  no retail payloads.
 - `config/kotor-runtime.json` — public KOTOR profile policy and guardrails.
 - `scripts` — owned-install import and launch commands.
+- `scripts/Run-DaoCityElfAcceptance.ps1` — fail-closed transitional City Elf
+  integration/video gate using external ignored OpenDAO cache roots.
 - `tests/Nikami.Aurora.Acceptance` — dependency-free synthetic acceptance.
 - `docs/ARCHITECTURE.md` — dependency and profile boundaries.
 - `docs/CLEAN_ROOM.md` — evidence and implementation separation.

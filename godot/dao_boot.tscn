@@ -1,0 +1,622 @@
+[gd_scene load_steps=13 format=3]
+
+[ext_resource type="Script" path="res://csharp/Launcher/Launcher.cs" id="1_launcher"]
+[ext_resource type="Script" path="res://csharp/Launcher/LauncherTextureButton.cs" id="2_button"]
+[ext_resource type="Script" path="res://csharp/Launcher/LauncherIconButton.cs" id="3_icon"]
+[ext_resource type="Script" path="res://csharp/Intro/IntroSequenceController.cs" id="4_intro"]
+[ext_resource type="PackedScene" path="res://dao_main_menu.tscn" id="6_start_menu"]
+
+[sub_resource type="SystemFont" id="SystemFont_launcher"]
+font_names = PackedStringArray("Verdana", "Arial")
+
+[node name="Boot" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_launcher")
+
+[node name="FallbackBackdrop" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.007, 0.011, 0.012, 1)
+mouse_filter = 2
+
+[node name="LauncherArtwork" type="TextureRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="MusicButton" type="Button" parent="."]
+layout_mode = 0
+offset_left = 651.0
+offset_top = 7.0
+offset_right = 674.0
+offset_bottom = 34.0
+focus_mode = 1
+disabled = true
+tooltip_text = "Mute music"
+flat = true
+script = ExtResource("3_icon")
+
+[node name="Artwork" type="TextureRect" parent="MusicButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="FallbackGlyph" type="Label" parent="MusicButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.663, 0.706, 0.604, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 1)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 17
+text = "♪"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="MinimizeButton" type="Button" parent="."]
+layout_mode = 0
+offset_left = 675.0
+offset_top = 7.0
+offset_right = 698.0
+offset_bottom = 34.0
+focus_mode = 1
+mouse_default_cursor_shape = 2
+tooltip_text = "Minimize"
+flat = true
+script = ExtResource("3_icon")
+
+[node name="Artwork" type="TextureRect" parent="MinimizeButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="FallbackGlyph" type="Label" parent="MinimizeButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.663, 0.706, 0.604, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 1)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 18
+text = "−"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="CloseButton" type="Button" parent="."]
+layout_mode = 0
+offset_left = 699.0
+offset_top = 7.0
+offset_right = 722.0
+offset_bottom = 34.0
+focus_mode = 1
+mouse_default_cursor_shape = 2
+tooltip_text = "Close"
+flat = true
+script = ExtResource("3_icon")
+
+[node name="Artwork" type="TextureRect" parent="CloseButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="FallbackGlyph" type="Label" parent="CloseButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.663, 0.706, 0.604, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 1)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 17
+text = "×"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="InstallationButton" type="Button" parent="."]
+layout_mode = 0
+offset_left = 33.0
+offset_top = 123.0
+offset_right = 367.0
+offset_bottom = 163.0
+focus_mode = 1
+mouse_default_cursor_shape = 2
+tooltip_text = "Choose the Dragon Age: Origins installation"
+flat = true
+script = ExtResource("2_button")
+
+[node name="Fallback" type="ColorRect" parent="InstallationButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.043, 0.063, 0.067, 0.72)
+
+[node name="Artwork" type="TextureRect" parent="InstallationButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="Caption" type="Label" parent="InstallationButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.804, 0.855, 0.973, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.92)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 16
+text = "Select game location"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="SupportButton" type="Button" parent="."]
+layout_mode = 0
+offset_left = 33.0
+offset_top = 164.0
+offset_right = 367.0
+offset_bottom = 204.0
+focus_mode = 1
+mouse_default_cursor_shape = 2
+tooltip_text = "Coming soon"
+flat = true
+script = ExtResource("2_button")
+
+[node name="Fallback" type="ColorRect" parent="SupportButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.043, 0.063, 0.067, 0.72)
+
+[node name="Artwork" type="TextureRect" parent="SupportButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="Caption" type="Label" parent="SupportButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.804, 0.855, 0.973, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.92)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 16
+text = "Support"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="CreditsButton" type="Button" parent="."]
+layout_mode = 0
+offset_left = 33.0
+offset_top = 204.0
+offset_right = 367.0
+offset_bottom = 244.0
+focus_mode = 1
+mouse_default_cursor_shape = 2
+tooltip_text = "View the project credits"
+flat = true
+script = ExtResource("2_button")
+
+[node name="Fallback" type="ColorRect" parent="CreditsButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.043, 0.063, 0.067, 0.72)
+
+[node name="Artwork" type="TextureRect" parent="CreditsButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="Caption" type="Label" parent="CreditsButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.804, 0.855, 0.973, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.92)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 16
+text = "Credits"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="SettingsButton" type="Button" parent="."]
+layout_mode = 0
+offset_left = 367.0
+offset_top = 123.0
+offset_right = 701.0
+offset_bottom = 163.0
+focus_mode = 1
+mouse_default_cursor_shape = 2
+tooltip_text = "Select DAOrigins.exe from your installation"
+flat = true
+script = ExtResource("2_button")
+
+[node name="Fallback" type="ColorRect" parent="SettingsButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.043, 0.063, 0.067, 0.72)
+
+[node name="Artwork" type="TextureRect" parent="SettingsButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="Caption" type="Label" parent="SettingsButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.804, 0.855, 0.973, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.92)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 16
+text = "Select DAOrigins.exe"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="AboutButton" type="Button" parent="."]
+layout_mode = 0
+offset_left = 367.0
+offset_top = 164.0
+offset_right = 701.0
+offset_bottom = 204.0
+focus_mode = 1
+mouse_default_cursor_shape = 2
+tooltip_text = "About this project"
+flat = true
+script = ExtResource("2_button")
+
+[node name="Fallback" type="ColorRect" parent="AboutButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.043, 0.063, 0.067, 0.72)
+
+[node name="Artwork" type="TextureRect" parent="AboutButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="Caption" type="Label" parent="AboutButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.804, 0.855, 0.973, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.92)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 16
+text = "About"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="DocumentationButton" type="Button" parent="."]
+layout_mode = 0
+offset_left = 367.0
+offset_top = 204.0
+offset_right = 701.0
+offset_bottom = 244.0
+focus_mode = 1
+mouse_default_cursor_shape = 2
+tooltip_text = "Coming soon"
+flat = true
+script = ExtResource("2_button")
+
+[node name="Fallback" type="ColorRect" parent="DocumentationButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.043, 0.063, 0.067, 0.72)
+
+[node name="Artwork" type="TextureRect" parent="DocumentationButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="Caption" type="Label" parent="DocumentationButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.804, 0.855, 0.973, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.92)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 16
+text = "Documentation"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="PlayButton" type="Button" parent="."]
+layout_mode = 0
+offset_left = 184.0
+offset_top = 287.0
+offset_right = 550.0
+offset_bottom = 327.0
+focus_mode = 1
+disabled = true
+tooltip_text = "Start OpenDAO"
+flat = true
+script = ExtResource("2_button")
+
+[node name="Fallback" type="ColorRect" parent="PlayButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.043, 0.063, 0.067, 0.72)
+
+[node name="Artwork" type="TextureRect" parent="PlayButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="Caption" type="Label" parent="PlayButton"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.804, 0.855, 0.973, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.92)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 16
+text = "Play"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Status" type="Label" parent="."]
+layout_mode = 0
+offset_left = 92.0
+offset_top = 337.0
+offset_right = 642.0
+offset_bottom = 369.0
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.804, 0.855, 0.973, 0.9)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 1)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_fonts/font = SubResource("SystemFont_launcher")
+theme_override_font_sizes/font_size = 12
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 2
+
+[node name="ClickAudio" type="AudioStreamPlayer" parent="."]
+
+[node name="FolderDialog" type="FileDialog" parent="."]
+title = "Select DAOrigins.exe"
+size = Vector2i(900, 620)
+ok_button_text = "Use This Installation"
+
+[node name="StartMenu" parent="." instance=ExtResource("6_start_menu")]
+visible = false
+z_index = 50
+
+[node name="IntroSequence" type="Control" parent="."]
+visible = false
+z_index = 100
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+script = ExtResource("4_intro")
+
+[node name="Backdrop" type="ColorRect" parent="IntroSequence"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 1)
+
+[node name="MovieSurface" type="TextureRect" parent="IntroSequence"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="MovieAudio" type="AudioStreamPlayer" parent="IntroSequence"]
+
+[node name="MovieFallback" type="Control" parent="IntroSequence"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Content" type="VBoxContainer" parent="IntroSequence/MovieFallback"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -280.0
+offset_top = -65.0
+offset_right = 280.0
+offset_bottom = 65.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 16
+
+[node name="MovieTitle" type="Label" parent="IntroSequence/MovieFallback/Content"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.84, 0.84, 0.84, 1)
+theme_override_font_sizes/font_size = 22
+text = "INTRO MOVIE"
+horizontal_alignment = 1
+
+[node name="MovieDetail" type="Label" parent="IntroSequence/MovieFallback/Content"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.36, 0.38, 0.4, 1)
+theme_override_font_sizes/font_size = 11
+text = "Movie playback capability is being checked."
+horizontal_alignment = 1
+autowrap_mode = 2

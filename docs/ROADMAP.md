@@ -56,7 +56,7 @@ conflicts with those contracts, the canonical contracts control.
 - Replace the private/Haven importer boundary with a public Aurora-owned Eclipse
   importer and deterministic payload generation.
 - Run the DAO-native startup/menu/New Game/character-creation path into the
-  selected Dalish origin rather than the old Redcliffe shortcut.
+  selected female City Elf origin rather than the old Redcliffe shortcut.
 - Complete its opening cinematic/dialogue, real level-1 action, save/Continue,
   desktop input, and matched retail acceptance.
 

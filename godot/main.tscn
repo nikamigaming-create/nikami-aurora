@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3]
 
-[ext_resource type="Script" path="res://csharp/KotorModuleBoot.cs" id="1_boot"]
+[ext_resource type="Script" path="res://csharp/AuroraRuntimeBoot.cs" id="1_boot"]
 
-[node name="NikamiAurora" type="Node3D"]
+[node name="NikamiAurora" type="Node"]
 script = ExtResource("1_boot")

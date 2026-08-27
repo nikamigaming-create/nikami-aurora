@@ -1,0 +1,77 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://csharp/MainMenu/CharacterCreationPanel.cs" id="1_creator"]
+
+[node name="CharacterCreation" type="Control"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+clip_contents = true
+script = ExtResource("1_creator")
+
+[node name="Letterbox" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 1)
+
+[node name="Stage" type="Control" parent="."]
+custom_minimum_size = Vector2(1024, 768)
+layout_mode = 0
+offset_right = 1024.0
+offset_bottom = 768.0
+mouse_filter = 1
+clip_contents = true
+
+[node name="Background" type="TextureRect" parent="Stage"]
+layout_mode = 0
+offset_right = 1024.0
+offset_bottom = 768.0
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+
+[node name="Shade" type="ColorRect" parent="Stage"]
+layout_mode = 0
+offset_right = 1024.0
+offset_bottom = 768.0
+mouse_filter = 2
+color = Color(0, 0, 0, 0.18)
+
+[node name="PreviewHost" type="Control" parent="Stage"]
+layout_mode = 0
+offset_left = 18.0
+offset_top = 8.0
+offset_right = 550.0
+offset_bottom = 768.0
+mouse_filter = 2
+clip_contents = true
+
+[node name="IdentityStage" type="Control" parent="Stage"]
+layout_mode = 0
+offset_right = 1024.0
+offset_bottom = 768.0
+
+[node name="AppearanceStage" type="Control" parent="Stage"]
+visible = false
+layout_mode = 0
+offset_right = 1024.0
+offset_bottom = 768.0
+
+[node name="Status" type="Label" parent="Stage"]
+layout_mode = 0
+offset_left = 548.0
+offset_top = 672.0
+offset_right = 995.0
+offset_bottom = 704.0
+theme_override_font_sizes/font_size = 14
+horizontal_alignment = 2
+vertical_alignment = 1
+autowrap_mode = 3

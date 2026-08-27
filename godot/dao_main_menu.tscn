@@ -1,0 +1,895 @@
+[gd_scene load_steps=14 format=3 uid="uid://btn2cic48wabt"]
+
+[ext_resource type="Script" path="res://csharp/MainMenu/MainMenu.cs" id="1_main_menu"]
+[ext_resource type="Script" path="res://csharp/MainMenu/WorldMapCanvas.cs" id="2_world_map"]
+[ext_resource type="PackedScene" path="res://dao_character_creation.tscn" id="3_character_creation"]
+
+[sub_resource type="CanvasItemMaterial" id="CanvasItemMaterial_multiply"]
+blend_mode = 3
+
+[sub_resource type="Shader" id="Shader_shine"]
+code = "shader_type canvas_item;
+
+uniform float sweep = -0.4;
+uniform float band = 0.16;
+uniform float strength = 0.85;
+
+void fragment() {
+	vec4 base = texture(TEXTURE, UV);
+	float shine = smoothstep(band, 0.0, abs(UV.x - sweep));
+	COLOR = vec4(base.rgb + vec3(shine * base.a * strength), base.a);
+}
+"
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_shine"]
+shader = SubResource("Shader_shine")
+shader_parameter/sweep = -0.4
+shader_parameter/band = 0.16
+shader_parameter/strength = 0.85
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_drop"]
+bg_color = Color(0, 0, 0, 1)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_browser"]
+content_margin_left = 18.0
+content_margin_top = 14.0
+content_margin_right = 18.0
+content_margin_bottom = 14.0
+bg_color = Color(0.043, 0.035, 0.031, 0.925)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.42, 0.35, 0.24, 0.7)
+
+[sub_resource type="Animation" id="Animation_drift"]
+resource_name = "drift"
+length = 60.0
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("Scenery/MistFar:position:x")
+tracks/0/interp = 2
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [161.5, 201.5, 161.5, 121.5, 161.5, 201.5, 161.5, 121.5, 161.5, 201.5, 161.5, 121.5, 161.5]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("Scenery/MistMid:position:x")
+tracks/1/interp = 2
+tracks/1/loop_wrap = true
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 7.5, 15, 22.5, 30, 37.5, 45, 52.5, 60),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [358.9, 372.9, 358.9, 344.9, 358.9, 372.9, 358.9, 344.9, 358.9]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("Scenery/MistNear:position:x")
+tracks/2/interp = 2
+tracks/2/loop_wrap = true
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 3.75, 7.5, 11.25, 15, 18.75, 22.5, 26.25, 30, 33.75, 37.5, 41.25, 45, 48.75, 52.5, 56.25, 60),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [-102.8, -80.8, -102.8, -124.8, -102.8, -80.8, -102.8, -124.8, -102.8, -80.8, -102.8, -124.8, -102.8, -80.8, -102.8, -124.8, -102.8]
+}
+tracks/3/type = "value"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath("Scenery/Ridgeline:position:x")
+tracks/3/interp = 2
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0, 15, 30, 45, 60),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1),
+"update": 0,
+"values": [-186.2, -178.2, -186.2, -194.2, -186.2]
+}
+tracks/4/type = "value"
+tracks/4/imported = false
+tracks/4/enabled = true
+tracks/4/path = NodePath("Frame/Wordmark:material:shader_parameter/sweep")
+tracks/4/interp = 1
+tracks/4/loop_wrap = true
+tracks/4/keys = {
+"times": PackedFloat32Array(0, 1.2, 1.25, 12, 13.2, 13.25, 24, 25.2, 25.25, 36, 37.2, 37.25, 48, 49.2, 49.25, 60),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [-0.4, 1.4, -0.4, -0.4, 1.4, -0.4, -0.4, 1.4, -0.4, -0.4, 1.4, -0.4, -0.4, 1.4, -0.4, -0.4]
+}
+
+[sub_resource type="Animation" id="Animation_ambience"]
+resource_name = "ambience"
+length = 18.733
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("Scenery/Haze:modulate:a")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 8, 8.17, 8.33, 8.5, 8.67, 12.5, 12.67, 15.17, 15.33, 16.67, 16.83, 17.83, 18, 18.733),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [0.371, 0.309, 0.309, 0.621, 0.668, 0.488, 0.488, 0.477, 0.008, 0.043, 0.738, 0.18, 0.781, 0.379, 0.371]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("Scenery/BloodDrop:position")
+tracks/1/interp = 1
+tracks/1/loop_wrap = true
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 1.6, 3.067, 3.2, 3.733, 3.867, 4.667, 4.8, 5.4, 5.483, 5.533, 5.6, 5.633, 5.667, 5.717, 5.733, 6.267, 6.533, 6.55, 18.733),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(377.9, 469.7), Vector2(381, 474.5), Vector2(383.8, 478.9), Vector2(384.3, 479.3), Vector2(389.7, 481.4), Vector2(390.9, 481.9), Vector2(388.1, 483.3), Vector2(387.7, 483.5), Vector2(387.5, 482.8), Vector2(387.5, 482.7), Vector2(387.4, 486), Vector2(387.3, 491), Vector2(387.2, 493.3), Vector2(387.2, 504.4), Vector2(387.1, 519.4), Vector2(387.1, 524.5), Vector2(387.1, 524.5), Vector2(387.1, 656.2), Vector2(387.1, 660), Vector2(377.9, 469.7)]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("Scenery/BloodDrop:size")
+tracks/2/interp = 1
+tracks/2/loop_wrap = true
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 1.6, 3.067, 3.2, 3.733, 3.867, 4.667, 4.8, 5.4, 5.483, 5.533, 5.6, 5.633, 5.667, 5.717, 5.733, 6.267, 6.533, 6.55, 18.733),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(5.1, 5.1), Vector2(4.9, 4.7), Vector2(4.9, 4.3), Vector2(4.8, 4.3), Vector2(3.5, 4.1), Vector2(3.2, 4), Vector2(3.5, 4.1), Vector2(3.6, 4.2), Vector2(3.5, 7), Vector2(3.6, 7.4), Vector2(3.3, 8), Vector2(3.3, 10.9), Vector2(3.6, 12.7), Vector2(3.3, 8.6), Vector2(3.4, 4.9), Vector2(3.7, 3.7), Vector2(3.7, 3.7), Vector2(3.7, 3.7), Vector2(3.7, 3.7), Vector2(5.1, 5.1)]
+}
+tracks/3/type = "value"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath("Scenery/BloodDrop:modulate:a")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0, 6.533, 6.55, 18.733),
+"transitions": PackedFloat32Array(1, 1, 1, 1),
+"update": 0,
+"values": [0.7, 0.7, 0.0, 0.0]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_menu"]
+_data = {
+&"ambience": SubResource("Animation_ambience"),
+&"drift": SubResource("Animation_drift")
+}
+
+[sub_resource type="Animation" id="Animation_sweep"]
+resource_name = "sweep"
+length = 12.5
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("RuleA:position:x")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 1.67, 3.33, 4.5, 6.5, 12.5),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [632.0, 460.0, 296.0, 294.0, 292.0, 632.0]
+}
+tracks/1/type = "value"
+tracks/1/imported = false
+tracks/1/enabled = true
+tracks/1/path = NodePath("RuleA:modulate:a")
+tracks/1/interp = 1
+tracks/1/loop_wrap = true
+tracks/1/keys = {
+"times": PackedFloat32Array(0, 1.67, 3.33, 4.5, 6.5, 12.5),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [0.05, 0.54, 0.98, 0.66, 0.0, 0.0]
+}
+tracks/2/type = "value"
+tracks/2/imported = false
+tracks/2/enabled = true
+tracks/2/path = NodePath("RuleB:position:x")
+tracks/2/interp = 1
+tracks/2/loop_wrap = true
+tracks/2/keys = {
+"times": PackedFloat32Array(0, 1.67, 3.33, 4.5, 6.5, 12.5),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [949.0, 647.0, 375.0, 325.0, 245.0, 949.0]
+}
+tracks/3/type = "value"
+tracks/3/imported = false
+tracks/3/enabled = true
+tracks/3/path = NodePath("RuleB:modulate:a")
+tracks/3/interp = 1
+tracks/3/loop_wrap = true
+tracks/3/keys = {
+"times": PackedFloat32Array(0, 1.67, 3.33, 4.5, 6.5, 12.5),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [0.05, 0.54, 0.98, 0.66, 0.0, 0.0]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_sweep"]
+_data = {
+&"sweep": SubResource("Animation_sweep")
+}
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_main_menu")
+
+[node name="Backdrop" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 1)
+
+[node name="Drift" type="AnimationPlayer" parent="."]
+libraries = {
+&"": SubResource("AnimationLibrary_menu")
+}
+autoplay = "drift"
+
+[node name="Ambience" type="AnimationPlayer" parent="."]
+libraries = {
+&"": SubResource("AnimationLibrary_menu")
+}
+autoplay = "ambience"
+
+[node name="Scenery" type="Control" parent="."]
+layout_mode = 0
+offset_right = 1024.0
+offset_bottom = 768.0
+mouse_filter = 2
+
+[node name="Sky" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = -102.8
+offset_top = -0.1
+offset_right = 1497.2
+offset_bottom = 767.9
+mouse_filter = 2
+expand_mode = 1
+
+[node name="CloudBand" type="TextureRect" parent="Scenery"]
+material = SubResource("CanvasItemMaterial_multiply")
+modulate = Color(1, 1, 1, 0.7)
+layout_mode = 0
+offset_left = 450.8
+offset_top = -0.1
+offset_right = 1923.9
+offset_bottom = 225.2
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Ridge" type="TextureRect" parent="Scenery"]
+modulate = Color(1, 1, 1, 0.8)
+layout_mode = 0
+offset_left = 4.8
+offset_top = 273.9
+offset_right = 732.5
+offset_bottom = 612.5
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Valley" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = 94.4
+offset_top = 399.9
+offset_right = 666.6
+offset_bottom = 651.4
+mouse_filter = 2
+expand_mode = 1
+
+[node name="MistFar" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = 161.5
+offset_top = 297.5
+offset_right = 925.7
+offset_bottom = 631.6
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Peaks" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = -65.6
+offset_top = 278.3
+offset_right = 669.1
+offset_bottom = 708.4
+mouse_filter = 2
+expand_mode = 1
+
+[node name="MistMid" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = 358.9
+offset_top = 364.5
+offset_right = 1123.1
+offset_bottom = 698.6
+mouse_filter = 2
+expand_mode = 1
+
+[node name="CliffRight" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = 571.2
+offset_top = -0.1
+offset_right = 1126.1
+offset_bottom = 767.9
+mouse_filter = 2
+expand_mode = 1
+
+[node name="CliffLeft" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = -102.8
+offset_top = 311.6
+offset_right = 182.6
+offset_bottom = 767.9
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Ground" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = 182.7
+offset_top = 589.4
+offset_right = 571.2
+offset_bottom = 768.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Ridgeline" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = -186.2
+offset_top = 447.9
+offset_right = 854.4
+offset_bottom = 677.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Sword" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = 157.7
+offset_top = 55.6
+offset_right = 406.0
+offset_bottom = 538.8
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Foreground" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = -102.8
+offset_top = 538.8
+offset_right = 1126.0
+offset_bottom = 767.9
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Haze" type="TextureRect" parent="Scenery"]
+modulate = Color(1, 1, 1, 0.371)
+layout_mode = 0
+offset_left = -102.8
+offset_top = 453.1
+offset_right = 922.5
+offset_bottom = 768.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Mountains" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = -296.7
+offset_top = 177.9
+offset_right = 694.0
+offset_bottom = 734.7
+mouse_filter = 2
+expand_mode = 1
+
+[node name="MistNear" type="TextureRect" parent="Scenery"]
+layout_mode = 0
+offset_left = -102.8
+offset_top = 303.3
+offset_right = 661.4
+offset_bottom = 637.4
+mouse_filter = 2
+expand_mode = 1
+
+[node name="BloodDrop" type="Panel" parent="Scenery"]
+modulate = Color(1, 1, 1, 0.7)
+layout_mode = 0
+offset_left = 377.9
+offset_top = 469.7
+offset_right = 383.0
+offset_bottom = 474.8
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_drop")
+
+[node name="Frame" type="Control" parent="."]
+clip_contents = true
+layout_mode = 0
+offset_right = 1024.0
+offset_bottom = 768.0
+mouse_filter = 1
+
+[node name="Wordmark" type="TextureRect" parent="Frame"]
+material = SubResource("ShaderMaterial_shine")
+layout_mode = 0
+offset_left = 458.9
+offset_top = 55.0
+offset_right = 998.9
+offset_bottom = 161.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Subtitle" type="TextureRect" parent="Frame"]
+layout_mode = 0
+offset_left = 815.9
+offset_top = 158.0
+offset_right = 993.9
+offset_bottom = 192.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="BottomBar" type="TextureRect" parent="Frame"]
+layout_mode = 0
+offset_left = -12.0
+offset_top = 706.0
+offset_right = 309.0
+offset_bottom = 752.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Items" type="Control" parent="Frame"]
+layout_mode = 0
+offset_right = 1024.0
+offset_bottom = 768.0
+mouse_filter = 2
+
+[node name="NewGamePlate" type="TextureRect" parent="Frame/Items"]
+modulate = Color(1, 1, 1, 0)
+layout_mode = 0
+offset_left = 561.1
+offset_top = 266.0
+offset_right = 1282.1
+offset_bottom = 328.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="ContinuePlate" type="TextureRect" parent="Frame/Items"]
+modulate = Color(1, 1, 1, 0)
+layout_mode = 0
+offset_left = 561.1
+offset_top = 300.0
+offset_right = 1282.1
+offset_bottom = 362.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="LoadLevelPlate" type="TextureRect" parent="Frame/Items"]
+modulate = Color(1, 1, 1, 0)
+layout_mode = 0
+offset_left = 561.1
+offset_top = 334.0
+offset_right = 1282.1
+offset_bottom = 396.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="OptionsPlate" type="TextureRect" parent="Frame/Items"]
+modulate = Color(1, 1, 1, 0)
+layout_mode = 0
+offset_left = 561.1
+offset_top = 368.0
+offset_right = 1282.1
+offset_bottom = 430.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="QuitPlate" type="TextureRect" parent="Frame/Items"]
+modulate = Color(1, 1, 1, 0)
+layout_mode = 0
+offset_left = 561.1
+offset_top = 402.0
+offset_right = 1282.1
+offset_bottom = 464.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="LoadLevelButton" type="Button" parent="Frame/Items"]
+layout_mode = 0
+offset_left = 561.1
+offset_top = 348.0
+offset_right = 1024.0
+offset_bottom = 382.0
+focus_mode = 0
+text = "Explore Areas"
+
+[node name="NewGameButton" type="Button" parent="Frame/Items"]
+layout_mode = 0
+offset_left = 561.1
+offset_top = 280.0
+offset_right = 1024.0
+offset_bottom = 314.0
+focus_mode = 0
+text = "New Game"
+
+[node name="ContinueButton" type="Button" parent="Frame/Items"]
+layout_mode = 0
+offset_left = 561.1
+offset_top = 314.0
+offset_right = 1024.0
+offset_bottom = 348.0
+focus_mode = 0
+text = "Continue"
+
+[node name="OptionsButton" type="Button" parent="Frame/Items"]
+layout_mode = 0
+offset_left = 561.1
+offset_top = 382.0
+offset_right = 1024.0
+offset_bottom = 416.0
+focus_mode = 0
+text = "Options"
+
+[node name="QuitButton" type="Button" parent="Frame/Items"]
+layout_mode = 0
+offset_left = 561.1
+offset_top = 416.0
+offset_right = 1024.0
+offset_bottom = 450.0
+focus_mode = 0
+text = "Quit"
+
+[node name="AreaBrowser" type="PanelContainer" parent="Frame"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 28.0
+offset_top = 24.0
+offset_right = -28.0
+offset_bottom = -24.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_browser")
+
+[node name="Layout" type="VBoxContainer" parent="Frame/AreaBrowser"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Frame/AreaBrowser/Layout"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.92, 0.87, 0.74, 1)
+theme_override_font_sizes/font_size = 20
+text = "Campaign Map"
+
+[node name="Hint" type="Label" parent="Frame/AreaBrowser/Layout"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.72, 0.68, 0.6, 1)
+theme_override_font_sizes/font_size = 13
+text = "Original DAO MAP pin positions. Gold pins have an imported authored arrival; some offer a source-authored entrance choice. Gray pins have no imported route."
+autowrap_mode = 3
+
+[node name="MapTabs" type="OptionButton" parent="Frame/AreaBrowser/Layout"]
+layout_mode = 2
+
+[node name="MapCanvas" type="Control" parent="Frame/AreaBrowser/Layout"]
+custom_minimum_size = Vector2(0, 420)
+layout_mode = 2
+size_flags_vertical = 3
+script = ExtResource("2_world_map")
+
+[node name="Status" type="Label" parent="Frame/AreaBrowser/Layout"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.72, 0.68, 0.6, 1)
+theme_override_font_sizes/font_size = 13
+text = "Loading authored MAP pins…"
+autowrap_mode = 3
+
+[node name="ArrivalChoices" type="OptionButton" parent="Frame/AreaBrowser/Layout"]
+visible = false
+layout_mode = 2
+tooltip_text = "Choose a source-authored arrival waypoint"
+
+[node name="Actions" type="HBoxContainer" parent="Frame/AreaBrowser/Layout"]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 2
+
+[node name="BackButton" type="Button" parent="Frame/AreaBrowser/Layout/Actions"]
+custom_minimum_size = Vector2(130, 36)
+layout_mode = 2
+text = "Back"
+
+[node name="LoadButton" type="Button" parent="Frame/AreaBrowser/Layout/Actions"]
+custom_minimum_size = Vector2(130, 36)
+layout_mode = 2
+disabled = true
+text = "Open Destination"
+
+[node name="Options" type="Control" parent="."]
+visible = false
+layout_mode = 0
+offset_right = 1024.0
+offset_bottom = 768.0
+mouse_filter = 1
+
+[node name="Dim" type="ColorRect" parent="Options"]
+layout_mode = 0
+offset_left = -2000.0
+offset_top = -1000.0
+offset_right = 3000.0
+offset_bottom = 2000.0
+mouse_filter = 2
+color = Color(0, 0, 0, 0.2)
+
+[node name="Panel" type="NinePatchRect" parent="Options"]
+layout_mode = 0
+offset_left = 27.0
+offset_top = 89.0
+offset_right = 995.0
+offset_bottom = 710.0
+mouse_filter = 2
+patch_margin_left = 42
+patch_margin_top = 13
+patch_margin_right = 39
+patch_margin_bottom = 86
+[node name="Swirl" type="TextureRect" parent="Options"]
+modulate = Color(1, 1, 1, 0.47)
+layout_mode = 0
+offset_left = 379.6
+offset_top = 8.5
+offset_right = 1172.5
+offset_bottom = 74.5
+mouse_filter = 2
+expand_mode = 1
+
+[node name="SwirlInner" type="TextureRect" parent="Options"]
+modulate = Color(1, 1, 1, 0.55)
+layout_mode = 0
+offset_left = 338.2
+offset_top = 19.5
+offset_right = 637.5
+offset_bottom = 62.5
+mouse_filter = 2
+expand_mode = 1
+
+[node name="SwirlCore" type="TextureRect" parent="Options"]
+modulate = Color(1, 1, 1, 0.46)
+layout_mode = 0
+offset_left = 359.6
+offset_top = -7.0
+offset_right = 556.6
+offset_bottom = 62.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="RuleA" type="TextureRect" parent="Options"]
+modulate = Color(1, 1, 1, 0)
+layout_mode = 0
+offset_left = 632.0
+offset_top = 61.4
+offset_right = 1279.0
+offset_bottom = 73.4
+mouse_filter = 2
+expand_mode = 1
+
+[node name="RuleB" type="TextureRect" parent="Options"]
+modulate = Color(1, 1, 1, 0)
+layout_mode = 0
+offset_left = 949.0
+offset_top = 9.1
+offset_right = 1596.0
+offset_bottom = 21.1
+mouse_filter = 2
+expand_mode = 1
+
+[node name="Sweep" type="AnimationPlayer" parent="Options"]
+libraries = {
+&"": SubResource("AnimationLibrary_sweep")
+}
+autoplay = "sweep"
+
+[node name="Title" type="Label" parent="Options"]
+layout_mode = 0
+offset_left = 617.0
+offset_top = 25.0
+offset_right = 939.4
+offset_bottom = 57.8
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.808, 0.722, 0.455, 1)
+theme_override_font_sizes/font_size = 24
+text = "Options"
+horizontal_alignment = 2
+vertical_alignment = 1
+[node name="Tab" type="TextureRect" parent="Options"]
+layout_mode = 0
+offset_left = 40.0
+offset_top = 63.0
+offset_right = 239.0
+offset_bottom = 99.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="TabLabel" type="Label" parent="Options"]
+layout_mode = 0
+offset_left = 40.0
+offset_top = 73.0
+offset_right = 225.0
+offset_bottom = 98.6
+mouse_filter = 2
+theme_override_colors/font_color = Color(1, 1, 0.8, 1)
+theme_override_font_sizes/font_size = 18
+text = "Video"
+horizontal_alignment = 1
+vertical_alignment = 1
+[node name="Header" type="TextureRect" parent="Options"]
+layout_mode = 0
+offset_left = 70.0
+offset_top = 131.0
+offset_right = 506.9
+offset_bottom = 179.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="HeaderLabel" type="Label" parent="Options"]
+layout_mode = 0
+offset_left = 94.0
+offset_top = 144.0
+offset_right = 325.4
+offset_bottom = 170.8
+mouse_filter = 2
+theme_override_colors/font_color = Color(0, 0, 0, 1)
+theme_override_font_sizes/font_size = 16
+text = "Screen"
+vertical_alignment = 1
+[node name="ResolutionLabel" type="Label" parent="Options"]
+layout_mode = 0
+offset_left = 101.0
+offset_top = 191.8
+offset_right = 295.1
+offset_bottom = 210.2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.808, 0.722, 0.455, 1)
+theme_override_font_sizes/font_size = 12
+text = "Resolution"
+vertical_alignment = 1
+[node name="ResolutionBottom" type="TextureRect" parent="Options"]
+layout_mode = 0
+offset_left = 89.0
+offset_top = 224.0
+offset_right = 444.0
+offset_bottom = 243.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="ResolutionTop" type="TextureRect" parent="Options"]
+layout_mode = 0
+offset_left = 89.0
+offset_top = 205.0
+offset_right = 444.0
+offset_bottom = 233.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="ResolutionArrow" type="TextureRect" parent="Options"]
+layout_mode = 0
+offset_left = 414.0
+offset_top = 213.0
+offset_right = 434.0
+offset_bottom = 225.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="ResolutionPicker" type="OptionButton" parent="Options"]
+layout_mode = 0
+offset_left = 89.0
+offset_top = 205.0
+offset_right = 444.0
+offset_bottom = 243.0
+focus_mode = 0
+
+[node name="DisplayLabel" type="Label" parent="Options"]
+layout_mode = 0
+offset_left = 101.0
+offset_top = 251.8
+offset_right = 295.1
+offset_bottom = 270.2
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.808, 0.722, 0.455, 1)
+theme_override_font_sizes/font_size = 12
+text = "Display"
+vertical_alignment = 1
+[node name="DisplayBottom" type="TextureRect" parent="Options"]
+layout_mode = 0
+offset_left = 89.0
+offset_top = 284.0
+offset_right = 444.0
+offset_bottom = 303.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="DisplayTop" type="TextureRect" parent="Options"]
+layout_mode = 0
+offset_left = 89.0
+offset_top = 265.0
+offset_right = 444.0
+offset_bottom = 293.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="DisplayArrow" type="TextureRect" parent="Options"]
+layout_mode = 0
+offset_left = 414.0
+offset_top = 273.0
+offset_right = 434.0
+offset_bottom = 285.0
+mouse_filter = 2
+expand_mode = 1
+
+[node name="DisplayPicker" type="OptionButton" parent="Options"]
+layout_mode = 0
+offset_left = 89.0
+offset_top = 265.0
+offset_right = 444.0
+offset_bottom = 303.0
+focus_mode = 0
+
+[node name="OkPlate" type="TextureRect" parent="Options"]
+layout_mode = 0
+offset_left = 488.5
+offset_top = 705.5
+offset_right = 745.5
+offset_bottom = 751.5
+mouse_filter = 2
+expand_mode = 1
+
+[node name="CancelPlate" type="TextureRect" parent="Options"]
+layout_mode = 0
+offset_left = 728.5
+offset_top = 705.5
+offset_right = 985.5
+offset_bottom = 751.5
+mouse_filter = 2
+expand_mode = 1
+
+[node name="OkButton" type="Button" parent="Options"]
+layout_mode = 0
+offset_left = 488.5
+offset_top = 705.5
+offset_right = 745.5
+offset_bottom = 751.5
+focus_mode = 0
+text = "OK"
+
+[node name="CancelButton" type="Button" parent="Options"]
+layout_mode = 0
+offset_left = 728.5
+offset_top = 705.5
+offset_right = 985.5
+offset_bottom = 751.5
+focus_mode = 0
+text = "Cancel"
+
+[node name="CharacterCreation" parent="." instance=ExtResource("3_character_creation")]
+visible = false

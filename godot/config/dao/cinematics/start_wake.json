@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "pointOfViewCameras": [
+    {
+      "cameraActorId": 5,
+      "hiddenActorId": 3,
+      "targetActorId": 4,
+      "clearanceMode": "selected-head-to-target"
+    }
+  ]
+}
