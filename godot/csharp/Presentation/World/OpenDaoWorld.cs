@@ -19,6 +19,12 @@ namespace OpenDAO.Presentation.World;
 
 public partial class OpenDaoWorld : Node3D
 {
+    private const string PlayableSmokeStartupFramesVariable =
+        "OPENDAO_ACCEPTANCE_PLAYABLE_STARTUP_FRAMES";
+    private const string AlienageArrivalWarmupFramesVariable =
+        "OPENDAO_ACCEPTANCE_ALIENAGE_WARMUP_FRAMES";
+    private const string GameplayHoldFramesVariable = "OPENDAO_ACCEPTANCE_GAMEPLAY_HOLD_FRAMES";
+
     private DaoRuntimeServices? services;
     private CancellationTokenSource? lifetime;
     private WorldProfile? profile;
@@ -481,11 +487,8 @@ public partial class OpenDaoWorld : Node3D
 
     private async Task RunCityElfPlayableSmoke(CancellationToken cancellationToken)
     {
-        for (var frame = 0; frame < 12; frame++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-        }
+        await WaitForProcessFrames(
+            ConfiguredFrameCount(PlayableSmokeStartupFramesVariable), cancellationToken);
         var stage = System.Environment.GetEnvironmentVariable("OPENDAO_CITY_ELF_PLAYABLE_SMOKE_STAGE") ??
                     string.Empty;
         if (profile?.AreaId.Equals("bec110ar_players_house", StringComparison.OrdinalIgnoreCase) == true &&
@@ -531,11 +534,10 @@ public partial class OpenDaoWorld : Node3D
         if (profile?.AreaId.Equals("bec100ar_elven_alienage", StringComparison.OrdinalIgnoreCase) == true &&
             stage == "crate-used")
         {
-            for (var frame = 0; frame < 24; frame++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-            }
+            await WaitForProcessFrames(
+                ConfiguredFrameCount(AlienageArrivalWarmupFramesVariable), cancellationToken);
+            var locomotionPassed = await LocomotionSmoke.RunAsync(player, cancellationToken);
+            await WaitForProcessFrames(ConfiguredFrameCount(GameplayHoldFramesVariable), cancellationToken);
             var destinationCapture = System.Environment.GetEnvironmentVariable(
                 "OPENDAO_PLAYABLE_DESTINATION_CAPTURE") ?? string.Empty;
             var destinationImage = GetViewport().GetTexture().GetImage();
@@ -544,10 +546,17 @@ public partial class OpenDaoWorld : Node3D
                 : destinationImage.SavePng(destinationCapture);
             var visibility = MeasureWorldVisibility(destinationImage);
             var visibilityPassed = visibility.VisibleRatio >= 0.15f;
-            var passed = player.IsPhysicsProcessing() && captured == Error.Ok && visibilityPassed;
+            var passed = player.IsPhysicsProcessing() && locomotionPassed &&
+                         captured == Error.Ok && visibilityPassed;
+            GD.Print($"OPENDAO_CITY_ELF_EXTERIOR_GAMEPLAY status={(passed ? "pass" : "fail")} " +
+                     $"area={profile.AreaId} waypoint=bec100wp_from_home " +
+                     $"locomotion={(locomotionPassed ? "pass" : "fail")} " +
+                     $"player_control={(player.IsPhysicsProcessing() ? 1 : 0)} " +
+                     $"world_visible={(visibilityPassed ? "pass" : "fail")}");
             GD.Print($"OPENDAO_CITY_ELF_PLAYABLE_SMOKE status={(passed ? "pass" : "fail")} " +
                      "crate_use=pass transition=pass " +
                      $"destination={profile.AreaId} waypoint=bec100wp_from_home " +
+                     $"locomotion={(locomotionPassed ? "pass" : "fail")} " +
                      $"player_control={(player.IsPhysicsProcessing() ? 1 : 0)} " +
                      $"world_visible={(visibilityPassed ? "pass" : "fail")} " +
                      $"visible_ratio={visibility.VisibleRatio:0.####} " +
@@ -560,6 +569,20 @@ public partial class OpenDaoWorld : Node3D
                  $"area={profile?.AreaId ?? string.Empty} marker={stage}");
         GetTree().Quit(64);
     }
+
+    private async Task WaitForProcessFrames(int frameCount, CancellationToken cancellationToken)
+    {
+        for (var frame = 0; frame < frameCount; frame++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        }
+    }
+
+    private static int ConfiguredFrameCount(string variableName) => int.TryParse(
+        System.Environment.GetEnvironmentVariable(variableName), out var configuredFrames)
+        ? Math.Max(0, configuredFrames)
+        : 0;
 
     private static (float VisibleRatio, float MeanLuminance) MeasureWorldVisibility(Image image)
     {
@@ -643,16 +666,7 @@ public partial class OpenDaoWorld : Node3D
                  $"character={character.Name} area={profile?.AreaId} player_control={(player.IsPhysicsProcessing() ? 1 : 0)} " +
                  $"opening_cutscene={(origin?.OpeningCutscene.Length > 0 ? origin.OpeningCutscene : "not-authored-for-area")} " +
                  $"locomotion={(locomotionPassed ? "pass" : "fail")} capture={capturePath}");
-        var gameplayHoldFrames = int.TryParse(
-            System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_GAMEPLAY_HOLD_FRAMES"),
-            out var configuredHoldFrames)
-            ? Math.Max(0, configuredHoldFrames)
-            : 0;
-        for (var frame = 0; frame < gameplayHoldFrames; frame++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-        }
+        await WaitForProcessFrames(ConfiguredFrameCount(GameplayHoldFramesVariable), cancellationToken);
         GetTree().Quit(passed ? 0 : 59);
     }
 
