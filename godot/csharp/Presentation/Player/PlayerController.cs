@@ -3,6 +3,7 @@ using OpenDAO.Application.Abstractions;
 using OpenDAO.Domain.World;
 using OpenDAO.Presentation;
 using OpenDAO.Presentation.Rigging;
+using OpenDAO.Infrastructure.Configuration;
 using OpenDAO.Infrastructure.World;
 
 namespace OpenDAO.Presentation.Player;
@@ -163,15 +164,24 @@ public partial class PlayerController : CharacterBody3D
     public void SetAuthoredNavigation(AuthoredNavigationGrid? navigation) =>
         authoredNavigation = navigation;
 
-    public void ResetThirdPersonView()
+    public void ConfigureThirdPersonView(DaoGameplayCameraConfiguration configuration)
     {
+        ArgumentNullException.ThrowIfNull(configuration);
         var head = GetNode<SpringArm3D>("Head");
-        head.Rotation = new Vector3(Mathf.DegToRad(-10), 0, 0);
+        head.Rotation = new Vector3(Mathf.DegToRad(configuration.PitchDegrees), 0, 0);
+        head.SpringLength = configuration.SpringLengthMeters;
+        head.Margin = configuration.CollisionMarginMeters;
         locomotionCamera.Rotation = Vector3.Zero;
+        locomotionCamera.Fov = configuration.FieldOfViewDegrees;
+        locomotionCamera.Near = configuration.NearPlaneMeters;
+        locomotionCamera.Far = configuration.FarPlaneMeters;
+        GD.Print($"OPENDAO_GAMEPLAY_CAMERA_PROFILE status=ready " +
+                 $"calibration={configuration.CalibrationStatus} " +
+                 $"fov={configuration.FieldOfViewDegrees:0.###} " +
+                 $"pitch={configuration.PitchDegrees:0.###} " +
+                 $"spring={configuration.SpringLengthMeters:0.###} " +
+                 $"margin={configuration.CollisionMarginMeters:0.###}");
     }
-
-    public void SetThirdPersonDistance(float distance) =>
-        GetNode<SpringArm3D>("Head").SpringLength = Math.Max(0.8f, distance);
 
     public void SetWaterState(bool enabled, float surfaceY) =>
         SetWaterVolumeState("scripted", enabled, surfaceY);

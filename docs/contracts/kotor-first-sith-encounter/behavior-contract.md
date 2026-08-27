@@ -110,6 +110,19 @@ play the shot at launch and impact at arrival, and use source-sized additive
 textures instead of an opaque procedural sphere. The verifier counts four
 launches, four muzzle effects, and at least three completed impacts.
 
+Aurora does not add a dynamic point light or an emissive-energy multiplier to
+the muzzle flash. Neither behavior is identified by the bound source emitter,
+and the former proof mapping produced full-frame white flashes from the staged
+camera. The source Lighten blend is represented by the unshaded additive
+texture itself. Exact five-emitter topology remains required before this row
+can be parity-accepted.
+
+Port-side fallback muzzle/target heights, projectile length/speed, minimum
+travel time, effect colors, flare scale, impact size/lifetime, and shot/impact
+levels are explicit validated fields in `config/kotor-runtime.json`; none
+remain buried in encounter code. They remain retail-unaccepted mapping values
+until a matched temporal row closes them.
+
 The corridor geometry also owns persistent MDL emitters; these are separate
 from weapon projectile models. Camera 20 must have all five `M01aa_03a`
 emitters, including `Object107/smoke044` at the damaged corridor end. The full
@@ -155,6 +168,8 @@ Known limits:
 
 - the current route models this cutscene and transition, not general KOTOR
   combat AI, damage resolution, inventory, or encounter spawning;
+- the current muzzle presentation binds the two source textures and source
+  maximum size/lifetime but does not yet reproduce all five emitter nodes;
 - impact presentation is an independently written flare approximation because
   this ammunition row does not identify a separate authored impact emitter;
 - retail camera, placement, lighting, animation, and sub-frame timing telemetry

@@ -1402,11 +1402,14 @@ public sealed partial class KotorModuleBoot : Node3D
             !actorModels.TryGetValue(attackerTag, out var attacker) ||
             !actorModels.TryGetValue(targetTag, out var target))
             return;
+        var presentation = runtimeConfiguration.Presentation.FirstEncounter;
         var muzzle = FindDescendantBySuffix<Node3D>(attacker, "bullethook")?.GlobalPosition ??
-                     attacker.GlobalPosition + Vector3.Up * 1.25f;
+                     attacker.GlobalPosition + Vector3.Up *
+                     presentation.FallbackMuzzleHeightMeters;
         var destination = actorTalkOffsets.TryGetValue(targetTag, out var talkOffset)
             ? target.GlobalTransform * talkOffset
-            : target.GlobalPosition + Vector3.Up * 1.1f;
+            : target.GlobalPosition + Vector3.Up *
+              presentation.FallbackTargetHeightMeters;
         SpawnMuzzleFlash(muzzle);
         var bolt = new MeshInstance3D
         {
@@ -1414,41 +1417,40 @@ public sealed partial class KotorModuleBoot : Node3D
             Mesh = new BoxMesh
             {
                 Size = new Vector3(
-                    effects.ProjectileSize, effects.ProjectileSize, 0.7f)
+                    effects.ProjectileSize, effects.ProjectileSize,
+                    presentation.ProjectileLengthMeters)
             },
             MaterialOverride = CreateEffectMaterial(
-                new Color(0.929f, 0.110f, 0.0f, 1.0f), 4.0f,
-                effects.Laser, false)
+                RuntimeColor(presentation.ProjectileColor), effects.Laser, false)
         };
         AddChild(bolt);
         bolt.GlobalPosition = muzzle;
         bolt.LookAt(destination, Vector3.Up);
         encounterProjectileCount++;
-        PlayOneShot(audio.BlasterShot, -2.0f);
+        PlayOneShot(audio.BlasterShot, presentation.ShotVolumeDb);
         encounterAttackSoundCount++;
-        var duration = Math.Max(0.08f, muzzle.DistanceTo(destination) / 32.0f);
+        var duration = Math.Max(
+            presentation.MinimumProjectileTravelSeconds,
+            muzzle.DistanceTo(destination) /
+            presentation.ProjectileSpeedMetersPerSecond);
         var tween = CreateTween();
         tween.TweenProperty(bolt, "global_position", destination, duration);
         tween.TweenCallback(Callable.From(() =>
         {
             bolt.QueueFree();
             SpawnImpactFlash(destination);
-            PlayOneShot(audio.BlasterImpact, -5.0f);
+            PlayOneShot(audio.BlasterImpact, presentation.ImpactVolumeDb);
         }));
         GD.Print($"NIKAMI_AURORA_PROJECTILE status=fired attacker={attackerTag} " +
                  $"target={targetTag} from={muzzle} to={destination} duration={duration:F3}");
     }
 
     private static StandardMaterial3D CreateEffectMaterial(
-        Color color, float energy, Texture2D? texture, bool billboard) => new()
+        Color color, Texture2D? texture, bool billboard) => new()
         {
             ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
             AlbedoColor = color,
             AlbedoTexture = texture,
-            EmissionEnabled = true,
-            Emission = color,
-            EmissionTexture = texture,
-            EmissionEnergyMultiplier = energy,
             Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
             BlendMode = BaseMaterial3D.BlendModeEnum.Add,
             DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
@@ -1463,6 +1465,7 @@ public sealed partial class KotorModuleBoot : Node3D
     {
         var effects = firstEncounterEffectTextures;
         if (effects is null) return;
+        var presentation = runtimeConfiguration.Presentation.FirstEncounter;
         var flash = new Node3D
         {
             Name = $"MuzzleFlash_{encounterMuzzleFlashCount:D3}"
@@ -1477,7 +1480,7 @@ public sealed partial class KotorModuleBoot : Node3D
                 Size = new Vector2(effects.MuzzleSize, effects.MuzzleSize)
             },
             MaterialOverride = CreateEffectMaterial(
-                Colors.White, 2.0f, effects.Muzzle, true)
+                RuntimeColor(presentation.MuzzleColor), effects.Muzzle, true)
         };
         flash.AddChild(authoredFlash);
         var authoredFlare = new MeshInstance3D
@@ -1486,20 +1489,13 @@ public sealed partial class KotorModuleBoot : Node3D
             Mesh = new QuadMesh
             {
                 Size = new Vector2(
-                    effects.MuzzleSize * 0.55f, effects.MuzzleSize * 0.55f)
+                    effects.MuzzleSize * presentation.MuzzleFlareScale,
+                    effects.MuzzleSize * presentation.MuzzleFlareScale)
             },
             MaterialOverride = CreateEffectMaterial(
-                new Color(1.0f, 0.612f, 0.0f, 1.0f), 2.5f,
-                effects.Flare, true)
+                RuntimeColor(presentation.MuzzleFlareColor), effects.Flare, true)
         };
         flash.AddChild(authoredFlare);
-        var light = new OmniLight3D
-        {
-            LightColor = new Color(1.0f, 0.28f, 0.04f),
-            LightEnergy = 1.25f,
-            OmniRange = 1.5f
-        };
-        flash.AddChild(light);
         encounterMuzzleFlashCount++;
         var tween = CreateTween();
         tween.TweenProperty(
@@ -1511,19 +1507,26 @@ public sealed partial class KotorModuleBoot : Node3D
     {
         var effects = firstEncounterEffectTextures;
         if (effects is null) return;
+        var presentation = runtimeConfiguration.Presentation.FirstEncounter;
         var impact = new MeshInstance3D
         {
             Name = $"ImpactFlash_{encounterImpactCount:D3}",
-            Mesh = new QuadMesh { Size = new Vector2(0.2f, 0.2f) },
+            Mesh = new QuadMesh
+            {
+                Size = new Vector2(
+                    presentation.ImpactSizeMeters,
+                    presentation.ImpactSizeMeters)
+            },
             MaterialOverride = CreateEffectMaterial(
-                new Color(1.0f, 0.45f, 0.06f, 1.0f), 3.0f,
-                effects.Flare, true)
+                RuntimeColor(presentation.ImpactColor), effects.Flare, true)
         };
         AddChild(impact);
         impact.GlobalPosition = position;
         encounterImpactCount++;
         var tween = CreateTween();
-        tween.TweenProperty(impact, "scale", Vector3.Zero, 0.18f);
+        tween.TweenProperty(
+            impact, "scale", Vector3.Zero,
+            presentation.ImpactLifetimeSeconds);
         tween.TweenCallback(Callable.From(impact.QueueFree));
     }
 

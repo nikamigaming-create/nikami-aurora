@@ -12,7 +12,7 @@ public sealed record KotorRuntimeConfiguration(
     KotorComplexityConfiguration Complexity,
     string? SourceSha256 = null)
 {
-    public const string CurrentSchema = "nikami-aurora-kotor-runtime-config-v1";
+    public const string CurrentSchema = "nikami-aurora-kotor-runtime-config-v2";
 
     public static KotorRuntimeConfiguration Load(string path)
     {
@@ -98,7 +98,8 @@ public sealed record KotorPresentationConfiguration(
     KotorLoadingPresentationConfiguration Loading,
     KotorHudPresentationConfiguration Hud,
     KotorInventoryPresentationConfiguration Inventory,
-    KotorEquipmentPresentationConfiguration Equipment)
+    KotorEquipmentPresentationConfiguration Equipment,
+    KotorFirstEncounterPresentationConfiguration FirstEncounter)
 {
     internal void Validate()
     {
@@ -113,6 +114,7 @@ public sealed record KotorPresentationConfiguration(
         ArgumentNullException.ThrowIfNull(Hud);
         ArgumentNullException.ThrowIfNull(Inventory);
         ArgumentNullException.ThrowIfNull(Equipment);
+        ArgumentNullException.ThrowIfNull(FirstEncounter);
         FallbackTextColor.Validate(nameof(FallbackTextColor));
         EmphasisColor.Validate(nameof(EmphasisColor));
         SelectedTint.Validate(nameof(SelectedTint));
@@ -120,6 +122,7 @@ public sealed record KotorPresentationConfiguration(
         Hud.Validate();
         Inventory.Validate();
         Equipment.Validate();
+        FirstEncounter.Validate();
     }
 }
 
@@ -271,6 +274,57 @@ public sealed record KotorEquipmentPresentationConfiguration(
         ArgumentNullException.ThrowIfNull(Row);
         Row.Validate();
     }
+}
+
+public sealed record KotorFirstEncounterPresentationConfiguration(
+    float FallbackMuzzleHeightMeters,
+    float FallbackTargetHeightMeters,
+    float ProjectileLengthMeters,
+    float ProjectileSpeedMetersPerSecond,
+    float MinimumProjectileTravelSeconds,
+    float MuzzleFlareScale,
+    float ImpactSizeMeters,
+    float ImpactLifetimeSeconds,
+    float ShotVolumeDb,
+    float ImpactVolumeDb,
+    KotorColorConfiguration ProjectileColor,
+    KotorColorConfiguration MuzzleColor,
+    KotorColorConfiguration MuzzleFlareColor,
+    KotorColorConfiguration ImpactColor)
+{
+    internal void Validate()
+    {
+        if (!NonNegativeWithin(FallbackMuzzleHeightMeters, 10) ||
+            !NonNegativeWithin(FallbackTargetHeightMeters, 10) ||
+            !PositiveWithin(ProjectileLengthMeters, 10) ||
+            !PositiveWithin(ProjectileSpeedMetersPerSecond, 1000) ||
+            !PositiveWithin(MinimumProjectileTravelSeconds, 10) ||
+            !PositiveWithin(MuzzleFlareScale, 1) ||
+            !PositiveWithin(ImpactSizeMeters, 10) ||
+            !PositiveWithin(ImpactLifetimeSeconds, 10))
+            throw new InvalidDataException(
+                "Configured KOTOR first-encounter effect mapping is invalid");
+        if (!VolumeIsValid(ShotVolumeDb) || !VolumeIsValid(ImpactVolumeDb))
+            throw new InvalidDataException(
+                "Configured KOTOR first-encounter audio level is invalid");
+        ArgumentNullException.ThrowIfNull(ProjectileColor);
+        ArgumentNullException.ThrowIfNull(MuzzleColor);
+        ArgumentNullException.ThrowIfNull(MuzzleFlareColor);
+        ArgumentNullException.ThrowIfNull(ImpactColor);
+        ProjectileColor.Validate("firstEncounter.projectileColor");
+        MuzzleColor.Validate("firstEncounter.muzzleColor");
+        MuzzleFlareColor.Validate("firstEncounter.muzzleFlareColor");
+        ImpactColor.Validate("firstEncounter.impactColor");
+    }
+
+    private static bool PositiveWithin(float value, float maximum) =>
+        float.IsFinite(value) && value > 0 && value <= maximum;
+
+    private static bool NonNegativeWithin(float value, float maximum) =>
+        float.IsFinite(value) && value >= 0 && value <= maximum;
+
+    private static bool VolumeIsValid(float value) =>
+        float.IsFinite(value) && value is >= -100 and <= 24;
 }
 
 public sealed record KotorAutomationConfiguration(

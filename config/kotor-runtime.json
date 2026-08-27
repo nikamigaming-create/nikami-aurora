@@ -1,5 +1,5 @@
 {
-  "schema": "nikami-aurora-kotor-runtime-config-v1",
+  "schema": "nikami-aurora-kotor-runtime-config-v2",
   "gameplay": {
     "playerExperience": 0,
     "playerCredits": 0,
@@ -86,6 +86,38 @@
           "width": 185,
           "height": 52
         }
+      }
+    },
+    "firstEncounter": {
+      "fallbackMuzzleHeightMeters": 1.25,
+      "fallbackTargetHeightMeters": 1.1,
+      "projectileLengthMeters": 0.7,
+      "projectileSpeedMetersPerSecond": 32.0,
+      "minimumProjectileTravelSeconds": 0.08,
+      "muzzleFlareScale": 0.55,
+      "impactSizeMeters": 0.2,
+      "impactLifetimeSeconds": 0.18,
+      "shotVolumeDb": -2.0,
+      "impactVolumeDb": -5.0,
+      "projectileColor": {
+        "red": 0.929,
+        "green": 0.110,
+        "blue": 0.0
+      },
+      "muzzleColor": {
+        "red": 1.0,
+        "green": 1.0,
+        "blue": 1.0
+      },
+      "muzzleFlareColor": {
+        "red": 1.0,
+        "green": 0.612,
+        "blue": 0.0
+      },
+      "impactColor": {
+        "red": 1.0,
+        "green": 0.45,
+        "blue": 0.06
       }
     }
   },
