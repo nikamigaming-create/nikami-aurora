@@ -3,7 +3,10 @@
 Status: **canonical migration inventory**
 
 Source repository: `nikamigaming-create/OpenDAO`
-Audited source baseline: `dde9186` (`main`, 2026-08-26 audit)
+Harvested source baseline: `404bbaa03158de2f34255909e4b575a31dbb6119`
+(`codex/dalish-video-gate`, merged by OpenDAO PR #11 as `d439801`,
+2026-08-26)
+Prior clean `main` audit: `dde9186`
 
 This ledger controls how the prior public OpenDAO work enters Nikami Aurora.
 It prevents two equally damaging outcomes: rebuilding useful first-party work,
@@ -31,15 +34,37 @@ Confirmed at the audited baseline:
 - The public runtime still expects a compatibility cache created by an
   explicitly supplied private importer. That is incompatible with the Aurora
   release contract and must be replaced.
-- The prior New Game route enters a Redcliffe slice; it does not materialize the
-  selected retail origin prologue. It is not the accepted DAO Hello World route.
+- The harvested branch adds the female City Elf origin route and strong
+  development acceptance evidence beyond the prior Redcliffe shortcut.
 - Historical documentation describes broader story/NCS work than the clean
   baseline currently contains as source. Documentation and telemetry are
   evidence, not migratable implementation.
 
-Inside Nikami Aurora, `Profiles.DragonAgeOrigins` currently provides install
-detection only. No OpenDAO subsystem is considered harvested until it is
-ported, tested, and recorded below.
+Inside Nikami Aurora, install detection remains profile-owned while one interim
+DAO Godot slice is now dispatched by the shared runtime. Presence in that slice
+means `porting`, not `owned-data-proven`: the runtime still consumes the prior
+ignored compatibility cache and generated presentation roots.
+
+## Current interim harvest slice
+
+The first migration slice imports the 120 public C# source files needed by the
+DAO domain/application adapters, first-party ERF/GFF/GFx readers, menus,
+character creation, rendering, cinematics, FaceFX, HUD, and player/world
+presentation into the shared Godot assembly. It also imports the public DAO
+shaders and scenes. `DaoRuntimeServices` replaces the prior dependency-injection
+container with explicit first-party composition, and `AuroraRuntimeBoot`
+selects KOTOR or DAO without making either game the generic entrypoint.
+
+The accepted automated development route is presently:
+
+`main menu -> female City Elf rogue Kallian/preset-4 -> ss_alienage loading art
+-> start_wake -> bec110cr_shianni -> native HUD -> locomotion`
+
+Runtime cache and generated-presentation roots are explicit environment-backed
+configuration. No retail asset is copied into or tracked by Aurora. This slice
+is useful migration evidence, but it is intentionally not a distributable DAO
+implementation until Aurora can create those roots from a legally owned install
+with public first-party code.
 
 ## Status vocabulary
 
@@ -55,22 +80,22 @@ Every row begins as `candidate` or `rejected`. File presence is not completion.
 
 ## Harvest candidates
 
-| OpenDAO source | Value already present | Aurora destination/decision | Initial state |
+| OpenDAO source | Value already present | Aurora destination/decision | Current state |
 | --- | --- | --- | --- |
-| `Domain/Characters`, `Abilities`, `Inventory`, `Party`, `Quests`, `Combat`, `Story`, `Sessions`, `World` | Plain state/value objects and invariants | Port only DAO semantics into `Profiles.DragonAgeOrigins`; promote a contract to Core only after KOTOR proves the same neutral abstraction | `candidate` |
-| `Application/Abstractions` and character initializers | Narrow ports for profiles, persistence, content, lighting, navigation, models, time, and environment | Use as design evidence; reconcile with Aurora interfaces instead of creating a second application framework | `candidate` |
-| `Infrastructure/Archives/ErfArchive.cs` | Bounded ERF V2.0 and ERF/RIM V2.1 reader with synthetic coverage | Port into a first-party DAO format library, preserve fail-closed range/compression checks, expand with owned-source precedence tests | `candidate` |
-| `Infrastructure/Catalogs/ClassicGff32RootReader.cs` | First-party classic GFF root reader | Port into the DAO format library and expand to every field/list/layout required by the selected route | `candidate` |
-| GDA/area/character catalog providers | Data-backed ability, character, and area adapters | Rebind to the new first-party import manifest; remove old private-cache schema assumptions | `candidate` |
-| `Infrastructure/Persistence` | JSON store and player-session repository | Adapt to Aurora's versioned profile snapshots and atomic save/cache policy | `candidate` |
-| World content, arrival, scheduling, collision, navigation, lighting, terrain, water, and material services | Substantial DAO-specific Godot presentation knowledge | Keep DAO-specific; split source interpretation into the profile and rendering into the Godot adapter | `candidate` |
-| DAO shaders | Terrain, water, sky, character, hair, eyelash, tint, static/cutout, cloud, and fallback-effect paths | Port only after source material identities and parameters are imported and hash-bound; no hand-authored visual substitution may close parity | `candidate` |
-| `MainMenu` GFX/atlas/font/canvas classes | Source-driven menu, Scaleform-like canvas, fonts, character creation, preview, video options, and world-map foundations | Adapt under a DAO UI presenter selected by the neutral runtime dispatcher | `candidate` |
-| `Intro` sequence plan/controller | Startup sequence orchestration | Convert to neutral startup requests plus DAO-authored sequence data; no DAO timing in Core | `candidate` |
-| `Presentation/Cinematics` | Dialogue, layered animation, player appearance, opening cutscene, and FaceFX presentation foundations | Adapt to DAO profile records and matched route telemetry | `candidate` |
-| `Presentation/Player` and `Presentation/World` | Player controller, interaction/highlight, world composition, HUD, scene bounds | Reuse behavior where evidence-backed; replace standalone composition with Aurora profile dispatch | `candidate` |
+| `Domain/Characters`, `Abilities`, `Inventory`, `Party`, `Quests`, `Combat`, `Story`, `Sessions`, `World` | Plain state/value objects and invariants | Port only DAO semantics into `Profiles.DragonAgeOrigins`; promote a contract to Core only after KOTOR proves the same neutral abstraction | `porting` |
+| `Application/Abstractions` and character initializers | Narrow ports for profiles, persistence, content, lighting, navigation, models, time, and environment | Use as design evidence; reconcile with Aurora interfaces instead of creating a second application framework | `porting` |
+| `Infrastructure/Archives/ErfArchive.cs` | Bounded ERF V2.0 and ERF/RIM V2.1 reader with synthetic coverage | Port into a first-party DAO format library, preserve fail-closed range/compression checks, expand with owned-source precedence tests | `porting` |
+| `Infrastructure/Catalogs/ClassicGff32RootReader.cs` | First-party classic GFF root reader | Port into the DAO format library and expand to every field/list/layout required by the selected route | `porting` |
+| GDA/area/character catalog providers | Data-backed ability, character, and area adapters | Rebind to the new first-party import manifest; remove old private-cache schema assumptions | `porting` |
+| `Infrastructure/Persistence` | JSON store and player-session repository | Adapt to Aurora's versioned profile snapshots and atomic save/cache policy | `porting` |
+| World content, arrival, scheduling, collision, navigation, lighting, terrain, water, and material services | Substantial DAO-specific Godot presentation knowledge | Keep DAO-specific; split source interpretation into the profile and rendering into the Godot adapter | `porting` |
+| DAO shaders | Terrain, water, sky, character, hair, eyelash, tint, static/cutout, cloud, and fallback-effect paths | Port only after source material identities and parameters are imported and hash-bound; no hand-authored visual substitution may close parity | `porting` |
+| `MainMenu` GFX/atlas/font/canvas classes | Source-driven menu, Scaleform-like canvas, fonts, character creation, preview, video options, and world-map foundations | Adapt under a DAO UI presenter selected by the neutral runtime dispatcher | `porting` |
+| `Intro` sequence plan/controller | Startup sequence orchestration | Convert to neutral startup requests plus DAO-authored sequence data; no DAO timing in Core | `porting` |
+| `Presentation/Cinematics` | Dialogue, layered animation, player appearance, opening cutscene, and FaceFX presentation foundations | Adapt to DAO profile records and matched route telemetry | `porting` |
+| `Presentation/Player` and `Presentation/World` | Player controller, interaction/highlight, world composition, HUD, scene bounds | Reuse behavior where evidence-backed; replace standalone composition with Aurora profile dispatch | `porting` |
 | `Diagnostics` and smoke gates | Architecture, character flow, abilities, locomotion, and runtime-file checks | Port useful assertions into dependency-free Aurora acceptance projects | `candidate` |
-| Native launcher and `Launcher` UI | Installation/session/display concepts | Do not ship a DAO-specific launcher; harvest requirements into one Aurora launcher | `candidate` |
+| Native launcher and `Launcher` UI | Installation/session/display concepts | Do not ship a DAO-specific launcher; harvest requirements into one Aurora launcher | `porting` |
 
 ## Rewrite rather than copy
 
@@ -166,7 +191,7 @@ approved. It must never shell out to a game-specific converter.
 
 The OpenDAO harvest is complete for the Hello World only when:
 
-- every subsystem required by `dao-dalish-level1-v1` is at least
+- every subsystem required by `dao-city-elf-level1-v1` is at least
   `owned-data-proven`;
 - every visible or behavioral route checkpoint is `parity-accepted`;
 - the fresh cache is generated without Haven Tools, private importers, or

@@ -127,14 +127,18 @@ The current KOTOR opening proof is source-bound and functional through a staged
 first encounter, but retail visual parity and this complete production route
 are not yet proven.
 
-## DAO route: `dao-dalish-level1-v1`
+## DAO route: `dao-city-elf-level1-v1`
 
 ### Identity
 
 - Profile ID: `dragon-age-origins`
 - Engine family: Eclipse
-- Initial origin: Dalish Elf, selected because the prior OpenDAO tree contains
-  the strongest existing origin-area, actor, and cinematic evidence for it.
+- Current verified executable SHA-256:
+  `400C2C9E97BB1A534121553BE66F202429EF6F7320C93C86F9B7A491864647BD`
+- Locked development-proof identity: female City Elf rogue `Kallian`, appearance
+  `preset-4`.
+- Opening area/arrival: `bec110ar_players_house` / `bec110wp_start`.
+- Opening cinematic/dialogue: `start_wake` / `bec110cr_shianni`.
 
 Before implementation acceptance begins, the supported DAO edition/executable
 hash and exact sex, class, appearance preset, difficulty, and dialogue route
@@ -149,8 +153,9 @@ those fields creates a new evidence row.
 3. The authored startup presentation and DAO main menu appear.
 4. New Game and the accepted character-creation path work through the native
    source-driven interface.
-5. The selected Dalish origin starts at its real beginning; the old shortcut
-   directly into Redcliffe is not an accepted substitute.
+5. The City Elf origin starts in the player's house at its real beginning,
+   including the owned Alienage loading presentation and wake-up sequence; the
+   old shortcut directly into Redcliffe is not an accepted substitute.
 6. The opening cinematic/dialogue uses source actors, equipment, animation,
    FaceFX, cameras, lighting, voices, music, sound effects, and timing.
 7. The player regains control with the native HUD, movement, interaction,
@@ -159,10 +164,16 @@ those fields creates a new evidence row.
    unrestricted control.
 9. Save, exit, and Continue restore the accepted state.
 
-The OpenDAO repository contains valuable public runtime and presentation code,
-but the current Aurora DAO profile only detects an installation. Prior OpenDAO
-captures and documentation are migration evidence, not proof that this route
-already boots inside Nikami Aurora. The controlled harvest is specified in
+Aurora now boots an automated development version of this exact route through
+the shared dispatcher. Public OpenDAO code supplies the DAO menus, GFx reader,
+world presentation, actors, cinematic/dialogue, FaceFX, audio, HUD, and player
+adapter. The gate proves complete preset-4 bodies, the area-specific retail
+loading artwork, source cameras/voices, dialogue completion, HUD, and
+locomotion. It does **not** yet satisfy this production contract: its imported
+world/generated presentation comes from external ignored OpenDAO cache roots,
+the route is automation-driven, the first combat/save/Continue stages are
+absent, and matched retail parity is not accepted. The controlled migration and
+remaining importer boundary are specified in
 [`OPENDAO-HARVEST.md`](OPENDAO-HARVEST.md).
 
 ## Architecture boundary

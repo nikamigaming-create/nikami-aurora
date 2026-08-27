@@ -52,4 +52,6 @@ must not encode KOTOR or Dragon Age defaults in `Core`.
 
 - `kotor`: Odyssey-family profile. The first vertical slice is `end_m01aa`.
 - `dragon-age-origins`: Eclipse-family profile migrated selectively from
-  OpenDAO after the core contracts survive the KOTOR implementation.
+  OpenDAO. Its interim City Elf slice now runs through the neutral dispatcher;
+  the external compatibility-cache boundary remains a migration blocker, not
+  an accepted release dependency.
