@@ -7,6 +7,9 @@ param(
     [string]$Godot,
     [string]$OpenXRRuntimeJson,
 
+    [ValidateSet('Desktop', 'OpenXRSimulator')]
+    [string]$Presentation = 'Desktop',
+
     [ValidateRange(24, 120)]
     [int]$FramesPerSecond = 60,
 
@@ -54,7 +57,6 @@ $completed = $false
 
 try {
     $launch = @{
-        OpenXRSimulator = $true
         ShowcaseRoute = $true
         ExitOnShowcaseComplete = $true
         CleanCapture = $true
@@ -62,6 +64,9 @@ try {
         MovieFps = $FramesPerSecond
         GodotStdoutPath = $godotStdoutLog
         GodotStderrPath = $godotStderrLog
+    }
+    if ($Presentation -eq 'OpenXRSimulator') {
+        $launch.OpenXRSimulator = $true
     }
     if (-not [string]::IsNullOrWhiteSpace($Manifest)) {
         $launch.Manifest = $Manifest
@@ -85,37 +90,43 @@ try {
     $consoleText = (Get-Content -LiteralPath $godotStdoutLog -Raw) +
                    [Environment]::NewLine +
                    (Get-Content -LiteralPath $godotStderrLog -Raw)
-    $shutdownMarker = 'NIKAMI_AURORA_OPENXR status=shutdown-requested boundary=frame-post-draw'
-    $shutdownIndex = $consoleText.IndexOf(
-        $shutdownMarker, [StringComparison]::Ordinal)
-    if ($shutdownIndex -lt 0) {
-        throw 'Godot console did not report its post-draw OpenXR shutdown request.'
-    }
-    $allowedTeardownErrors = @(
-        "^ERROR: 2 RID allocations of type 'N9OpenXRAPI18InteractionProfileE' were leaked at exit\.$",
-        "^ERROR: Attempt to disconnect a nonexistent connection from '<OpenXRSpatialEntityExtension#[0-9]+>'\. Signal: 'spatial_discovery_recommended', callable: 'OpenXRSpatialMarkerTrackingCapability::_on_spatial_discovery_recommended'\.$"
-    )
     $consoleErrors = [regex]::Matches(
         $consoleText, '(?m)^ERROR:.*$') | ForEach-Object {
             $_.Value.TrimEnd([char[]]"`r")
         }
-    foreach ($consoleError in $consoleErrors) {
-        $allowed = $false
-        foreach ($pattern in $allowedTeardownErrors) {
-            if ($consoleError -match $pattern) {
-                $allowed = $true
-                break
+    if ($Presentation -eq 'OpenXRSimulator') {
+        $shutdownMarker = 'NIKAMI_AURORA_OPENXR status=shutdown-requested boundary=frame-post-draw'
+        $shutdownIndex = $consoleText.IndexOf(
+            $shutdownMarker, [StringComparison]::Ordinal)
+        if ($shutdownIndex -lt 0) {
+            throw 'Godot console did not report its post-draw OpenXR shutdown request.'
+        }
+        $allowedTeardownErrors = @(
+            "^ERROR: 2 RID allocations of type 'N9OpenXRAPI18InteractionProfileE' were leaked at exit\.$",
+            "^ERROR: Attempt to disconnect a nonexistent connection from '<OpenXRSpatialEntityExtension#[0-9]+>'\. Signal: 'spatial_discovery_recommended', callable: 'OpenXRSpatialMarkerTrackingCapability::_on_spatial_discovery_recommended'\.$"
+        )
+        foreach ($consoleError in $consoleErrors) {
+            $allowed = $false
+            foreach ($pattern in $allowedTeardownErrors) {
+                if ($consoleError -match $pattern) {
+                    $allowed = $true
+                    break
+                }
+            }
+            if (-not $allowed -or
+                $consoleText.IndexOf($consoleError, [StringComparison]::Ordinal) -lt
+                    $shutdownIndex) {
+                throw "Unexpected Godot console error: $consoleError"
             }
         }
-        if (-not $allowed -or
-            $consoleText.IndexOf($consoleError, [StringComparison]::Ordinal) -lt
-                $shutdownIndex) {
-            throw "Unexpected Godot console error: $consoleError"
+        if ($consoleErrors.Count -ne 2) {
+            throw "Expected exactly two allowlisted Godot teardown diagnostics, " +
+                  "found $($consoleErrors.Count)."
         }
     }
-    if ($consoleErrors.Count -ne 2) {
-        throw "Expected exactly two allowlisted Godot teardown diagnostics, " +
-              "found $($consoleErrors.Count)."
+    elseif ($consoleErrors.Count -ne 0) {
+        throw "Desktop recording reported a Godot console error: " +
+              $consoleErrors[0]
     }
 
     $runtimeLog = Join-Path $env:APPDATA `
@@ -125,23 +136,32 @@ try {
     }
     $runtimeText = Get-Content -LiteralPath $runtimeLog -Raw
     $requiredTelemetry = @(
-        'NIKAMI_AURORA_OPENXR status=ready',
-        'spectator=True',
         ('NIKAMI_AURORA_ROOM_EMITTERS status=ready authored=12 ' +
          'materialized=12 smoke=9 sparks=3'),
         'NIKAMI_AURORA_SHOWCASE_TRANSMISSION status=pass',
         'NIKAMI_AURORA_FIRST_ENCOUNTER status=pass',
-        ('NIKAMI_AURORA_XR_LOCAL_AVATAR status=gameplay-head-hidden ' +
-         'headMeshes=8 bodyMeshes=3 hands=left,right weapon=present'),
         'NIKAMI_AURORA_SHOWCASE status=pass'
     )
+    if ($Presentation -eq 'OpenXRSimulator') {
+        $requiredTelemetry += @(
+            'NIKAMI_AURORA_OPENXR status=ready',
+            'spectator=True',
+            ('NIKAMI_AURORA_XR_LOCAL_AVATAR status=gameplay-head-hidden ' +
+             'headMeshes=8 bodyMeshes=3 hands=left,right weapon=present')
+        )
+    }
+    else {
+        $requiredTelemetry += 'NIKAMI_AURORA_OPENXR status=disabled'
+    }
     foreach ($required in $requiredTelemetry) {
         if (-not $runtimeText.Contains($required, [StringComparison]::Ordinal)) {
             throw "Showcase runtime telemetry is missing: $required"
         }
     }
-    if ($runtimeText -match 'ERROR:|status=fail|fallback=desktop') {
-        throw 'Showcase runtime log contains an error, failure, or XR fallback.'
+    if ($runtimeText -match 'ERROR:|status=fail' -or
+        ($Presentation -eq 'OpenXRSimulator' -and
+         $runtimeText -match 'fallback=desktop')) {
+        throw 'Showcase runtime log contains an error, failure, or invalid fallback.'
     }
 
     & $ffmpegCommand.Source -nostdin -hide_banner -loglevel error `
@@ -181,6 +201,7 @@ try {
         videoCodec = [string]$video[0].codec_name
         audioCodec = [string]$audio[0].codec_name
         framesPerSecond = $FramesPerSecond
+        presentation = $Presentation
         allowlistedGodotTeardownDiagnostics = $consoleErrors.Count
     }
     $completed = $true

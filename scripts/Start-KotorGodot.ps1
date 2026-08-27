@@ -73,10 +73,13 @@ if ([string]::IsNullOrWhiteSpace($Godot)) {
 }
 $resolvedMoviePath = $null
 if (-not [string]::IsNullOrWhiteSpace($MoviePath)) {
-    if (-not $OpenXRSimulator -or
-        (-not $ShowcaseRoute -and -not $TestFirstEncounter)) {
-        throw "-MoviePath requires -OpenXRSimulator and either " +
-              "-ShowcaseRoute or -TestFirstEncounter."
+    if (-not $ShowcaseRoute -and -not $TestFirstEncounter) {
+        throw "-MoviePath requires either -ShowcaseRoute or " +
+              "-TestFirstEncounter."
+    }
+    if ($OpenXR -and -not $OpenXRSimulator) {
+        throw "-MoviePath supports desktop or -OpenXRSimulator recording; " +
+              "a live headset recording is not deterministic."
     }
     $extension = [IO.Path]::GetExtension($MoviePath).ToLowerInvariant()
     if ($extension -notin @('.avi', '.ogv')) {
