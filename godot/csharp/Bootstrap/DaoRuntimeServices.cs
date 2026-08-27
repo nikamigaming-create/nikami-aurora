@@ -1,0 +1,113 @@
+using OpenDAO.Application.Abstractions;
+using OpenDAO.Application.Characters;
+using OpenDAO.Domain.Abilities;
+using OpenDAO.Domain.Combat;
+using OpenDAO.Domain.Inventory;
+using OpenDAO.Domain.Party;
+using OpenDAO.Domain.Quests;
+using OpenDAO.Domain.Story;
+using OpenDAO.Infrastructure.Catalogs;
+using OpenDAO.Infrastructure.Configuration;
+using OpenDAO.Infrastructure.Persistence;
+using OpenDAO.Infrastructure.Time;
+using OpenDAO.Infrastructure.World;
+using OpenDAO.Presentation.Cinematics;
+
+namespace OpenDAO.Bootstrap;
+
+/// <summary>
+/// Explicit City Elf composition root owned by the Aurora DAO adapter. This
+/// replaces the legacy general-purpose DI package with one auditable object
+/// graph containing only services exercised by the accepted opening slice.
+/// </summary>
+internal sealed class DaoRuntimeServices : IDisposable
+{
+    private readonly Dictionary<Type, object> services = [];
+
+    public DaoRuntimeServices()
+    {
+        var clock = new GodotClock();
+        var environment = new GodotRuntimeEnvironment();
+        var store = new JsonFileStore(environment);
+        var sessionRepository = new PlayerSessionRepository(store, environment);
+        var worldProfileProvider = new WorldProfileProvider(store, environment);
+        var arrivalResolver = new GodotWorldArrivalResolver(store);
+        var characterProfileProvider = new CharacterProfileProvider(store, environment);
+        var characterModelResolver = new CachedDaoCharacterModelResolver();
+        var characterCinematicModelResolver = new CachedDaoCharacterCinematicModelResolver();
+        var cinematicActorModelResolver = new CachedDaoCinematicActorModelResolver();
+        var locomotionProvider = new CachedDaoLocomotionAnimationProvider();
+        var characterMaterials = new DaoCharacterMaterialPostprocessor();
+        var modelCache = new GodotModelCache(characterMaterials);
+        var scheduler = new GodotWorldLoadScheduler();
+        var navigation = new DaoArlNavigationGridSource();
+        var blockers = new AuthoredWorldBlockerBuilder();
+        var lighting = new DaoAuthoredLightingResolver();
+        var terrainMaterials = new DaoTerrainMaterialFactory(store);
+        var waterMaterials = new DaoWaterMaterialFactory(store);
+        var batches = new StaticWorldBatchBuilder(scheduler);
+        var story = new StoryState();
+        var worldLoader = new GodotWorldContentLoader(store, modelCache, batches,
+            terrainMaterials, waterMaterials, navigation, blockers, lighting,
+            story, scheduler);
+        var abilityCatalog = new GdaAbilityCatalog(store);
+        var areaPresentation = new DaoAreaPresentationProvider(store);
+        var characterLoadouts = new GdaCharacterAbilityLoadoutProvider(store, environment);
+        var abilities = new AbilityState(clock);
+        var abilityInitializer = new CharacterAbilityInitializer(
+            characterLoadouts, abilityCatalog, abilities);
+        var storyInitializer = new CharacterStoryInitializer(story);
+
+        Add<IClock>(clock);
+        Add<IRuntimeEnvironment>(environment);
+        Add<IJsonStore>(store);
+        Add<IPlayerSessionRepository>(sessionRepository);
+        Add<IWorldProfileProvider>(worldProfileProvider);
+        Add<IWorldArrivalResolver>(arrivalResolver);
+        Add<ICharacterProfileProvider>(characterProfileProvider);
+        Add<ICharacterModelResolver>(characterModelResolver);
+        Add<ICharacterCinematicModelResolver>(characterCinematicModelResolver);
+        Add<ICinematicActorModelResolver>(cinematicActorModelResolver);
+        Add<ILocomotionAnimationProvider>(locomotionProvider);
+        Add<IGodotModelPostprocessor>(characterMaterials);
+        Add<ICharacterLightingBinder>(characterMaterials);
+        Add<IGodotModelCache>(modelCache);
+        Add<IWorldLoadScheduler>(scheduler);
+        Add<IAuthoredNavigationGridSource>(navigation);
+        Add<IAuthoredWorldBlockerBuilder>(blockers);
+        Add<IAuthoredLightingResolver>(lighting);
+        Add<IDaoTerrainMaterialFactory>(terrainMaterials);
+        Add<IDaoWaterMaterialFactory>(waterMaterials);
+        Add<IStaticWorldBatchBuilder>(batches);
+        Add<IWorldContentLoader>(worldLoader);
+        Add<IAbilityCatalog>(abilityCatalog);
+        Add<IAreaPresentationProvider>(areaPresentation);
+        Add<ICharacterAbilityLoadoutProvider>(characterLoadouts);
+        Add(abilityInitializer);
+        Add(storyInitializer);
+        Add(abilities);
+        Add(story);
+        Add(new CombatState());
+        Add(new PartyState());
+        Add(new InventoryState());
+        Add(new QuestJournal());
+        Add(new FaceFxRuntime());
+    }
+
+    public T GetRequired<T>() where T : class =>
+        services.TryGetValue(typeof(T), out var service)
+            ? (T)service
+            : throw new InvalidOperationException(
+                $"DAO runtime service is not registered: {typeof(T).FullName}");
+
+    public void Dispose()
+    {
+        foreach (var disposable in services.Values
+                     .Distinct(ReferenceEqualityComparer.Instance)
+                     .OfType<IDisposable>())
+            disposable.Dispose();
+        services.Clear();
+    }
+
+    private void Add<T>(T service) where T : class => services.Add(typeof(T), service);
+}

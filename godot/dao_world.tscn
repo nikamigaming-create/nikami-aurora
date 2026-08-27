@@ -1,0 +1,98 @@
+[gd_scene load_steps=10 format=3]
+
+[ext_resource type="Script" path="res://csharp/Presentation/World/OpenDaoWorld.cs" id="1_main"]
+[ext_resource type="Script" path="res://csharp/Presentation/Player/PlayerController.cs" id="2_player"]
+[ext_resource type="Script" path="res://csharp/Presentation/XR/XrRig.cs" id="3_xr"]
+
+[sub_resource type="ProceduralSkyMaterial" id="SkyMaterial_redcliffe"]
+sky_top_color = Color(0.12, 0.2, 0.38, 1)
+sky_horizon_color = Color(0.62, 0.55, 0.48, 1)
+ground_bottom_color = Color(0.035, 0.028, 0.03, 1)
+ground_horizon_color = Color(0.38, 0.32, 0.3, 1)
+sun_angle_max = 18.0
+sun_curve = 0.08
+
+[sub_resource type="Sky" id="Sky_redcliffe"]
+sky_material = SubResource("SkyMaterial_redcliffe")
+
+[sub_resource type="Environment" id="Environment_redcliffe"]
+background_mode = 2
+sky = SubResource("Sky_redcliffe")
+ambient_light_source = 3
+ambient_light_color = Color(0.46, 0.49, 0.58, 1)
+ambient_light_energy = 0.72
+reflected_light_source = 2
+tonemap_mode = 2
+
+[sub_resource type="CapsuleShape3D" id="Capsule_player"]
+radius = 0.35
+height = 1.8
+
+[node name="OpenDAO" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="Environment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_redcliffe")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-48, -32, 0)
+light_color = Color(1, 0.82, 0.63, 1)
+light_energy = 1.55
+shadow_enabled = true
+directional_shadow_max_distance = 180.0
+
+[node name="Fill" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-24, 142, 0)
+light_color = Color(0.34, 0.43, 0.67, 1)
+light_energy = 0.55
+shadow_enabled = false
+
+[node name="DAOScene" type="Node3D" parent="."]
+
+[node name="Player" type="CharacterBody3D" parent="."]
+position = Vector3(255, 3.67, -316)
+floor_max_angle = 0.959931
+floor_snap_length = 0.55
+script = ExtResource("2_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player"]
+shape = SubResource("Capsule_player")
+
+[node name="AvatarRoot" type="Node3D" parent="Player"]
+
+[node name="Head" type="SpringArm3D" parent="Player"]
+position = Vector3(0, 0.8, 0)
+rotation_degrees = Vector3(-10, 0, 0)
+spring_length = 2.7
+margin = 0.08
+collision_mask = 3
+
+[node name="Camera3D" type="Camera3D" parent="Player/Head"]
+current = true
+fov = 58.0
+near = 0.05
+far = 1000.0
+
+[node name="XROrigin3D" type="XROrigin3D" parent="Player"]
+position = Vector3(0, -0.9, 0)
+script = ExtResource("3_xr")
+
+[node name="XRCamera3D" type="XRCamera3D" parent="Player/XROrigin3D"]
+near = 0.05
+far = 1000.0
+
+[node name="LeftHand" type="XRController3D" parent="Player/XROrigin3D"]
+tracker = &"/user/hand/left"
+
+[node name="RightHand" type="XRController3D" parent="Player/XROrigin3D"]
+tracker = &"/user/hand/right"
+
+[node name="Status" type="Label" parent="."]
+offset_left = 18.0
+offset_top = 16.0
+offset_right = 520.0
+offset_bottom = 70.0
+text = "OPENDAO AREA VIEWER\nLoading authored area…\nWASD move • mouse look • Shift sprint • Esc area browser"
+visible = false
+theme_override_colors/font_color = Color(0.92, 0.86, 0.7, 1)
+theme_override_font_sizes/font_size = 18

@@ -1,0 +1,54 @@
+// Matthew W, 2026-08-15
+
+namespace OpenDAO.Launcher;
+
+internal static class RuntimeAutomation
+{
+    internal static readonly string[] WorldFlags =
+    [
+        "DAOPEN_CAPTURE",
+        "OPENDAO_CSHARP_WORLD_SMOKE_EXIT",
+        "DAOPEN_TOUR",
+        "DAOPEN_AREA_VIDEO",
+        "OPENDAO_PERFORMANCE_GATE",
+        "OPENDAO_LOCOMOTION_TEST",
+        "OPENDAO_WATER_CLASSIFICATION_SMOKE",
+        "OPENDAO_ASYNC_PRELOAD_TRANSITION_SMOKE",
+        "OPENDAO_GAMEPLAY_JOURNEY",
+        "OPENDAO_FRESH_GAME_ACCEPTANCE",
+        "OPENDAO_ACTOR_RIG_AUDIT",
+        "OPENDAO_DYNAMIC_MATERIALIZATION_SMOKE",
+        "OPENDAO_PROTOTYPE_CACHE_SMOKE",
+        "OPENDAO_INTERACTION_SMOKE",
+        "OPENDAO_COMBAT_STORY_SMOKE",
+        "OPENDAO_FOLLOWER_ROSTER_SMOKE",
+        "OPENDAO_FOLLOWER_COLLISION_GUARD_SMOKE",
+        "OPENDAO_CAMPAIGN_TRANSITION_SMOKE",
+        "OPENDAO_PLACEABLE_USE_SMOKE",
+        "OPENDAO_PORTAL_PREVIEW_SMOKE",
+        "OPENDAO_WORLD_MAP_SMOKE",
+        "OPENDAO_DIALOGUE_SMOKE",
+        "OPENDAO_NONRENDER_SMOKE",
+        "OPENDAO_CAVERN_DIAGNOSTIC",
+        "OPENDAO_CAVERN_STATIC",
+        "OPENDAO_DYNAMIC_SHOT",
+        "OPENDAO_WAYPOINT_STATIC",
+        "OPENDAO_ROOM_STATIC",
+        "OPENDAO_SCREEN_DIAGNOSTIC",
+        "OPENDAO_CATALOG_TOUR",
+        "OPENDAO_FULL_AREA_TOUR",
+        "DAOPEN_CINEMATIC_CRAWL",
+        "DAOPEN_EXPORT_GLTF",
+        "OPENDAO_ACTOR_PROOF_MODEL",
+        "DAOPEN_CINEMATIC",
+        "DAOPEN_PORTRAIT",
+        "DAOPEN_START_AREA",
+        "DAOPEN_TEST_ROUNDTRIP",
+        "DAOPEN_TEST_DOOR_LEVEL",
+        "DAOPEN_TEST_PLATFORM",
+        "DAOPEN_TELEMETRY_PATH"
+    ];
+
+    internal static bool WantsWorld() => WorldFlags.Any(flag =>
+        !string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable(flag)));
+}

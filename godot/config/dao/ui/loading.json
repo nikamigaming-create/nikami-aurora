@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "archiveRelativePath": "packages/core/data/guiexport.erf",
+  "movieResource": "load_town.gfx",
+  "atlasMaps": [
+    "atl_load_town_dxt5_dat.xml",
+    "atl_shared_dxt1_dat.xml",
+    "atl_shared_dxt5_dat.xml"
+  ],
+  "scaleMode": "fit-stage",
+  "advanceFrames": 1,
+  "artworkArchiveRelativePath": "packages/core/data/gui.erf",
+  "artworkScaleMode": "cover",
+  "artworkRules": [
+    {
+      "areaPrefix": "bec",
+      "resource": "ss_alienage.dds"
+    }
+  ],
+  "layer": 90,
+  "backgroundColor": [0.0, 0.0, 0.0, 1.0]
+}

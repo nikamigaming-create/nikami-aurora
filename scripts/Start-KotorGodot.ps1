@@ -104,6 +104,7 @@ if ($redirectGodotOutput) {
     $resolvedGodotStderrPath = [IO.Path]::GetFullPath($GodotStderrPath)
 }
 
+$env:NIKAMI_AURORA_PROFILE = 'kotor'
 $env:NIKAMI_AURORA_MODULE_MANIFEST = (Resolve-Path -LiteralPath $Manifest).Path
 if (-not [string]::IsNullOrWhiteSpace($CapturePath)) {
     $env:NIKAMI_AURORA_CAPTURE = [IO.Path]::GetFullPath($CapturePath)
@@ -332,6 +333,7 @@ try {
     }
 }
 finally {
+    Remove-Item Env:NIKAMI_AURORA_PROFILE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_MODULE_MANIFEST -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_FRAME -ErrorAction SilentlyContinue
