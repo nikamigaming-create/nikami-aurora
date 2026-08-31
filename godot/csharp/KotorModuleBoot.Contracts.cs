@@ -307,7 +307,8 @@ public sealed partial class KotorModuleBoot
         string? IdleAnimation = null,
         IReadOnlyList<float>? RenderExtent = null,
         PlayerAnimationRecord? Animation = null,
-        IReadOnlyList<CreatureModelRecord>? Models = null);
+        IReadOnlyList<CreatureModelRecord>? Models = null,
+        CreatureEffectsRecord? Effects = null);
     private sealed record CreatureModelRecord(
         string Role,
         string Model,
@@ -318,6 +319,77 @@ public sealed partial class KotorModuleBoot
         int AdditiveSurfaces,
         int EmitterNodes,
         int LightNodes);
+    private sealed record CreatureEffectsRecord(
+        string Schema,
+        IReadOnlyList<CreatureEmitterRecord> Emitters,
+        IReadOnlyList<CreatureLightRecord> Lights,
+        IReadOnlyList<CreatureEffectAnimationRecord> Animations);
+    private sealed record CreatureEmitterRecord(
+        string Schema,
+        string Role,
+        string Model,
+        string AnchorNode,
+        FirstEncounterEffectTexture Texture,
+        string Update,
+        string Render,
+        string Blend,
+        int Flags,
+        int Loop,
+        int TwoSidedTexture,
+        int XGrid,
+        int YGrid,
+        float BirthRate,
+        float RandomBirthRate,
+        float Velocity,
+        float RandomVelocity,
+        float XSize,
+        float YSize,
+        float Gravity,
+        float Mass,
+        float ParticleRotation,
+        float SpreadRadians,
+        float LifeExpectancy,
+        IReadOnlyList<float> ColorStart,
+        IReadOnlyList<float> ColorMid,
+        IReadOnlyList<float> ColorEnd,
+        float PercentStart,
+        float PercentMid,
+        float PercentEnd,
+        float AlphaStart,
+        float AlphaMid,
+        float AlphaEnd,
+        float SizeStart,
+        float SizeMid,
+        float SizeEnd,
+        float FrameStart,
+        float FrameEnd,
+        float Fps,
+        float BlurLength,
+        float BounceCoefficient);
+    private sealed record CreatureLightRecord(
+        string Schema,
+        string Role,
+        string Model,
+        string AnchorNode,
+        IReadOnlyList<float> Color,
+        float Radius,
+        float Multiplier,
+        int DynamicType,
+        bool AffectDynamic,
+        bool AmbientOnly);
+    private sealed record CreatureEffectAnimationRecord(
+        string Name,
+        float Length,
+        IReadOnlyList<CreatureEffectEventRecord> Events,
+        IReadOnlyList<CreatureEffectTrackRecord> Tracks);
+    private sealed record CreatureEffectEventRecord(float Time, string Name);
+    private sealed record CreatureEffectTrackRecord(
+        string AnchorNode,
+        string Controller,
+        IReadOnlyList<CreatureEffectKeyRecord> Keys);
+    private sealed record CreatureEffectKeyRecord(
+        float Time,
+        IReadOnlyList<float> Value);
     private sealed record DoorRecord(string Template, string Tag, IReadOnlyList<float> Position, float Bearing,
         string LinkedToModule, string? Glb, string? Model, string? Conversation, string? OnOpen,
         bool Locked, bool KeyRequired);
@@ -409,7 +481,10 @@ public sealed partial class KotorModuleBoot
         int UnsupportedCreatures = 0,
         int AuthoredCreatureModels = 0,
         int EquippedWeaponModels = 0,
-        int EquippedWeaponAdditiveSurfaces = 0);
+        int EquippedWeaponAdditiveSurfaces = 0,
+        int AuthoredCreatureEmitters = 0,
+        int AuthoredCreatureLights = 0,
+        int AuthoredCreatureEffectAnimations = 0);
     private readonly record struct NavigationTriangle(Vector3 A, Vector3 B, Vector3 C);
     private readonly record struct StaticMaterialReport(
         int LightmappedOpaque,
@@ -479,5 +554,21 @@ public sealed partial class KotorModuleBoot
     {
         public CreatureRecord Source { get; } = source;
         public Node3D Model { get; } = model;
+    }
+    private sealed class CreatureEffectRig(
+        IReadOnlyDictionary<string, GpuParticles3D> emitters,
+        IReadOnlyDictionary<string, OmniLight3D> lights,
+        IReadOnlyDictionary<string, CreatureEffectAnimationRecord> animations)
+    {
+        public IReadOnlyDictionary<string, GpuParticles3D> Emitters { get; } = emitters;
+        public IReadOnlyList<GpuParticles3D> ExplosionEmitters { get; } =
+            emitters.Values.Where(candidate =>
+                candidate.GetMeta("source_update").AsString().Equals(
+                    "Explosion", StringComparison.OrdinalIgnoreCase)).ToArray();
+        public IReadOnlyDictionary<string, OmniLight3D> Lights { get; } = lights;
+        public IReadOnlyDictionary<string, CreatureEffectAnimationRecord> Animations { get; } =
+            animations;
+        public List<Tween> ActiveTweens { get; } = [];
+        public int Generation { get; set; }
     }
 }

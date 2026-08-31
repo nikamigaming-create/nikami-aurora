@@ -1738,17 +1738,143 @@ def actor_model_records(
             "mdxSha256": sha256_bytes(mdx_bytes),
             **model_presentation_inventory(source_model, textures, override),
         })
-    unsupported = [
-        f"{record['role']}:{record['model']}:emitters={record['emitterNodes']}:"
-        f"lights={record['lightNodes']}"
-        for record in records
-        if record["emitterNodes"] or record["lightNodes"]
-    ]
-    if unsupported:
-        raise RuntimeError(
-            "Actor model contains effect nodes not carried by the glTF path: " +
-            ",".join(unsupported))
     return records
+
+
+def actor_effect_records(
+    installation: Installation,
+    source_models: Iterable[tuple[
+        str, str | None, str | None, Any | None, bytes | None, bytes | None]],
+    textures: TextureCache,
+    output_root: Path,
+    animation_model: Any,
+) -> dict[str, Any]:
+    """Export attached actor effects without activating them out of context."""
+    role_prefix = {
+        "body": "",
+        "head": "head::",
+        "rightWeapon": "weapon::",
+        "leftWeapon": "left-weapon::",
+    }
+    emitters: list[dict[str, Any]] = []
+    lights: list[dict[str, Any]] = []
+    anchors: set[str] = set()
+    source_models = tuple(source_models)
+    for role, model_name, _override, model, _mdl, _mdx in source_models:
+        if not model_name or model is None:
+            continue
+        prefix = role_prefix[role]
+        for node in model.all_nodes():
+            if node.emitter is None and node.light is None:
+                continue
+            anchor = prefix + str(node.name)
+            if anchor.casefold() in anchors:
+                raise RuntimeError(
+                    f"Ambiguous actor effect anchor: {role}:{model_name}:{anchor}")
+            anchors.add(anchor.casefold())
+            if node.emitter is not None:
+                emitter = node.emitter
+                update = str(emitter.update).casefold()
+                render = str(emitter.render).casefold()
+                blend = str(emitter.blend).casefold()
+                if (update not in {"explosion", "fountain"} or
+                        render not in {"normal", "motion_blur"} or
+                        blend not in SUPPORTED_ROOM_EMITTER_BLENDS):
+                    raise RuntimeError(
+                        "Unsupported actor emitter semantic: "
+                        f"{role}:{model_name}:{anchor} "
+                        f"update={emitter.update} render={emitter.render} "
+                        f"blend={emitter.blend}")
+                texture_name = str(emitter.texture or "").strip()
+                if not texture_name or texture_name.casefold() == "null":
+                    raise RuntimeError(
+                        f"Actor emitter has no texture: {role}:{model_name}:{anchor}")
+                values = room_emitter_controller_values(node)
+                if (float(values["lifeExpectancy"]) <= 0 or
+                        max(float(values["birthRate"]),
+                            float(values["randomBirthRate"])) <= 0):
+                    raise RuntimeError(
+                        f"Actor emitter has no finite burst: {role}:{model_name}:{anchor}")
+                emitters.append({
+                    "schema": "nikami-aurora-kotor-actor-emitter-v1",
+                    "role": role,
+                    "model": model_name,
+                    "anchorNode": anchor,
+                    "texture": export_effect_texture(
+                        installation, textures, texture_name, output_root),
+                    "update": str(emitter.update),
+                    "render": str(emitter.render),
+                    "blend": str(emitter.blend),
+                    "flags": int(emitter.flags),
+                    "loop": int(emitter.loop),
+                    "twoSidedTexture": int(emitter.two_sided_texture),
+                    "xGrid": max(1, int(emitter.x_grid)),
+                    "yGrid": max(1, int(emitter.y_grid)),
+                    **values,
+                })
+            if node.light is not None:
+                light = node.light
+                lights.append({
+                    "schema": "nikami-aurora-kotor-actor-light-v1",
+                    "role": role,
+                    "model": model_name,
+                    "anchorNode": anchor,
+                    "color": color3(light.color),
+                    "radius": float(light.radius),
+                    "multiplier": float(light.multiplier),
+                    "dynamicType": int(light.dynamic_type),
+                    "affectDynamic": bool(light.affect_dynamic),
+                    "ambientOnly": bool(light.ambient_only),
+                })
+
+    effect_anchors = {item["anchorNode"].casefold() for item in [*emitters, *lights]}
+    has_explosion_emitter = any(
+        item["update"].casefold() == "explosion" for item in emitters)
+    animations = []
+    for animation in animation_model.anims:
+        events = [
+            {"time": float(event.activation_time), "name": str(event.name)}
+            for event in animation.events
+            if has_explosion_emitter and
+            str(event.name).casefold() == "detonate"
+        ]
+        tracks = []
+        for node in animation.all_nodes():
+            anchor = str(node.name)
+            matching = [candidate for candidate in effect_anchors
+                        if candidate.endswith(anchor.casefold())]
+            if len(matching) > 1:
+                raise RuntimeError(
+                    f"Ambiguous actor effect animation anchor: {animation.name}:{anchor}")
+            if not matching:
+                continue
+            for controller in node.controllers:
+                if controller.controller_type not in {
+                        MDLControllerType.RADIUS, MDLControllerType.COLOR}:
+                    continue
+                tracks.append({
+                    "anchorNode": next(item["anchorNode"] for item in [*emitters, *lights]
+                                       if item["anchorNode"].casefold() == matching[0]),
+                    "controller": controller.controller_type.name.lower(),
+                    "keys": [
+                        {"time": float(row.time),
+                         "value": [float(value) for value in row.data[:3]]}
+                        for row in controller.rows
+                    ],
+                })
+        if events or tracks:
+            animations.append({
+                "name": str(animation.name),
+                "length": float(animation.length),
+                "events": events,
+                "tracks": tracks,
+            })
+    return {
+        "schema": "nikami-aurora-kotor-actor-effects-v1",
+        "emitters": emitters,
+        "lights": lights,
+        "animations": animations,
+    }
 
 
 def room_emitter_controller_values(node: Any) -> dict[str, Any]:
@@ -2536,11 +2662,15 @@ def export_humanoid_actor(
         for animation in model.anims:
             animations_by_name.setdefault(animation.name.lower(), animation)
     animation_model = SimpleNamespace(anims=list(animations_by_name.values()))
-    model_records = actor_model_records((
+    source_models = (
         ("body", body_model, body_texture, body, body_mdl, body_mdx),
         ("head", head_model, head_texture, head, head_mdl, head_mdx),
         ("rightWeapon", right_model, None, right, right_mdl, right_mdx),
-    ), textures)
+    )
+    model_records = actor_model_records(source_models, textures)
+    effect_records = actor_effect_records(
+        installation, source_models, textures, output_path.parent.parent,
+        animation_model)
     animation_report = export_actor(
         output_path,
         body_model=body,
@@ -2567,6 +2697,7 @@ def export_humanoid_actor(
         "minimumOneHitPoint": bool(utc.min1_hp),
         "noPermanentDeath": bool(utc.no_perm_death),
         "models": model_records,
+        "effects": effect_records,
         "animationSource": animation_sources[0]["model"],
         "animationSourceSha256": animation_sources[0]["sourceSha256"],
         "animationSources": animation_sources,
@@ -2699,6 +2830,13 @@ def export_source_creature_actor(
         ("leftWeapon", left_name, None, left, left_mdl, left_mdx),
     )
     model_records = actor_model_records(source_models, textures)
+    effect_records = actor_effect_records(
+        installation, source_models, textures, output_path.parent.parent,
+        animation_model)
+    exported_animation_names = tuple(dict.fromkeys([
+        *([idle_animation] if idle_animation else []),
+        *(record["name"] for record in effect_records["animations"]),
+    ]))
     animation_report = export_actor(
         output_path,
         body_model=body,
@@ -2712,7 +2850,7 @@ def export_source_creature_actor(
         left_weapon_model=left,
         left_weapon_name=left_name,
         animation_model=animation_model,
-        animation_names=(idle_animation,) if idle_animation else (),
+        animation_names=exported_animation_names,
         material_factory=lambda mesh, override: material_for(
             mesh, textures, override),
     )
@@ -2735,6 +2873,7 @@ def export_source_creature_actor(
         "headsTableSha256": sha256_bytes(heads_bytes),
         "baseItemsTableSha256": sha256_bytes(baseitems_bytes),
         "models": model_records,
+        "effects": effect_records,
         "animationSources": animation_sources,
         "idleAnimationOrigin": idle_origin,
         "animation": animation_report,
@@ -2806,6 +2945,15 @@ def creature_presentation_counts(
         "equippedWeaponModels": len(weapons),
         "equippedWeaponAdditiveSurfaces": sum(
             int(model["additiveSurfaces"]) for model in weapons),
+        "authoredCreatureEmitters": sum(
+            len(creature.get("effects", {}).get("emitters", []))
+            for creature in records),
+        "authoredCreatureLights": sum(
+            len(creature.get("effects", {}).get("lights", []))
+            for creature in records),
+        "authoredCreatureEffectAnimations": sum(
+            len(creature.get("effects", {}).get("animations", []))
+            for creature in records),
     }
 
 

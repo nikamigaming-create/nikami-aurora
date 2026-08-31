@@ -143,6 +143,11 @@ public sealed partial class KotorModuleBoot
         actorRecords.Clear();
         materializedCreatures.Clear();
         actorAnimations.Clear();
+        actorEffectRigs.Clear();
+        actorEffectTextures.Clear();
+        materializedCreatureEmitters = 0;
+        materializedCreatureLights = 0;
+        materializedCreatureEffectAnimations = 0;
         actorTalkOffsets.Clear();
         actorLipRigs.Clear();
         var loaded = 0;
@@ -164,6 +169,12 @@ public sealed partial class KotorModuleBoot
             // axis to Godot -Z, so the yaw sign is preserved.
             actor.Rotation = new Vector3(0, creature.Bearing, 0);
             AddChild(actor);
+            var effectRig = LoadCreatureEffects(
+                creature, actor, manifestDirectory, actorEffectTextures,
+                enhancedPresentation);
+            materializedCreatureEmitters += effectRig.Emitters.Count;
+            materializedCreatureLights += effectRig.Lights.Count;
+            materializedCreatureEffectAnimations += effectRig.Animations.Count;
             materializedCreatures.Add(new MaterializedCreature(creature, actor));
             var actorKeys = new[] { creature.Template, creature.Tag }
                 .Where(key => !string.IsNullOrWhiteSpace(key))
@@ -173,6 +184,7 @@ public sealed partial class KotorModuleBoot
             {
                 actorModels[key!] = actor;
                 actorRecords[key!] = creature;
+                actorEffectRigs[key!] = effectRig;
             }
             if (creature.TalkOffset is { Count: >= 3 })
             {
@@ -180,8 +192,18 @@ public sealed partial class KotorModuleBoot
                     actorTalkOffsets[key!] = ToGodot(creature.TalkOffset);
             }
             var animationPlayer = FindDescendant<AnimationPlayer>(actor);
+            if (effectRig.Animations.Count > 0 && animationPlayer is null)
+                throw new InvalidDataException(
+                    $"Creature effect animations have no runtime player: {creature.Template}");
             if (animationPlayer is not null)
             {
+                var runtimeAnimationNames = animationPlayer.GetAnimationList()
+                    .Select(name => name.ToString().Split('/')[^1])
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (effectRig.Animations.Keys.Any(name =>
+                        !runtimeAnimationNames.Contains(name)))
+                    throw new InvalidDataException(
+                        $"Creature effect animation is missing from glTF: {creature.Template}");
                 foreach (var key in actorKeys)
                     actorAnimations[key!] = animationPlayer;
                 foreach (var animationName in animationPlayer.GetAnimationList())

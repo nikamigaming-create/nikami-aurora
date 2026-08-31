@@ -370,6 +370,30 @@ the former origin-stacked white pools while keeping a subtle XZ-ground haze in
 both source-linear and enhanced-AGX captures. This is runtime smoke for the
 generic orientation and source-transfer contracts, not retail parity.
 
+## Source creature effect-node contract
+
+Creature model inventory no longer treats attached Odyssey emitter and light
+nodes as an acceptable omission. Import emits each node against its exact
+assembled glTF anchor, carries its owned texture and controller values, and
+exports only the source animation contracts that drive an effect: `detonate`
+events plus emitter `radius` and light `color` tracks. Runtime builds the anchor
+index once per actor, materializes every inventoried node dormant, and rejects
+missing, ambiguous, or unsupported anchors and controllers. Changing actor
+animation cancels the prior bounded tween set; explosion systems restart only
+at authored event times, while fountain and light visibility follows authored
+controller keys. Idle actors therefore do not acquire fabricated looping smoke
+or flashes.
+
+The owned `end_m01aa` regeneration resolves all 26 placed creatures. Its three
+`C_DrdAstro` placements account for nine emitters, three dynamic lights, and 21
+effect-animation contracts; all other placed creatures have zero attached
+effect nodes. The preflight joins those exact totals to model-node inventory
+and manifest counts. This proves source-complete import and runtime contract
+coverage, not retail particle RNG, collision response, blend-kernel, or
+frame-matched visual parity. A local runtime launch was attempted with Godot
+4.6.3 but rejected before actor loading because the repository targets the
+Godot 4.7.1 .NET API; that version mismatch is not treated as visual evidence.
+
 ## Known incomplete semantics
 
 Generic import retains arbitrary creature, door, placeable, trigger, waypoint,

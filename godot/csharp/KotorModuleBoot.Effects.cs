@@ -228,6 +228,352 @@ public sealed partial class KotorModuleBoot
         return texture;
     }
 
+    private static CreatureEffectRig LoadCreatureEffects(
+        CreatureRecord creature,
+        Node3D actor,
+        string manifestDirectory,
+        IDictionary<string, Texture2D> textureCache,
+        bool enhancedPresentation)
+    {
+        var source = creature.Effects ?? new CreatureEffectsRecord(
+            "nikami-aurora-kotor-actor-effects-v1", [], [], []);
+        if (source.Schema != "nikami-aurora-kotor-actor-effects-v1")
+            throw new InvalidDataException(
+                $"Unsupported creature-effect schema: {creature.Template}");
+        var expectedEmitters = (creature.Models ?? []).Sum(model => model.EmitterNodes);
+        var expectedLights = (creature.Models ?? []).Sum(model => model.LightNodes);
+        if (source.Emitters.Count != expectedEmitters ||
+            source.Lights.Count != expectedLights)
+            throw new InvalidDataException(
+                $"Creature effect-node inventory drifted: {creature.Template}");
+        var anchorsByName = FindDescendants<Node3D>(actor)
+            .GroupBy(node => node.Name.ToString(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+
+        var emitters = new Dictionary<string, GpuParticles3D>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var emitter in source.Emitters)
+        {
+            if (emitter.Schema != "nikami-aurora-kotor-actor-emitter-v1" ||
+                emitter.XGrid <= 0 || emitter.YGrid <= 0 ||
+                emitter.LifeExpectancy <= 0 ||
+                Math.Max(emitter.BirthRate, emitter.RandomBirthRate) <= 0 ||
+                emitter.ColorStart.Count < 3 || emitter.ColorMid.Count < 3 ||
+                emitter.ColorEnd.Count < 3 ||
+                !emitter.Update.Equals("Explosion", StringComparison.OrdinalIgnoreCase) &&
+                !emitter.Update.Equals("Fountain", StringComparison.OrdinalIgnoreCase) ||
+                !emitter.Render.Equals("Normal", StringComparison.OrdinalIgnoreCase) &&
+                !emitter.Render.Equals("Motion_Blur", StringComparison.OrdinalIgnoreCase) ||
+                !emitter.Blend.Equals("Normal", StringComparison.OrdinalIgnoreCase) &&
+                !emitter.Blend.Equals("Lighten", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(
+                    $"Unsupported creature emitter: {creature.Template}/{emitter.AnchorNode}");
+            anchorsByName.TryGetValue(emitter.AnchorNode, out var anchors);
+            anchors ??= [];
+            if (anchors.Length != 1 || !emitters.TryAdd(
+                    emitter.AnchorNode,
+                    CreateCreatureEmitter(
+                        emitter, anchors[0], manifestDirectory, textureCache,
+                        enhancedPresentation)))
+                throw new InvalidDataException(
+                    $"Creature emitter anchor is not unique: " +
+                    $"{creature.Template}/{emitter.AnchorNode}");
+        }
+
+        var lights = new Dictionary<string, OmniLight3D>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var light in source.Lights)
+        {
+            if (light.Schema != "nikami-aurora-kotor-actor-light-v1" ||
+                light.Color.Count < 3 || light.Multiplier < 0 ||
+                !light.Color.Take(3).All(float.IsFinite))
+                throw new InvalidDataException(
+                    $"Unsupported creature light: {creature.Template}/{light.AnchorNode}");
+            anchorsByName.TryGetValue(light.AnchorNode, out var anchors);
+            anchors ??= [];
+            var runtimeLight = new OmniLight3D
+            {
+                Name = "SourceActorLight",
+                LightColor = ToColor(light.Color),
+                LightEnergy = light.Multiplier,
+                OmniRange = Math.Max(0.01f, light.Radius),
+                ShadowEnabled = false,
+                Visible = light.Radius > 0
+            };
+            if (anchors.Length != 1 || !lights.TryAdd(light.AnchorNode, runtimeLight))
+                throw new InvalidDataException(
+                    $"Creature light anchor is not unique: " +
+                    $"{creature.Template}/{light.AnchorNode}");
+            anchors[0].AddChild(runtimeLight);
+        }
+
+        var animations = source.Animations.ToDictionary(
+            animation => animation.Name,
+            StringComparer.OrdinalIgnoreCase);
+        var hasExplosionEmitter = emitters.Values.Any(candidate =>
+            candidate.GetMeta("source_update").AsString().Equals(
+                "Explosion", StringComparison.OrdinalIgnoreCase));
+        foreach (var animation in animations.Values)
+        {
+            if (animation.Length <= 0 ||
+                animation.Events.Count > 0 && !hasExplosionEmitter ||
+                animation.Events.Any(item => item.Time < 0 ||
+                    item.Time > animation.Length ||
+                    !item.Name.Equals("detonate", StringComparison.OrdinalIgnoreCase)) ||
+                animation.Tracks.Any(track => UnsupportedCreatureEffectTrack(
+                    track, emitters, lights, animation.Length)))
+                throw new InvalidDataException(
+                    $"Unsupported creature effect animation: " +
+                    $"{creature.Template}/{animation.Name}");
+        }
+        return new CreatureEffectRig(emitters, lights, animations);
+    }
+
+    private static bool UnsupportedCreatureEffectTrack(
+        CreatureEffectTrackRecord track,
+        IReadOnlyDictionary<string, GpuParticles3D> emitters,
+        IReadOnlyDictionary<string, OmniLight3D> lights,
+        float animationLength)
+    {
+        var validTarget =
+            track.Controller.Equals("radius", StringComparison.OrdinalIgnoreCase)
+                ? emitters.ContainsKey(track.AnchorNode) ||
+                  lights.ContainsKey(track.AnchorNode)
+                : track.Controller.Equals("color", StringComparison.OrdinalIgnoreCase) &&
+                  lights.ContainsKey(track.AnchorNode);
+        var expectedValueCount = track.Controller.Equals(
+            "color", StringComparison.OrdinalIgnoreCase) ? 3 : 1;
+        return !validTarget || track.Keys.Count == 0 || track.Keys.Any(key =>
+            key.Time < 0 || key.Time > animationLength ||
+            key.Value.Count < expectedValueCount ||
+            !key.Value.All(float.IsFinite));
+    }
+
+    private static GpuParticles3D CreateCreatureEmitter(
+        CreatureEmitterRecord source,
+        Node3D anchor,
+        string manifestDirectory,
+        IDictionary<string, Texture2D> textureCache,
+        bool enhancedPresentation)
+    {
+        var textureKey = $"actor:{source.Texture.PayloadSha256}:" +
+                         $"{source.XGrid}x{source.YGrid}:" +
+                         $"enhanced={enhancedPresentation}";
+        if (!textureCache.TryGetValue(textureKey, out var texture))
+        {
+            texture = LoadOwnedEffectTexture(
+                source.Texture, manifestDirectory, source.XGrid, source.YGrid,
+                enhancedPresentation);
+            textureCache[textureKey] = texture;
+        }
+        var mid = Mathf.Clamp(
+            source.PercentMid, source.PercentStart + 0.0001f,
+            source.PercentEnd - 0.0001f);
+        var gradient = new Gradient
+        {
+            Offsets = [source.PercentStart, mid, source.PercentEnd],
+            Colors =
+            [
+                new Color(source.ColorStart[0], source.ColorStart[1],
+                    source.ColorStart[2], source.AlphaStart),
+                new Color(source.ColorMid[0], source.ColorMid[1],
+                    source.ColorMid[2], source.AlphaMid),
+                new Color(source.ColorEnd[0], source.ColorEnd[1],
+                    source.ColorEnd[2], source.AlphaEnd)
+            ]
+        };
+        var scale = new Curve
+        {
+            MinValue = 0,
+            MaxValue = Math.Max(1.0f,
+                Math.Max(source.SizeStart,
+                    Math.Max(source.SizeMid, source.SizeEnd)))
+        };
+        scale.AddPoint(new Vector2(source.PercentStart, source.SizeStart));
+        scale.AddPoint(new Vector2(mid, source.SizeMid));
+        scale.AddPoint(new Vector2(source.PercentEnd, source.SizeEnd));
+        var frameCount = source.XGrid * source.YGrid;
+        var process = new ParticleProcessMaterial
+        {
+            Direction = Vector3.Forward,
+            Spread = Mathf.RadToDeg(source.SpreadRadians),
+            EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Box,
+            EmissionBoxExtents = new Vector3(
+                Math.Max(0.001f, source.XSize * 0.01f),
+                Math.Max(0.001f, source.YSize * 0.01f),
+                Math.Max(0.001f, Math.Min(source.XSize, source.YSize) * 0.01f)),
+            InitialVelocityMin = source.Velocity,
+            InitialVelocityMax = source.Velocity + source.RandomVelocity,
+            AngularVelocityMin = Mathf.RadToDeg(source.ParticleRotation),
+            AngularVelocityMax = Mathf.RadToDeg(source.ParticleRotation),
+            Gravity = Vector3.Up * -source.Gravity,
+            ScaleMin = 1,
+            ScaleMax = 1,
+            ScaleCurve = new CurveTexture { Curve = scale },
+            ColorRamp = new GradientTexture1D { Gradient = gradient },
+            AnimSpeedMin = source.Fps * source.LifeExpectancy / frameCount,
+            AnimSpeedMax = source.Fps * source.LifeExpectancy / frameCount,
+            AnimOffsetMin = source.FrameStart / frameCount,
+            AnimOffsetMax = source.FrameStart / frameCount
+        };
+        if ((source.Flags & EmitterCollisionBounceFlag) != 0)
+        {
+            process.CollisionMode = ParticleProcessMaterial.CollisionModeEnum.Rigid;
+            process.CollisionBounce = source.BounceCoefficient;
+            process.CollisionUseScale = true;
+        }
+        var motionBlur = source.Render.Equals(
+            "Motion_Blur", StringComparison.OrdinalIgnoreCase);
+        var material = new StandardMaterial3D
+        {
+            AlbedoTexture = texture,
+            AlbedoColor = Colors.White,
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            BlendMode = source.Blend.Equals(
+                "Lighten", StringComparison.OrdinalIgnoreCase)
+                ? BaseMaterial3D.BlendModeEnum.Add
+                : BaseMaterial3D.BlendModeEnum.Mix,
+            CullMode = source.TwoSidedTexture != 0 || motionBlur
+                ? BaseMaterial3D.CullModeEnum.Disabled
+                : BaseMaterial3D.CullModeEnum.Back,
+            DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled,
+            BillboardMode = BaseMaterial3D.BillboardModeEnum.Particles,
+            VertexColorUseAsAlbedo = true,
+            ParticlesAnimHFrames = source.XGrid,
+            ParticlesAnimVFrames = source.YGrid,
+            ParticlesAnimLoop = true,
+            ProximityFadeEnabled = enhancedPresentation,
+            ProximityFadeDistance = enhancedPresentation
+                ? EnhancedParticleProximityFadeDistance
+                : 1.0f
+        };
+        var particles = new GpuParticles3D
+        {
+            Name = "SourceActorEmitter",
+            Amount = Math.Max(1, (int)Math.Ceiling(
+                Math.Max(source.BirthRate,
+                    source.BirthRate + source.RandomBirthRate) *
+                source.LifeExpectancy)),
+            Lifetime = source.LifeExpectancy,
+            OneShot = source.Update.Equals(
+                "Explosion", StringComparison.OrdinalIgnoreCase),
+            Explosiveness = source.Update.Equals(
+                "Explosion", StringComparison.OrdinalIgnoreCase) ? 1.0f : 0.0f,
+            Randomness = Mathf.Clamp(
+                source.RandomBirthRate /
+                Math.Max(1.0f, source.BirthRate + source.RandomBirthRate), 0, 1),
+            LocalCoords = false,
+            FixedFps = 30,
+            Interpolate = true,
+            ProcessMaterial = process,
+            DrawPass1 = new QuadMesh
+            {
+                Size = motionBlur
+                    ? new Vector2(1.0f, Math.Max(1.0f,
+                        source.BlurLength / Math.Max(0.001f, source.SizeStart)))
+                    : Vector2.One,
+                Material = material
+            },
+            VisibilityAabb = new Aabb(Vector3.One * -8, Vector3.One * 16),
+            Emitting = false
+        };
+        particles.SetMeta("source_update", source.Update);
+        particles.SetMeta("source_anchor", source.AnchorNode);
+        anchor.AddChild(particles);
+        return particles;
+    }
+
+    private void PlayActorEffects(string actor, string requested, bool loop)
+    {
+        if (!actorEffectRigs.TryGetValue(actor, out var rig)) return;
+        var generation = ++rig.Generation;
+        foreach (var activeTween in rig.ActiveTweens)
+            activeTween.Kill();
+        rig.ActiveTweens.Clear();
+        foreach (var emitter in rig.Emitters.Values)
+            emitter.Emitting = false;
+        foreach (var light in rig.Lights.Values)
+            light.Visible = false;
+        if (!rig.Animations.TryGetValue(requested, out var animation)) return;
+
+        var events = animation.Events.OrderBy(item => item.Time).ToArray();
+        if (events.Length > 0)
+        {
+            var tween = CreateTween();
+            rig.ActiveTweens.Add(tween);
+            if (loop) tween.SetLoops();
+            var elapsed = 0.0f;
+            foreach (var item in events)
+            {
+                tween.TweenInterval(Math.Max(0.0f, item.Time - elapsed));
+                tween.TweenCallback(Callable.From(() =>
+                {
+                    if (rig.Generation != generation) return;
+                    foreach (var emitter in rig.ExplosionEmitters)
+                    {
+                        emitter.Restart();
+                        emitter.Emitting = true;
+                    }
+                }));
+                elapsed = item.Time;
+            }
+            tween.TweenInterval(Math.Max(0.001f, animation.Length - elapsed));
+        }
+
+        foreach (var track in animation.Tracks)
+        {
+            var tween = CreateTween();
+            rig.ActiveTweens.Add(tween);
+            if (loop) tween.SetLoops();
+            var keys = track.Keys.OrderBy(item => item.Time).ToArray();
+            var elapsed = 0.0f;
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var key = keys[index];
+                tween.TweenInterval(Math.Max(0.0f, key.Time - elapsed));
+                tween.TweenCallback(Callable.From(() =>
+                {
+                    if (rig.Generation != generation) return;
+                    ApplyCreatureEffectKey(rig, track, key);
+                }));
+                elapsed = key.Time;
+            }
+            tween.TweenInterval(Math.Max(0.001f, animation.Length - elapsed));
+        }
+        GD.Print($"NIKAMI_AURORA_ACTOR_EFFECT status=scheduled actor={actor} " +
+                 $"animation={requested} events={animation.Events.Count} " +
+                 $"tracks={animation.Tracks.Count} loop={(loop ? 1 : 0)}");
+    }
+
+    private static void ApplyCreatureEffectKey(
+        CreatureEffectRig rig,
+        CreatureEffectTrackRecord track,
+        CreatureEffectKeyRecord key)
+    {
+        if (track.Controller.Equals("radius", StringComparison.OrdinalIgnoreCase) &&
+            rig.Emitters.TryGetValue(track.AnchorNode, out var emitter))
+        {
+            emitter.Emitting = key.Value[0] > 0.0f;
+            return;
+        }
+        if (track.Controller.Equals("radius", StringComparison.OrdinalIgnoreCase) &&
+            rig.Lights.TryGetValue(track.AnchorNode, out var radiusLight))
+        {
+            radiusLight.OmniRange = Math.Max(0.01f, key.Value[0]);
+            radiusLight.Visible = key.Value[0] > 0.0f;
+            return;
+        }
+        if (track.Controller.Equals("color", StringComparison.OrdinalIgnoreCase) &&
+            key.Value.Count >= 3 &&
+            rig.Lights.TryGetValue(track.AnchorNode, out var colorLight))
+        {
+            colorLight.LightColor = ToColor(key.Value);
+            colorLight.Visible = key.Value.Take(3).Any(component => component > 0.0f);
+        }
+    }
+
     private static RoomEmitterReport LoadRoomEmitters(
         RoomRecord room,
         Node3D roomRoot,

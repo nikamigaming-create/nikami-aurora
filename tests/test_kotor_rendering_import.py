@@ -20,6 +20,52 @@ except (ImportError, SystemExit) as exc:
 
 
 class KotorRenderingImportTests(unittest.TestCase):
+    def test_actor_effect_inventory_preserves_light_color_keys(
+        self,
+    ) -> None:
+        light_node = SimpleNamespace(
+            name="AuroraLight01",
+            emitter=None,
+            light=SimpleNamespace(
+                color=SimpleNamespace(r=1.0, g=1.0, b=1.0),
+                radius=0.0,
+                multiplier=1.0,
+                dynamic_type=1,
+                affect_dynamic=False,
+                ambient_only=False,
+            ),
+        )
+        color_controller = SimpleNamespace(
+            controller_type=MDLControllerType.COLOR,
+            rows=[
+                SimpleNamespace(time=0.25, data=[0.0, 0.0, 0.0]),
+                SimpleNamespace(time=0.5, data=[1.0, 0.5, 0.25]),
+            ],
+        )
+        animation_node = SimpleNamespace(
+            name="AuroraLight01", controllers=[color_controller])
+        animation = SimpleNamespace(
+            name="weld",
+            length=1.0,
+            events=[SimpleNamespace(activation_time=0.5, name="detonate")],
+            all_nodes=lambda: [animation_node],
+        )
+        result = importer.actor_effect_records(
+            SimpleNamespace(),
+            (("body", "C_DrdAstro", None,
+              SimpleNamespace(all_nodes=lambda: [light_node]), b"mdl", b"mdx"),),
+            SimpleNamespace(),
+            Path("unused"),
+            SimpleNamespace(anims=[animation]),
+        )
+
+        self.assertEqual("AuroraLight01", result["lights"][0]["anchorNode"])
+        self.assertEqual([], result["animations"][0]["events"])
+        self.assertEqual(
+            [0.0, 0.0, 0.0],
+            result["animations"][0]["tracks"][0]["keys"][0]["value"],
+        )
+
     def test_actor_model_inventory_keeps_weapon_glow_and_effect_nodes_explicit(
         self,
     ) -> None:
@@ -81,11 +127,12 @@ class KotorRenderingImportTests(unittest.TestCase):
         self.assertEqual(1, report["emitterNodes"])
         self.assertEqual(0, report["lightNodes"])
         self.assertIn(("diffuse", "w_lsabreblue01"), textures.validated)
-        with self.assertRaisesRegex(RuntimeError, "effect nodes"):
-            importer.actor_model_records((
-                ("rightWeapon", "w_lghtsbr_001", None,
-                 SimpleNamespace(all_nodes=lambda: nodes), b"mdl", b"mdx"),
-            ), textures)
+        records = importer.actor_model_records((
+            ("rightWeapon", "w_lghtsbr_001", None,
+             SimpleNamespace(all_nodes=lambda: nodes), b"mdl", b"mdx"),
+        ), textures)
+        self.assertEqual(1, records[0]["emitterNodes"])
+        self.assertEqual(0, records[0]["lightNodes"])
 
     def test_actor_animation_position_keys_preserve_authored_rest_height(self) -> None:
         # C_DrdProt's source RootDummy stands at 1.07443 m and cpause1 adds a
