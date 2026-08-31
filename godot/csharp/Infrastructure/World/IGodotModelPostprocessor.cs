@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 public interface IGodotModelPostprocessor
 {
@@ -11,7 +11,12 @@ public interface IGodotModelPostprocessor
     /// </summary>
     string CacheFingerprint { get; }
 
-    void Process(Node3D model, GltfState source);
+    /// <param name="sourcePath">
+    /// Exact path passed to <see cref="GltfDocument.AppendFromFile"/>. Godot's
+    /// <see cref="GltfState.FileName"/> may omit the extension, so it is not a
+    /// trustworthy payload-identity path.
+    /// </param>
+    void Process(Node3D model, GltfState source, string sourcePath);
 
     /// <summary>
     /// Reconnects runtime-only state after a PackedScene is loaded from memory

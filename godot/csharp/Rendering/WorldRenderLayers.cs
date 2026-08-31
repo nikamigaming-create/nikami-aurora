@@ -1,4 +1,4 @@
-namespace OpenDAO.Rendering;
+namespace Nikami.Aurora.GodotRuntime.Rendering;
 
 public static class WorldRenderLayers
 {

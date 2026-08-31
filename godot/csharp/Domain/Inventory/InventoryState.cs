@@ -1,6 +1,6 @@
-using OpenDAO.Domain.Common;
+using Nikami.Aurora.GodotRuntime.Domain.Common;
 
-namespace OpenDAO.Domain.Inventory;
+namespace Nikami.Aurora.GodotRuntime.Domain.Inventory;
 
 public sealed class InventoryState
 {

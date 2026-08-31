@@ -2,7 +2,7 @@
 
 using Godot;
 
-namespace OpenDAO.Launcher;
+namespace Nikami.Aurora.GodotRuntime.Launcher;
 
 [Tool]
 public partial class LauncherIconButton : Button

@@ -1,7 +1,7 @@
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.Characters;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.Characters;
 
-namespace OpenDAO.Infrastructure.Configuration;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
 public sealed class CharacterProfileProvider(IJsonStore store, IRuntimeEnvironment environment)
     : ICharacterProfileProvider

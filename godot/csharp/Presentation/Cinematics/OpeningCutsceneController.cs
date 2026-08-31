@@ -1,10 +1,12 @@
 using System.Text.Json;
 using Godot;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Infrastructure.World;
-using OpenDAO.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Infrastructure.World;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
+using Nikami.Aurora.Core;
+using NumericsVector3 = System.Numerics.Vector3;
 
-namespace OpenDAO.Presentation.Cinematics;
+namespace Nikami.Aurora.GodotRuntime.Presentation.Cinematics;
 
 internal sealed partial class OpeningCutsceneController : Node
 {
@@ -18,6 +20,7 @@ internal sealed partial class OpeningCutsceneController : Node
     private readonly HashSet<string> stoppedAnimationEvents =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<int> loggedCameraFraming = [];
+    private readonly HashSet<int> loggedPointOfViewAdaptations = [];
     private readonly HashSet<Node3D> cameraOccludedActors = [];
     private int occlusionCameraId = -1;
     private readonly List<Node3D> speakerNodes = [];
@@ -51,6 +54,8 @@ internal sealed partial class OpeningCutsceneController : Node
     private bool facialReady;
     private int faceLineStarts;
     private int faceAdvanceFailures;
+    private int framingChecks;
+    private int framingFailures;
     private FaceFxRuntime? faceFx;
     private string activeFaceReference = string.Empty;
     private string facialCurvesPath = string.Empty;
@@ -415,7 +420,11 @@ internal sealed partial class OpeningCutsceneController : Node
             var rule = new PointOfViewRule(
                 value.GetProperty("cameraActorId").GetInt32(),
                 value.GetProperty("hiddenActorId").GetInt32(),
-                value.GetProperty("targetActorId").GetInt32(), mode);
+                value.GetProperty("targetActorId").GetInt32(), mode,
+                value.GetProperty("minimumViewportMargin").GetSingle(),
+                value.GetProperty("minimumProjectedHeight").GetSingle(),
+                value.GetProperty("maximumProjectedHeight").GetSingle(),
+                value.GetProperty("requireClearLineOfSight").GetBoolean());
             if (!pointOfViewRules.TryAdd(rule.CameraActorId, rule))
                 throw new InvalidDataException(
                     $"Duplicate DAO cinematic POV camera rule: {rule.CameraActorId}");
@@ -619,6 +628,7 @@ internal sealed partial class OpeningCutsceneController : Node
     private bool ApplyConfiguredPointOfView(CameraSwitch selected)
     {
         if (!pointOfViewRules.TryGetValue(selected.CameraId, out var rule)) return false;
+        var authoredTransform = cutsceneCamera.GlobalTransform;
         if (!actorNodes.TryGetValue(rule.HiddenActorId, out var source) ||
             !actorNodes.TryGetValue(rule.TargetActorId, out var target))
             throw new InvalidDataException(
@@ -639,6 +649,24 @@ internal sealed partial class OpeningCutsceneController : Node
                 $"DAO cinematic POV rule has coincident source and target heads: camera={selected.CameraId}");
         cutsceneCamera.GlobalPosition = sourceHead + direction.Normalized() * sourceRadius;
         cutsceneCamera.LookAt(targetHead, Vector3.Up);
+        if (loggedPointOfViewAdaptations.Add(selected.CameraId))
+        {
+            var authoredForward = -authoredTransform.Basis.Z.Normalized();
+            var adaptedForward = -cutsceneCamera.GlobalBasis.Z.Normalized();
+            var angularDelta = Mathf.RadToDeg(Mathf.Acos(Mathf.Clamp(
+                authoredForward.Dot(adaptedForward), -1, 1)));
+            var positionDelta = authoredTransform.Origin.DistanceTo(
+                cutsceneCamera.GlobalPosition);
+            GD.Print($"OPENDAO_CINEMATIC_POV_ADAPTATION status=adapted parity=probable " +
+                     $"camera={selected.CameraId} source_actor={rule.HiddenActorId} " +
+                     $"target_actor={rule.TargetActorId} mode=head-geometry-clearance " +
+                     $"authored_position={authoredTransform.Origin} " +
+                     $"adapted_position={cutsceneCamera.GlobalPosition} " +
+                     $"position_delta={positionDelta:0.###} " +
+                     $"angular_delta_degrees={angularDelta:0.###} " +
+                     "hierarchy_attachment=unavailable " +
+                     "retail_match=blocked-matched-camera-telemetry-required");
+        }
         return true;
     }
 
@@ -693,7 +721,66 @@ internal sealed partial class OpeningCutsceneController : Node
                      $"distance={distance:0.###} forward_alignment={alignment:0.###} " +
                      $"camera_position={cutsceneCamera.GlobalPosition} head_position={headPosition}");
         }
+        VerifyConfiguredFraming(selected);
     }
+
+    private void VerifyConfiguredFraming(CameraSwitch selected)
+    {
+        if (!pointOfViewRules.TryGetValue(selected.CameraId, out var rule)) return;
+        framingChecks++;
+        if (!actorNodes.TryGetValue(rule.TargetActorId, out var target) ||
+            !TryGetHeadGeometry(target, out var targetHead, out var targetRadius))
+        {
+            framingFailures++;
+            GD.PushError($"OPENDAO_CINEMATIC_VISIBILITY status=fail camera={selected.CameraId} " +
+                         $"actor={rule.TargetActorId} reason=target-head-unavailable");
+            return;
+        }
+
+        var viewportSize = GetViewport().GetVisibleRect().Size;
+        var aspect = viewportSize.Y > 0 ? viewportSize.X / viewportSize.Y : 16.0f / 9.0f;
+        var excludedBodies = new Godot.Collections.Array<Rid>();
+        if (GetParent().GetNodeOrNull<CollisionObject3D>("Player") is { } playerBody)
+            excludedBodies.Add(playerBody.GetRid());
+        var ray = PhysicsRayQueryParameters3D.Create(cutsceneCamera.GlobalPosition, targetHead,
+            3, excludedBodies);
+        ray.CollideWithAreas = false;
+        ray.CollideWithBodies = true;
+        var hit = cutsceneCamera.GetWorld3D().DirectSpaceState.IntersectRay(ray);
+        var lineOfSightClear = !rule.RequireClearLineOfSight || hit.Count == 0;
+        var result = CinematicFramingGate.Evaluate(
+            new CinematicFramingSample(
+                ToNumerics(cutsceneCamera.GlobalPosition),
+                ToNumerics(-cutsceneCamera.GlobalBasis.Z.Normalized()),
+                ToNumerics(cutsceneCamera.GlobalBasis.Y.Normalized()),
+                cutsceneCamera.Fov,
+                aspect,
+                cutsceneCamera.Near,
+                ToNumerics(targetHead),
+                targetRadius,
+                lineOfSightClear),
+            new CinematicFramingRequirements(
+                rule.MinimumViewportMargin,
+                rule.MinimumProjectedHeight,
+                rule.MaximumProjectedHeight));
+
+        if (!result.Accepted) framingFailures++;
+        var collider = "none";
+        if (hit.TryGetValue("collider", out var value) &&
+            value.AsGodotObject() is Node colliderNode)
+            collider = colliderNode.Name.ToString();
+        GD.Print($"OPENDAO_CINEMATIC_VISIBILITY status={(result.Accepted ? "pass" : "fail")} " +
+                 $"camera={selected.CameraId} actor={rule.TargetActorId} " +
+                 $"failures={result.Failures} projected_height={result.ProjectedHeight:0.###} " +
+                 $"viewport_center=({result.NormalizedViewportCenter.X:0.###}," +
+                 $"{result.NormalizedViewportCenter.Y:0.###}) depth={result.CameraDepth:0.###} " +
+                 $"line_of_sight={(lineOfSightClear ? 1 : 0)} occluder={collider}");
+        if (!result.Accepted)
+            GD.PushError($"DAO cinematic framing rejected camera {selected.CameraId}: {result.Failures}");
+    }
+
+    private static NumericsVector3 ToNumerics(Vector3 value) =>
+        new(value.X, value.Y, value.Z);
 
     private void DispatchAnimations(double time)
     {
@@ -819,7 +906,8 @@ internal sealed partial class OpeningCutsceneController : Node
         CompletedSuccessfully = !skipped && actorsReady &&
                                 animationStarts == expectedAnimationStarts &&
                                 nextAudio == audioEvents.Count && facialReady &&
-                                faceLineStarts == expectedFacialLines && faceAdvanceFailures == 0;
+                                faceLineStarts == expectedFacialLines && faceAdvanceFailures == 0 &&
+                                framingChecks == pointOfViewRules.Count && framingFailures == 0;
         FinalCameraTransform = cutsceneCamera.GlobalTransform;
         FinalCameraFieldOfView = cutsceneCamera.Fov;
         if (retainActors)
@@ -848,7 +936,9 @@ internal sealed partial class OpeningCutsceneController : Node
         if (OS.GetEnvironment("OPENDAO_CHARACTER_CREATION_ACCEPTANCE") == "1")
             GD.Print($"OPENDAO_CUTSCENE_ACCEPTANCE status={(CompletedSuccessfully ? "pass" : "fail")} " +
                      $"id={CutsceneId} facefx_lines={faceLineStarts}/{expectedFacialLines} " +
-                     $"facefx_failures={faceAdvanceFailures} actors={actorCount}");
+                     $"facefx_failures={faceAdvanceFailures} actors={actorCount} " +
+                     $"framing={framingChecks}/{pointOfViewRules.Count} " +
+                     $"framing_failures={framingFailures}");
         completion.TrySetResult();
     }
 
@@ -974,7 +1064,9 @@ internal sealed partial class OpeningCutsceneController : Node
         CurveRecord? FieldOfViewCurve = null);
     private readonly record struct CameraSwitch(double Time, int CameraId);
     private readonly record struct PointOfViewRule(int CameraActorId, int HiddenActorId,
-        int TargetActorId, string ClearanceMode);
+        int TargetActorId, string ClearanceMode, float MinimumViewportMargin,
+        float MinimumProjectedHeight, float MaximumProjectedHeight,
+        bool RequireClearLineOfSight);
     private readonly record struct AnimationEvent(double Time, double Stop, double Speed,
         double StartOffset, int ActorId, string Resource);
     private readonly record struct AudioEvent(double Time, string Path, string Speaker, string Reference,

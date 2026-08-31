@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Godot;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal static class CharacterFlowSmoke
 {

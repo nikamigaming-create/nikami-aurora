@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.Presentation.Player;
+namespace Nikami.Aurora.GodotRuntime.Presentation.Player;
 
 internal static class LocomotionSmoke
 {

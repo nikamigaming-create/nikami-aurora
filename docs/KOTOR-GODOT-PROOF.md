@@ -62,7 +62,7 @@ without changing the system OpenXR runtime:
   -OpenXRSimulator `
   -TestFirstEncounter `
   -CapturePath 'artifacts/kotor-first-encounter-openxr-spectator.png' `
-  -CaptureDialogueNode 'encounter:combat-ready' `
+  -CaptureDialogueNode 'encounter:gameplay-ready' `
   -CaptureFrame 1 `
   -CleanCapture `
   -CaptureAndExit
@@ -108,13 +108,13 @@ For a local visual-QA frame without the proof overlay:
 ```
 
 Run the source-bound first Sith encounter and stop on its asserted
-combat-ready frame:
+third-person gameplay-ready handoff:
 
 ```powershell
 ./scripts/Start-KotorGodot.ps1 `
   -TestFirstEncounter `
-  -CapturePath 'artifacts/kotor-first-encounter-combat-ready.png' `
-  -CaptureDialogueNode 'encounter:combat-ready' `
+  -CapturePath 'artifacts/kotor-first-encounter-gameplay-ready.png' `
+  -CaptureDialogueNode 'encounter:gameplay-ready' `
   -CaptureFrame 1 `
   -CleanCapture `
   -CaptureAndExit

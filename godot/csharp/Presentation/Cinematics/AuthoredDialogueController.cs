@@ -1,12 +1,12 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Godot;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.Story;
-using OpenDAO.Infrastructure.World;
-using OpenDAO.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.Story;
+using Nikami.Aurora.GodotRuntime.Infrastructure.World;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
-namespace OpenDAO.Presentation.Cinematics;
+namespace Nikami.Aurora.GodotRuntime.Presentation.Cinematics;
 
 /// <summary>
 /// Executes the installed game's DLG graph and each line's embedded CUT block.

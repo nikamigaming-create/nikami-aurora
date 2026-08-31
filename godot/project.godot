@@ -1,5 +1,10 @@
 ; Engine configuration file.
-; Prefer editing through source control for deterministic runtime behavior.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
 config_version=5
 
@@ -7,6 +12,7 @@ config_version=5
 
 config/name="Nikami Aurora"
 run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7", "C#")
 
 [display]
 
@@ -65,7 +71,7 @@ interact={
 }
 attack={
 "deadzone": 0.2,
-"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"button_mask":0,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":1,"canceled":false,"pressed":false,"double_click":false,"script":null)
+"events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"button_mask":0,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":1,"canceled":false,"pressed":false,"double_click":false,"script":null)
 ]
 }
 inventory={
@@ -86,16 +92,30 @@ ability_1={
 
 [rendering]
 
-renderer/rendering_method="gl_compatibility"
-renderer/rendering_method.mobile="gl_compatibility"
+lights_and_shadows/directional_shadow/size=8192
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=5
+lights_and_shadows/directional_shadow/16_bits=false
+lights_and_shadows/positional_shadow/soft_shadow_filter_quality=5
+lights_and_shadows/positional_shadow/atlas_16_bits=false
+textures/default_filters/anisotropic_filtering_level=4
+environment/ssao/quality=4
+environment/ssao/half_size=false
+environment/ssao/adaptive_target=1.0
+environment/ssil/quality=4
+environment/ssil/half_size=false
+environment/ssil/adaptive_target=1.0
+anti_aliasing/quality/msaa_3d=2
+anti_aliasing/quality/use_debanding=true
+environment/screen_space_reflection/half_size=false
+global_illumination/sdfgi/probe_ray_count=5
+global_illumination/sdfgi/frames_to_update_lights=0
+environment/volumetric_fog/use_filter=2
 environment/defaults/default_clear_color=Color(0.006, 0.012, 0.025, 1)
+lights_and_shadows/positional_shadow/atlas_size=8192
 
 [xr]
 
-openxr/enabled=false
-openxr/default_action_map="res://openxr_action_map.tres"
 openxr/startup_alert=false
 openxr/extensions/render_model=true
-openxr/extensions/meta/render_model=true
-openxr/extensions/spatial_entity/enabled=false
 shaders/enabled=true
+openxr/extensions/meta/render_model=true

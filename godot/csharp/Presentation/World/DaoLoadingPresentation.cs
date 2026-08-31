@@ -1,9 +1,9 @@
 using System.Text.Json;
 using Godot;
-using OpenDAO.Infrastructure.Archives;
-using OpenDAO.MainMenu;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Archives;
+using Nikami.Aurora.GodotRuntime.MainMenu;
 
-namespace OpenDAO.Presentation.World;
+namespace Nikami.Aurora.GodotRuntime.Presentation.World;
 
 internal sealed record DaoLoadingArtworkRule(
     string AreaPrefix,

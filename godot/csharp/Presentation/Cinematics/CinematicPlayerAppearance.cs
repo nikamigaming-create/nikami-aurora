@@ -1,7 +1,7 @@
 using Godot;
-using OpenDAO.Presentation.Rigging;
+using Nikami.Aurora.GodotRuntime.Presentation.Rigging;
 
-namespace OpenDAO.Presentation.Cinematics;
+namespace Nikami.Aurora.GodotRuntime.Presentation.Cinematics;
 
 /// <summary>
 /// Keeps the selected player's mesh and bind skeleton together, then merges

@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace OpenDAO.Application.Abstractions;
+namespace Nikami.Aurora.GodotRuntime.Application.Abstractions;
 
 public interface IJsonStore
 {

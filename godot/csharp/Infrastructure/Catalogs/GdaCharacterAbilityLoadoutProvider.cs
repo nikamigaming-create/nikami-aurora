@@ -1,10 +1,10 @@
 using System.Text.Json.Nodes;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.Abilities;
-using OpenDAO.Domain.Characters;
-using OpenDAO.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.Abilities;
+using Nikami.Aurora.GodotRuntime.Domain.Characters;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
-namespace OpenDAO.Infrastructure.Catalogs;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Catalogs;
 
 public sealed class GdaCharacterAbilityLoadoutProvider(
     IJsonStore store,
@@ -102,8 +102,8 @@ public sealed class GdaCharacterAbilityLoadoutProvider(
         {
             configured,
             DaoRuntimePaths.Cache("dao-gda.json"),
-            Path.Combine(environment.ExecutableDirectory, "OpenDAOData", "cache", "dao-world", "dao-gda.json"),
-            Path.Combine(environment.ExecutableDirectory, "OpenDAOData", "dao-world", "dao-gda.json"),
+            Path.Combine(environment.ExecutableDirectory, "Nikami.Aurora.GodotRuntimeData", "cache", "dao-world", "dao-gda.json"),
+            Path.Combine(environment.ExecutableDirectory, "Nikami.Aurora.GodotRuntimeData", "dao-world", "dao-gda.json"),
         };
         return candidates.FirstOrDefault(path => path.Length > 0 && store.Exists(path)) ?? string.Empty;
     }

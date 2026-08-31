@@ -1,7 +1,7 @@
 using Godot;
-using OpenDAO.Domain.World;
+using Nikami.Aurora.GodotRuntime.Domain.World;
 
-namespace OpenDAO.Application.Abstractions;
+namespace Nikami.Aurora.GodotRuntime.Application.Abstractions;
 
 public interface IWorldContentLoader
 {

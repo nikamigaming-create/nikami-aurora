@@ -1,4 +1,4 @@
-namespace OpenDAO.Domain.Story;
+namespace Nikami.Aurora.GodotRuntime.Domain.Story;
 
 public enum StoryObjectKind { Area, Creature, Placeable, Item, Waypoint, Trigger, Unknown }
 

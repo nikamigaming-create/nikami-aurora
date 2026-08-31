@@ -1,30 +1,115 @@
 using Godot;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Bootstrap;
-using OpenDAO.Domain.Abilities;
-using OpenDAO.Domain.Characters;
-using OpenDAO.Domain.Inventory;
-using OpenDAO.Domain.Quests;
-using OpenDAO.Domain.Sessions;
-using OpenDAO.Domain.Story;
-using OpenDAO.Domain.World;
-using OpenDAO.Infrastructure.World;
-using OpenDAO.Infrastructure.Configuration;
-using OpenDAO.Launcher;
-using OpenDAO.Presentation.Cinematics;
-using OpenDAO.Presentation.Player;
-using OpenDAO.Application.Characters;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Serialization;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Bootstrap;
+using Nikami.Aurora.GodotRuntime.Domain.Abilities;
+using Nikami.Aurora.GodotRuntime.Domain.Characters;
+using Nikami.Aurora.GodotRuntime.Domain.Inventory;
+using Nikami.Aurora.GodotRuntime.Domain.Quests;
+using Nikami.Aurora.GodotRuntime.Domain.Sessions;
+using Nikami.Aurora.GodotRuntime.Domain.Story;
+using Nikami.Aurora.GodotRuntime.Domain.World;
+using Nikami.Aurora.GodotRuntime.Infrastructure.World;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Launcher;
+using Nikami.Aurora.GodotRuntime.Presentation.Cinematics;
+using Nikami.Aurora.GodotRuntime.Presentation.Player;
+using Nikami.Aurora.GodotRuntime.Application.Characters;
+using Nikami.Aurora.Core;
+using Nikami.Aurora.Profiles.DragonAgeOrigins;
 
-namespace OpenDAO.Presentation.World;
+namespace Nikami.Aurora.GodotRuntime.Presentation.World;
 
 public partial class OpenDaoWorld : Node3D
 {
+    private const string DaoSkyShaderPath = "res://shaders/dao_sky.gdshader";
+    private const string DaoCloudVolumeShaderPath = "res://shaders/dao_cloud_volume.gdshader";
     private const string PlayableSmokeStartupFramesVariable =
         "OPENDAO_ACCEPTANCE_PLAYABLE_STARTUP_FRAMES";
     private const string AlienageArrivalWarmupFramesVariable =
         "OPENDAO_ACCEPTANCE_ALIENAGE_WARMUP_FRAMES";
     private const string GameplayHoldFramesVariable = "OPENDAO_ACCEPTANCE_GAMEPLAY_HOLD_FRAMES";
+    private const string AlienageSkyCaptureVariable = "OPENDAO_CITY_ELF_SKY_CAPTURE";
+    private const string CharacterPbrCloseCaptureVariable =
+        "OPENDAO_CHARACTER_PBR_CLOSE_CAPTURE";
+    private const string EffectCloseCaptureVariable = "OPENDAO_EFFECT_CLOSE_CAPTURE";
+    private const string EffectCloseCaptureResRefVariable =
+        "OPENDAO_EFFECT_CLOSE_RESREF";
+    private const string AreaRuntimeEvidenceRootVariable =
+        "OPENDAO_AREA_RUNTIME_EVIDENCE_ROOT";
+    private const int GameplayCameraStableFrames = 3;
+    private const int GameplayCameraMaximumSettleFrames = 24;
+
+    private sealed record GameplayFrameEvidence(
+        DaoGameplayCameraAcceptance Camera,
+        int StableFrames,
+        int NeighboringFrames,
+        float AuthoredArmLength,
+        float SelectedArmLength,
+        float NonClearRatio,
+        float MeanLuminance,
+        float LuminanceStandardDeviation,
+        float LuminanceRange,
+        float DominantColorRatio)
+    {
+        public bool CollisionSafe =>
+            Camera.ActualArmLength >= Camera.MinimumArmLength &&
+            Camera.PredictedArmLength >= Camera.MinimumArmLength;
+        public bool NonClearCoverage => NonClearRatio >= .55f;
+        public bool ImageDetail => LuminanceStandardDeviation >= .05f &&
+                                   LuminanceRange >= .18f &&
+                                   DominantColorRatio <= .40f;
+        public bool Passed => Camera.Passed && CollisionSafe &&
+                              StableFrames >= GameplayCameraStableFrames &&
+                              NonClearCoverage && ImageDetail;
+    }
+
+    private sealed record ContinuousGameplayEvidence(
+        string Segment,
+        string Target,
+        bool PathReady,
+        bool Reached,
+        int PathNodes,
+        int Frames,
+        float TravelDistance,
+        float TargetDistance,
+        int CameraSamples,
+        int CameraFailures,
+        float MinimumActualArm,
+        float MinimumPredictedArm,
+        bool AuthoredWalk,
+        bool CaptureSaved,
+        GameplayFrameEvidence? CaptureFrame)
+    {
+        public bool Passed => PathReady && Reached && TravelDistance >= 2 &&
+                              CameraSamples > 0 && CameraFailures == 0 &&
+                              AuthoredWalk && CaptureSaved &&
+                              CaptureFrame?.Passed == true;
+    }
+
+    private sealed record InWorldCreatureFrameEvidence(
+        string ActorIdentity,
+        string ActorTag,
+        int PlacementOrdinal,
+        string AuthoredPosition,
+        string AuthoredRotation,
+        string AuthoredTransformSha256,
+        string ModelSha256,
+        string Status,
+        string Reason,
+        float ProjectedHeight,
+        float ScreenCoverage,
+        int ClearLineOfSightProbes,
+        float CropLuminanceStandardDeviation,
+        float CropLuminanceRange,
+        float CropDominantColorRatio,
+        string EnvironmentFramePath,
+        string EnvironmentFrameSha256,
+        string CapturePath,
+        string CaptureSha256);
 
     private DaoRuntimeServices? services;
     private DaoPresentationConfiguration presentationConfiguration = null!;
@@ -40,6 +125,7 @@ public partial class OpenDaoWorld : Node3D
     private DaoLoadingPresentation? loadingPresentation;
     private string playerModelPath = string.Empty;
     private string playerBedModelPath = string.Empty;
+    private WorldArrival? currentWorldArrival;
     private bool loading;
 
     public override async void _Ready()
@@ -61,7 +147,7 @@ public partial class OpenDaoWorld : Node3D
                 .Resolve(character, playerModelPath).BedModelPath;
             var locomotion = services.GetRequired<ILocomotionAnimationProvider>().Resolve(character);
             player.SetAvatar(playerModelPath, locomotion,
-                services.GetRequired<OpenDAO.Infrastructure.World.IGodotModelPostprocessor>());
+                services.GetRequired<Nikami.Aurora.GodotRuntime.Infrastructure.World.IGodotModelPostprocessor>());
             GD.Print($"OPENDAO_CHARACTER name={character.DisplayName} race={character.Race} " +
                      $"class={character.Class} origin={character.Origin} appearance={character.Appearance}");
             await LoadWorld(lifetime.Token);
@@ -69,7 +155,7 @@ public partial class OpenDaoWorld : Node3D
         catch (Exception error)
         {
             loadingPresentation?.Hide();
-            GD.PushError("OpenDAO startup failed: " + error);
+            GD.PushError("Nikami.Aurora.GodotRuntime startup failed: " + error);
             if (IsInstanceValid(status)) status.Text = "OPENDAO AREA VIEWER\nStartup failed: " + error.Message;
         }
     }
@@ -167,16 +253,22 @@ public partial class OpenDaoWorld : Node3D
             loading = false;
             return;
         }
-        var arrival = services.GetRequired<IWorldArrivalResolver>().Resolve(profile);
-        if (arrival is not null)
-            player.GlobalTransform = arrival.Transform;
+        currentWorldArrival = services.GetRequired<IWorldArrivalResolver>().Resolve(profile);
+        if (currentWorldArrival is not null)
+            player.GlobalTransform = currentWorldArrival.Transform;
         else
             RestoreSession();
         if (!player.SnapToWalkableGround(player.GlobalPosition, $"world-load:{profile.AreaId}", false))
             GD.PushWarning($"Player spawn has no walkable surface in {profile.AreaId}: {player.GlobalPosition}");
-        player.ConfigureThirdPersonView(presentationConfiguration.GameplayCamera);
+        var renderingBackend = RenderingQualityPolicy.ParseBackend(
+            RenderingServer.GetCurrentRenderingMethod().ToString());
+        var presentationTier = RenderingQualityPolicy.ParseTier(
+            System.Environment.GetEnvironmentVariable("NIKAMI_AURORA_PRESENTATION_TIER"),
+            renderingBackend);
+        player.ConfigureThirdPersonView(presentationConfiguration.GameplayCamera,
+            presentationTier == RenderingPresentationTier.Enhanced);
         player.SetAuthoredNavigation(result.Navigation);
-        ConfigureLighting(result.AuthoredLights, result.Lighting);
+        ConfigureLighting(result.AuthoredLights, result.Lighting, profile.LayoutName);
         if (result.Lighting is not null)
         {
             // Convert the Godot arrival point back to DAO's Z-up coordinates
@@ -191,9 +283,12 @@ public partial class OpenDaoWorld : Node3D
                  $"max_work_slice_ms={result.MaxWorkSliceMilliseconds:F2} " +
                  $"cache_hits={result.CacheHits} cache_misses={result.CacheMisses} yields={result.CooperativeYields} " +
                  $"elapsed_ms={Time.GetTicksMsec() - started}");
-        var origin = OpenDAO.MainMenu.CharacterProfileRules.OriginFor(character.Origin);
-        var hasOpeningDialogue = ShouldPlayOpeningDialogue(profile, origin);
-        if (ShouldPlayOpening(profile, origin))
+        var areaRuntimeEvidenceRequested = !string.IsNullOrWhiteSpace(
+            System.Environment.GetEnvironmentVariable(AreaRuntimeEvidenceRootVariable));
+        var origin = Nikami.Aurora.GodotRuntime.MainMenu.CharacterProfileRules.OriginFor(character.Origin);
+        var hasOpeningDialogue = !areaRuntimeEvidenceRequested &&
+                                 ShouldPlayOpeningDialogue(profile, origin);
+        if (!areaRuntimeEvidenceRequested && ShouldPlayOpening(profile, origin))
         {
             openingCutscene = new OpeningCutsceneController
             {
@@ -202,7 +297,7 @@ public partial class OpenDaoWorld : Node3D
             };
             AddChild(openingCutscene);
             await openingCutscene.PlayAsync(player.GetNode<Camera3D>("Head/Camera3D"), status,
-                services.GetRequired<OpenDAO.Infrastructure.World.IGodotModelCache>(),
+                services.GetRequired<Nikami.Aurora.GodotRuntime.Infrastructure.World.IGodotModelCache>(),
                 services.GetRequired<FaceFxRuntime>(),
                 services.GetRequired<ICinematicActorModelResolver>(),
                 character.Gender, playerModelPath,
@@ -231,7 +326,7 @@ public partial class OpenDaoWorld : Node3D
             try
             {
                 await openingDialogue.PlayAsync(player.GetNode<Camera3D>("Head/Camera3D"),
-                    services.GetRequired<OpenDAO.Infrastructure.World.IGodotModelCache>(),
+                    services.GetRequired<Nikami.Aurora.GodotRuntime.Infrastructure.World.IGodotModelCache>(),
                     services.GetRequired<FaceFxRuntime>(),
                     services.GetRequired<ICinematicActorModelResolver>(),
                     services.GetRequired<StoryState>(),
@@ -273,6 +368,7 @@ public partial class OpenDaoWorld : Node3D
         status.Text = string.Empty;
         loading = false;
         loadingPresentation?.Hide();
+        if (await CaptureAreaRuntimeEvidenceIfRequested(result, cancellationToken)) return;
         if (System.Environment.GetEnvironmentVariable("OPENDAO_CITY_ELF_PLAYABLE_SMOKE") == "1")
         {
             await RunCityElfPlayableSmoke(cancellationToken);
@@ -295,6 +391,8 @@ public partial class OpenDaoWorld : Node3D
             GetTree().Quit(passed ? 0 : 58);
             return;
         }
+        if (await CaptureCharacterPbrCloseIfRequested(cancellationToken)) return;
+        if (await CaptureEffectCloseIfRequested(cancellationToken)) return;
         await CaptureIfRequested(cancellationToken);
     }
 
@@ -331,7 +429,7 @@ public partial class OpenDaoWorld : Node3D
 
     private bool TravelToAlienage()
     {
-        var catalog = new OpenDAO.MainMenu.AreaCatalog();
+        var catalog = new Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog();
         if (!catalog.Load())
         {
             placeableHighlighter?.ShowFeedback("The Alienage route is unavailable.");
@@ -343,15 +441,15 @@ public partial class OpenDaoWorld : Node3D
             area.Archive.EndsWith("al_bec01al_alienage.rim", StringComparison.OrdinalIgnoreCase));
         var transitionError = destination is null ? "destination-profile-absent" : string.Empty;
         if (destination is null ||
-            !OpenDAO.MainMenu.AreaCatalog.WriteProfileForLoading(destination,
-                OpenDAO.MainMenu.RuntimeSavePaths.SelectedProfile, out transitionError))
+            !Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog.WriteProfileForLoading(destination,
+                Nikami.Aurora.GodotRuntime.MainMenu.RuntimeSavePaths.SelectedProfile, out transitionError))
         {
             placeableHighlighter?.ShowFeedback("The Alienage route is unavailable.");
             GD.PushWarning("OPENDAO_PLACEABLE_TRANSITION status=fail reason=" +
                            transitionError);
             return false;
         }
-        var pendingPath = OpenDAO.MainMenu.RuntimeSavePaths.PendingTransition;
+        var pendingPath = Nikami.Aurora.GodotRuntime.MainMenu.RuntimeSavePaths.PendingTransition;
         var parent = Path.GetDirectoryName(pendingPath);
         if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
         var pending = new
@@ -369,7 +467,7 @@ public partial class OpenDaoWorld : Node3D
             }
         };
         File.WriteAllText(pendingPath,
-            JsonSerializer.Serialize(pending, new JsonSerializerOptions { WriteIndented = true }) +
+            JsonSerializer.Serialize(pending, RuntimeJsonOptions.Indented) +
             System.Environment.NewLine);
         OS.SetEnvironment("OPENDAO_CONTINUE", "0");
         OS.SetEnvironment("OPENDAO_IGNORE_PENDING_TRANSITION", "");
@@ -387,9 +485,33 @@ public partial class OpenDaoWorld : Node3D
         return true;
     }
 
-    private void ConfigureLighting(int authoredLights, AuthoredLightingProfile? lighting)
+    private void ConfigureLighting(int authoredLights, AuthoredLightingProfile? lighting,
+        string layoutName)
     {
-        if (authoredLights <= 0) return;
+        var renderingMethod = RenderingServer.GetCurrentRenderingMethod().ToString();
+        var requestedTier = System.Environment.GetEnvironmentVariable(
+            "NIKAMI_AURORA_PRESENTATION_TIER")?.Trim().ToLowerInvariant() ?? string.Empty;
+        var renderPolicy = DragonAgeOriginsRenderFidelityPolicy.Evaluate(
+            layoutName, requestedTier, renderingMethod, lighting?.Atmosphere is not null);
+        if (lighting is null)
+        {
+            if (GetNodeOrNull<DirectionalLight3D>("Sun") is { } absentSun)
+                absentSun.Visible = false;
+            if (GetNodeOrNull<DirectionalLight3D>("Fill") is { } absentFill)
+                absentFill.Visible = false;
+            if (GetNodeOrNull<WorldEnvironment>("Environment")?.Environment is { } absentEnvironment)
+            {
+                ConfigureRendererEnhancements(absentEnvironment, renderPolicy);
+                GetNodeOrNull<FogVolume>("AuthoredCloudVolume")?.QueueFree();
+                absentEnvironment.VolumetricFogEnabled = false;
+            }
+            GD.Print("OPENDAO_AUTHORED_ATMOSPHERE status=unsupported " +
+                     $"layout={layoutName.ToLowerInvariant()} " +
+                     "reason=validated-atmo-contract-absent source_fields=0");
+            PrintRenderPolicy(renderPolicy, volumetricClouds: false,
+                atmosphere: "unsupported");
+            return;
+        }
         var sunCoefficients = lighting?.SunColor ?? Array.Empty<float>();
         var hasSun = HasRgbEnergy(sunCoefficients);
         var sunDirection = lighting?.SunDirection ?? Array.Empty<float>();
@@ -421,12 +543,23 @@ public partial class OpenDaoWorld : Node3D
         if (GetNodeOrNull<DirectionalLight3D>("Fill") is { } fill) fill.Visible = false;
         if (GetNodeOrNull<WorldEnvironment>("Environment")?.Environment is { } environment)
         {
+            if (lighting!.Atmosphere is not null)
+                ConfigureAtmosphere(environment, lighting, renderPolicy);
+            else
+            {
+                ConfigureRendererEnhancements(environment, renderPolicy);
+                GetNodeOrNull<FogVolume>("AuthoredCloudVolume")?.QueueFree();
+                environment.VolumetricFogEnabled = false;
+                GD.Print("OPENDAO_AUTHORED_ATMOSPHERE status=unsupported " +
+                         $"layout={layoutName.ToLowerInvariant()} " +
+                         "reason=exact-atmo-contract-absent source_fields=8");
+                PrintRenderPolicy(renderPolicy, volumetricClouds: false,
+                    atmosphere: "unsupported-base-lighting-only");
+            }
             environment.AmbientLightSource = Godot.Environment.AmbientSource.Color;
             // An absent retail probe is an authored absence, not permission to
-            // invent neutral fill. The city-elf room has zero sun/character sun
-            // and seven local lights, so those lights are its complete diffuse
-            // illumination input. Probe-backed areas are kept distinct for the
-            // exact SH binding path.
+            // invent neutral fill. No-sun areas retain their authored local
+            // light-only input; probe-backed areas use the exact SH path.
             var probeLoaded = lighting?.ProbeLoaded == true;
             var irradiance = probeLoaded && lighting is not null
                 ? new Vector3(SphericalAverage(lighting.ProbeMatrixR),
@@ -449,6 +582,7 @@ public partial class OpenDaoWorld : Node3D
                      $"probe={(probeLoaded ? 1 : 0)} ambient_source=" +
                      $"{ambientSource} " +
                      $"probe_resource={lighting?.ProbeResource ?? string.Empty} " +
+                     $"probe_sha256={lighting?.ProbeResourceSha256 ?? string.Empty} " +
                      $"color_encoding={DaoLightEncoding.Contract} " +
                      $"ambient=({irradiance.X:0.####},{irradiance.Y:0.####},{irradiance.Z:0.####}) " +
                      $"sun=({At(sunCoefficients, 0):0.####},{At(sunCoefficients, 1):0.####}," +
@@ -459,6 +593,219 @@ public partial class OpenDaoWorld : Node3D
                      $"{At(characterSun, 2):0.####},{At(characterSun, 3):0.####})");
         }
     }
+
+    private void ConfigureAtmosphere(Godot.Environment environment,
+        AuthoredLightingProfile lighting, DragonAgeAreaRenderPolicy renderPolicy)
+    {
+        var atmosphere = lighting.Atmosphere ??
+                         throw new InvalidDataException(
+                             "Validated DAO atmosphere is absent during configuration.");
+        var renderingMethod = renderPolicy.RenderingMethod;
+        var layoutName = renderPolicy.Layout;
+        var enhanced = renderPolicy.EnhancedFeatures;
+        var shader = GD.Load<Shader>(DaoSkyShaderPath);
+        if (shader is null)
+        {
+            GD.PushError("OPENDAO_AUTHORED_ATMOSPHERE status=fail reason=sky-shader-missing");
+            return;
+        }
+
+        var sourceToSun = new Vector3(At(lighting.SunDirection, 0),
+            At(lighting.SunDirection, 1), At(lighting.SunDirection, 2));
+        var godotToSun = sourceToSun.LengthSquared() > 0.000001f
+            ? new Vector3(sourceToSun.X, sourceToSun.Z, -sourceToSun.Y).Normalized()
+            : new Vector3(0, 0.7f, 0.7f).Normalized();
+        var fogColor = SourceColor(lighting.FogColor, new Color(0.16f, 0.19f, 0.16f));
+        var cloudColor = SourceColor(atmosphere.CloudColor, new Color(0.8f, 0.8f, 0.8f));
+        var atmosphereSun = SourceColor(atmosphere.AtmosphereSunColor,
+            new Color(0.74f, 0.32f, 0.14f));
+        var material = new ShaderMaterial { Shader = shader };
+        material.SetShaderParameter("fog_color", fogColor);
+        material.SetShaderParameter("sun_color", SourceColor(lighting.SunColor, Colors.White));
+        material.SetShaderParameter("sun_direction", godotToSun);
+        material.SetShaderParameter("atmosphere_sun_color", atmosphereSun);
+        material.SetShaderParameter("atmosphere_sun_intensity", Math.Max(0, lighting.SunIntensity));
+        material.SetShaderParameter("turbidity", Math.Max(1, atmosphere.Turbidity));
+        material.SetShaderParameter("rayleigh_multiplier", Math.Max(0, atmosphere.RayleighMultiplier));
+        material.SetShaderParameter("mie_multiplier", Math.Max(0, atmosphere.MieMultiplier));
+        material.SetShaderParameter("phase_eccentricity",
+            Math.Clamp(atmosphere.PhaseEccentricity, -0.99f, 0.99f));
+        material.SetShaderParameter("distance_multiplier", Math.Max(0, atmosphere.DistanceMultiplier));
+        material.SetShaderParameter("atmosphere_alpha", Math.Max(0, atmosphere.AtmosphereAlpha));
+        material.SetShaderParameter("moon_scale", Math.Max(0, atmosphere.MoonScale));
+        material.SetShaderParameter("moon_alpha", Math.Max(0, atmosphere.MoonAlpha));
+        material.SetShaderParameter("cloud_color", cloudColor);
+        material.SetShaderParameter("authored_cloud_density", Math.Max(0, atmosphere.CloudDensity));
+        material.SetShaderParameter("authored_cloud_sharpness", Math.Max(0, atmosphere.CloudSharpness));
+        material.SetShaderParameter("authored_cloud_depth", atmosphere.CloudDepth);
+        material.SetShaderParameter("cloud_range_multiplier_1", Math.Max(0.0001f, atmosphere.CloudRange1));
+        material.SetShaderParameter("cloud_range_multiplier_2", Math.Max(0.0001f, atmosphere.CloudRange2));
+        material.SetShaderParameter("fog_cap", Math.Max(0, atmosphere.FogCap));
+        material.SetShaderParameter("fog_intensity", Math.Max(0, atmosphere.FogIntensity));
+        material.SetShaderParameter("fog_zenith", atmosphere.FogZenith);
+
+        environment.BackgroundMode = Godot.Environment.BGMode.Sky;
+        environment.Sky = new Sky { SkyMaterial = material };
+        environment.ReflectedLightSource = Godot.Environment.ReflectionSource.Sky;
+        environment.FogEnabled = atmosphere.FogIntensity > 0;
+        environment.FogLightColor = fogColor;
+        environment.FogLightEnergy = 1;
+        environment.FogDensity = Math.Clamp(atmosphere.FogIntensity * 0.01f, 0, 0.2f);
+        environment.FogSkyAffect = Math.Clamp(atmosphere.FogCap, 0, 1);
+
+        // The source composition above remains authoritative. These Forward+
+        // facilities improve depth, indirect contact, and cloud volume without
+        // changing source placements, colors, or atmosphere coefficients.
+        ConfigureRendererEnhancements(environment, renderPolicy);
+
+        var volumetricRequested = enhanced && renderPolicy.QualityDecision.Volumetrics.Enabled &&
+                                  renderingMethod.Equals("forward_plus",
+                                      StringComparison.OrdinalIgnoreCase) &&
+                                  atmosphere.CloudDensity > 0.001f;
+        // Matched diagnostic captures exonerated the fog volume: the wedges
+        // remained in source tier with volumetrics off and disappeared only
+        // when the singular procedural sky-cloud projection was disabled.
+        var volumetricClouds = volumetricRequested && ConfigureVolumetricClouds(
+            environment, atmosphere, cloudColor, atmosphereSun);
+        if (volumetricClouds)
+        {
+            // The lit fog volume is finite by design and supplies near-field
+            // extinction/light shafts.  A redesigned seamless high-frequency
+            // shell covers the far horizon without the old singular planar
+            // projection or its cubemap-sized cloud columns.
+            material.SetShaderParameter("cloud_shell_strength", 0.72f);
+        }
+        else
+        {
+            GetNodeOrNull<FogVolume>("AuthoredCloudVolume")?.QueueFree();
+            environment.VolumetricFogEnabled = false;
+        }
+        GD.Print("OPENDAO_AUTHORED_ATMOSPHERE status=ready " +
+                 $"background=source-atmo-sky preserved={atmosphere.SourceFieldCount} " +
+                 "exact_contract=29 additional_validated=fog_water_intensity,fog_water_cap " +
+                 $"preserved_sha256={atmosphere.SourceFieldsSha256} mapped=27 " +
+                 "unsupported=fog_water_intensity,fog_water_cap,moon_rotation,skydome " +
+                 $"cloud_density={atmosphere.CloudDensity:0.####} " +
+                 $"fog_intensity={atmosphere.FogIntensity:0.####} " +
+                 $"sun_intensity={lighting.SunIntensity:0.####} skydome={atmosphere.SkyDome} " +
+                 $"cloud_composition={(volumetricClouds ? "lit-volume+far-shell" : "source-sky-shell")} " +
+                 $"gray_clear_holes=blocked layout={layoutName.ToLowerInvariant()}");
+        PrintRenderPolicy(renderPolicy, volumetricClouds, "source-validated");
+    }
+
+    private static void ConfigureRendererEnhancements(Godot.Environment environment,
+        DragonAgeAreaRenderPolicy policy)
+    {
+        var enhanced = policy.EnhancedFeatures;
+        environment.TonemapMode = enhanced
+            ? Godot.Environment.ToneMapper.Agx
+            : Godot.Environment.ToneMapper.Linear;
+        environment.TonemapExposure = 1;
+        environment.TonemapAgxWhite = 8;
+        environment.TonemapAgxContrast = 1.05f;
+        environment.SsaoEnabled = enhanced;
+        environment.SsaoRadius = 1.4f;
+        environment.SsaoIntensity = 1.2f;
+        environment.SsilEnabled = enhanced;
+        environment.SsilRadius = 3;
+        environment.SsilIntensity = 0.65f;
+        environment.GlowEnabled = enhanced;
+        environment.SsrEnabled = policy.QualityDecision.Reflections.Enabled;
+        environment.SdfgiEnabled = policy.QualityDecision.Sdfgi.Enabled;
+    }
+
+    private static void PrintRenderPolicy(DragonAgeAreaRenderPolicy policy,
+        bool volumetricClouds, string atmosphere)
+    {
+        var enhanced = policy.EnhancedFeatures;
+        var tier = policy.Tier.ToString().ToLowerInvariant();
+        GD.Print(policy.QualityDecision.ToTelemetryMarker());
+        GD.Print("OPENDAO_RENDER_PIPELINE status=ready " +
+                 $"method={policy.RenderingMethod} tier={tier} " +
+                 $"tonemap={(enhanced ? "agx" : "linear")} ssao={(enhanced ? 1 : 0)} " +
+                 $"ssil={(enhanced ? 1 : 0)} glow={(enhanced ? 1 : 0)} " +
+                 $"volumetric_clouds={(volumetricClouds ? 1 : 0)} " +
+                 $"layout={policy.Layout.ToLowerInvariant()} atmosphere={atmosphere} " +
+                 $"ssr={(policy.QualityDecision.Reflections.Enabled ? 1 : 0)} " +
+                 $"sdfgi={(policy.QualityDecision.Sdfgi.Enabled ? 1 : 0)}");
+        GD.Print($"OPENDAO_RENDER_ENHANCEMENT status={(enhanced ? "ready" : "disabled")} " +
+                 $"renderer={policy.RenderingMethod} tier={tier} " +
+                 $"tonemapper={(enhanced ? "agx" : "linear")} ssao={(enhanced ? 1 : 0)} " +
+                 $"ssil={(enhanced ? 1 : 0)} volumetric_clouds={(volumetricClouds ? 1 : 0)} " +
+                 $"parity_claim=none layout={policy.Layout.ToLowerInvariant()} " +
+                 $"atmosphere={atmosphere}");
+        GD.Print($"OPENDAO_AREA_RENDER_POLICY status={policy.Status} " +
+                 $"layout={policy.Layout.ToLowerInvariant()} tier={tier} " +
+                 $"renderer={policy.RenderingMethod} atmosphere={atmosphere} " +
+                 "material_policy=gltf-pbr-source-contract " +
+                 $"enhanced_features={(enhanced ? 1 : 0)} " +
+                 "layout_override=none parity_claim=none");
+    }
+
+    private bool ConfigureVolumetricClouds(Godot.Environment environment,
+        AuthoredAtmosphereProfile atmosphere, Color cloudColor, Color atmosphereSun)
+    {
+        var shader = GD.Load<Shader>(DaoCloudVolumeShaderPath);
+        if (shader is null)
+        {
+            GD.PushError("OPENDAO_VOLUMETRIC_CLOUDS status=fail reason=shader-missing");
+            return false;
+        }
+
+        var sceneBounds = SceneBounds.Calculate(GetNode<Node3D>("DAOScene"));
+        var sceneTop = sceneBounds.Size.IsZeroApprox()
+            ? player.GlobalPosition.Y + 20
+            : sceneBounds.End.Y;
+        var sceneHeight = sceneBounds.Size.IsZeroApprox() ? 20 : Math.Max(20, sceneBounds.Size.Y);
+        var cloudBase = sceneTop + Math.Max(18, sceneHeight * 0.25f);
+        var cloudThickness = Math.Max(55, sceneHeight * 1.25f);
+        var cloudMaterial = new ShaderMaterial { Shader = shader };
+        cloudMaterial.SetShaderParameter("density_scale",
+            Math.Clamp(atmosphere.CloudDensity * 0.22f, 0.015f, 0.18f));
+        cloudMaterial.SetShaderParameter("cloud_albedo", cloudColor);
+        cloudMaterial.SetShaderParameter("cloud_ambient", atmosphereSun * 0.035f);
+        cloudMaterial.SetShaderParameter("cloud_base_height", cloudBase);
+        cloudMaterial.SetShaderParameter("cloud_layer_thickness", cloudThickness);
+        cloudMaterial.SetShaderParameter("authored_cloud_sharpness",
+            Math.Max(.0001f, atmosphere.CloudSharpness));
+        cloudMaterial.SetShaderParameter("authored_cloud_depth", atmosphere.CloudDepth);
+        cloudMaterial.SetShaderParameter("cloud_range_1",
+            Math.Max(.0001f, atmosphere.CloudRange1));
+        cloudMaterial.SetShaderParameter("cloud_range_2",
+            Math.Max(.0001f, atmosphere.CloudRange2));
+
+        GetNodeOrNull<FogVolume>("AuthoredCloudVolume")?.QueueFree();
+        AddChild(new FogVolume
+        {
+            Name = "AuthoredCloudVolume",
+            Shape = RenderingServer.FogVolumeShape.World,
+            Material = cloudMaterial
+        });
+        environment.VolumetricFogEnabled = true;
+        environment.VolumetricFogDensity = 0;
+        environment.VolumetricFogAlbedo = cloudColor;
+        environment.VolumetricFogAnisotropy = Math.Clamp(atmosphere.PhaseEccentricity, -0.8f, 0.8f);
+        environment.VolumetricFogLength = Math.Max(220, cloudBase + cloudThickness);
+        environment.VolumetricFogAmbientInject = 0.65f;
+        environment.VolumetricFogSkyAffect = 1;
+        environment.VolumetricFogTemporalReprojectionEnabled = true;
+        environment.VolumetricFogTemporalReprojectionAmount = 0.82f;
+        if (GetNodeOrNull<DirectionalLight3D>("Sun") is { } sun)
+            sun.LightVolumetricFogEnergy = 1.15f;
+        GD.Print($"OPENDAO_VOLUMETRIC_CLOUDS status=ready source=are-atmo " +
+                 $"base={cloudBase:0.###} thickness={cloudThickness:0.###} " +
+                 $"density={atmosphere.CloudDensity:0.###} " +
+                 $"sharpness={atmosphere.CloudSharpness:0.###} " +
+                 $"depth={atmosphere.CloudDepth:0.###} " +
+                 $"ranges={atmosphere.CloudRange1:0.###},{atmosphere.CloudRange2:0.###} " +
+                 "wind=unsupported-static enhancement=2026-quality parity_claim=none");
+        return true;
+    }
+
+    private static Color SourceColor(IReadOnlyList<float> source, Color fallback) =>
+        source.Count >= 3
+            ? new Color(Math.Max(0, source[0]), Math.Max(0, source[1]), Math.Max(0, source[2]))
+            : fallback;
 
     private static float At(IReadOnlyList<float> values, int index) =>
         index < values.Count ? values[index] : 0.0f;
@@ -471,7 +818,7 @@ public partial class OpenDaoWorld : Node3D
         : 0.0f;
 
     private static bool ShouldPlayOpening(WorldProfile world,
-        OpenDAO.MainMenu.CharacterOrigin? origin) =>
+        Nikami.Aurora.GodotRuntime.MainMenu.CharacterOrigin? origin) =>
         origin is { OpeningCutscene.Length: > 0 } &&
         world.AreaId.Equals(origin.AreaId, StringComparison.OrdinalIgnoreCase) &&
         System.Environment.GetEnvironmentVariable("OPENDAO_CONTINUE") != "1" &&
@@ -479,7 +826,7 @@ public partial class OpenDaoWorld : Node3D
          System.Environment.GetEnvironmentVariable("OPENDAO_CHARACTER_CREATION_ACCEPTANCE") == "1");
 
     private static bool ShouldPlayOpeningDialogue(WorldProfile world,
-        OpenDAO.MainMenu.CharacterOrigin? origin) =>
+        Nikami.Aurora.GodotRuntime.MainMenu.CharacterOrigin? origin) =>
         origin is not null &&
         origin.Id.Equals("city-elf", StringComparison.OrdinalIgnoreCase) &&
         world.AreaId.Equals("bec110ar_players_house", StringComparison.OrdinalIgnoreCase) &&
@@ -487,234 +834,4 @@ public partial class OpenDaoWorld : Node3D
         (!RuntimeAutomation.WantsWorld() ||
          System.Environment.GetEnvironmentVariable("OPENDAO_CHARACTER_CREATION_ACCEPTANCE") == "1");
 
-    private async Task RunCityElfPlayableSmoke(CancellationToken cancellationToken)
-    {
-        await WaitForProcessFrames(
-            ConfiguredFrameCount(PlayableSmokeStartupFramesVariable), cancellationToken);
-        var stage = System.Environment.GetEnvironmentVariable("OPENDAO_CITY_ELF_PLAYABLE_SMOKE_STAGE") ??
-                    string.Empty;
-        if (profile?.AreaId.Equals("bec110ar_players_house", StringComparison.OrdinalIgnoreCase) == true &&
-            stage.Length == 0)
-        {
-            var capturePath = System.Environment.GetEnvironmentVariable("OPENDAO_GAME_START_CAPTURE") ?? string.Empty;
-            var capture = capturePath.Length == 0
-                ? Error.Ok
-                : GetViewport().GetTexture().GetImage().SavePng(capturePath);
-            var locomotionPassed = await LocomotionSmoke.RunAsync(player, cancellationToken);
-            var crate = FindPlaceable("bec110ip_pc_possessions");
-            var door = FindPlaceable("bec110ip_to_alienage");
-            if (crate is not null) OnPlaceableUseRequested(crate);
-            var story = services!.GetRequired<StoryState>();
-            var crateHandle = crate?.GetMeta("dao_story_handle", 0).AsInt32() ?? 0;
-            var crateUsePassed = crate is not null && crateHandle > 0 &&
-                                 story.GetPlotFlag("85c3d035f1274fd59849b190d64d5290", 2) &&
-                                 Convert.ToInt32(story.GetLocal(crateHandle, "PLC_DO_ONCE_A", "int") ?? 0) == 1;
-            var gameStartPassed = capture == Error.Ok && player.IsPhysicsProcessing() && locomotionPassed &&
-                                  crateUsePassed && door is not null;
-            GD.Print($"OPENDAO_CHARACTER_GAME_START_ACCEPTANCE status={(gameStartPassed ? "pass" : "fail")} " +
-                     $"character={character.Name} area={profile.AreaId} " +
-                     $"player_control={(player.IsPhysicsProcessing() ? 1 : 0)} " +
-                     $"opening_cutscene=start_wake locomotion={(locomotionPassed ? "pass" : "fail")} " +
-                     $"capture={capturePath}");
-            if (!gameStartPassed)
-            {
-                GD.Print($"OPENDAO_CITY_ELF_PLAYABLE_SMOKE status=fail stage=house " +
-                         $"crate={(crate is null ? 0 : 1)} door={(door is null ? 0 : 1)} " +
-                         $"crate_use={(crateUsePassed ? "pass" : "fail")} " +
-                         $"locomotion={(locomotionPassed ? "pass" : "fail")}");
-                GetTree().Quit(61);
-                return;
-            }
-            System.Environment.SetEnvironmentVariable("OPENDAO_CITY_ELF_PLAYABLE_SMOKE_STAGE", "crate-used");
-            if (!TravelToAlienage())
-            {
-                GD.Print("OPENDAO_CITY_ELF_PLAYABLE_SMOKE status=fail stage=transition");
-                GetTree().Quit(62);
-            }
-            return;
-        }
-        if (profile?.AreaId.Equals("bec100ar_elven_alienage", StringComparison.OrdinalIgnoreCase) == true &&
-            stage == "crate-used")
-        {
-            await WaitForProcessFrames(
-                ConfiguredFrameCount(AlienageArrivalWarmupFramesVariable), cancellationToken);
-            var locomotionPassed = await LocomotionSmoke.RunAsync(player, cancellationToken);
-            await WaitForProcessFrames(ConfiguredFrameCount(GameplayHoldFramesVariable), cancellationToken);
-            var destinationCapture = System.Environment.GetEnvironmentVariable(
-                "OPENDAO_PLAYABLE_DESTINATION_CAPTURE") ?? string.Empty;
-            var destinationImage = GetViewport().GetTexture().GetImage();
-            var captured = destinationCapture.Length == 0
-                ? Error.Ok
-                : destinationImage.SavePng(destinationCapture);
-            var visibility = MeasureWorldVisibility(destinationImage);
-            var visibilityPassed = visibility.VisibleRatio >= 0.15f;
-            var passed = player.IsPhysicsProcessing() && locomotionPassed &&
-                         captured == Error.Ok && visibilityPassed;
-            GD.Print($"OPENDAO_CITY_ELF_EXTERIOR_GAMEPLAY status={(passed ? "pass" : "fail")} " +
-                     $"area={profile.AreaId} waypoint=bec100wp_from_home " +
-                     $"locomotion={(locomotionPassed ? "pass" : "fail")} " +
-                     $"player_control={(player.IsPhysicsProcessing() ? 1 : 0)} " +
-                     $"world_visible={(visibilityPassed ? "pass" : "fail")}");
-            GD.Print($"OPENDAO_CITY_ELF_PLAYABLE_SMOKE status={(passed ? "pass" : "fail")} " +
-                     "crate_use=pass transition=pass " +
-                     $"destination={profile.AreaId} waypoint=bec100wp_from_home " +
-                     $"locomotion={(locomotionPassed ? "pass" : "fail")} " +
-                     $"player_control={(player.IsPhysicsProcessing() ? 1 : 0)} " +
-                     $"world_visible={(visibilityPassed ? "pass" : "fail")} " +
-                     $"visible_ratio={visibility.VisibleRatio:0.####} " +
-                     $"mean_luminance={visibility.MeanLuminance:0.####} capture={destinationCapture}");
-            System.Environment.SetEnvironmentVariable("OPENDAO_CITY_ELF_PLAYABLE_SMOKE_STAGE", string.Empty);
-            GetTree().Quit(passed ? 0 : 63);
-            return;
-        }
-        GD.Print($"OPENDAO_CITY_ELF_PLAYABLE_SMOKE status=fail stage=unexpected " +
-                 $"area={profile?.AreaId ?? string.Empty} marker={stage}");
-        GetTree().Quit(64);
-    }
-
-    private async Task WaitForProcessFrames(int frameCount, CancellationToken cancellationToken)
-    {
-        for (var frame = 0; frame < frameCount; frame++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-        }
-    }
-
-    private static int ConfiguredFrameCount(string variableName) => int.TryParse(
-        System.Environment.GetEnvironmentVariable(variableName), out var configuredFrames)
-        ? Math.Max(0, configuredFrames)
-        : 0;
-
-    private static (float VisibleRatio, float MeanLuminance) MeasureWorldVisibility(Image image)
-    {
-        if (image.IsEmpty() || image.GetWidth() < 4 || image.GetHeight() < 4) return (0, 0);
-        const int columnsPerBand = 32;
-        const int rows = 36;
-        var width = image.GetWidth();
-        var height = image.GetHeight();
-        var visible = 0;
-        var samples = 0;
-        var luminanceSum = 0.0f;
-        for (var row = 0; row < rows; row++)
-        {
-            var y = (int)Math.Round(height * (0.18f + 0.60f * row / (rows - 1)));
-            for (var band = 0; band < 2; band++)
-            {
-                var xStart = band == 0 ? 0.05f : 0.62f;
-                var xEnd = band == 0 ? 0.38f : 0.95f;
-                for (var column = 0; column < columnsPerBand; column++)
-                {
-                    var x = (int)Math.Round(width *
-                        (xStart + (xEnd - xStart) * column / (columnsPerBand - 1)));
-                    var color = image.GetPixel(Math.Clamp(x, 0, width - 1),
-                        Math.Clamp(y, 0, height - 1));
-                    var luminance = 0.2126f * color.R + 0.7152f * color.G + 0.0722f * color.B;
-                    luminanceSum += luminance;
-                    if (luminance >= 0.03f) visible++;
-                    samples++;
-                }
-            }
-        }
-        return samples == 0 ? (0, 0) : ((float)visible / samples, luminanceSum / samples);
-    }
-
-    private Node3D? FindPlaceable(string tag) => GetNode<Node3D>("DAOScene")
-        .FindChildren("*", "Node3D", true, false).OfType<Node3D>()
-        .FirstOrDefault(node => node.HasMeta("dao_placeable") &&
-                                node.GetMeta("dao_tag").AsString()
-                                    .Equals(tag, StringComparison.OrdinalIgnoreCase));
-
-    private async Task RunCharacterGameStartAcceptance(CancellationToken cancellationToken)
-    {
-        for (var frame = 0; frame < 12; frame++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-        }
-        var expectedOrigin = System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_ORIGIN");
-        if (string.IsNullOrWhiteSpace(expectedOrigin)) expectedOrigin = "city-elf";
-        var expectedGender = System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_GENDER");
-        if (expectedGender is not ("male" or "female")) expectedGender = "female";
-        var expectedName = System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_NAME");
-        if (string.IsNullOrWhiteSpace(expectedName)) expectedName = "Automation Warden";
-        var expectedClass = System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_CLASS");
-        if (string.IsNullOrWhiteSpace(expectedClass)) expectedClass = character.Class;
-        var expectedAppearance = System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_APPEARANCE");
-        if (string.IsNullOrWhiteSpace(expectedAppearance)) expectedAppearance = "preset-3";
-        var expected = character.Name == expectedName && character.Gender == expectedGender &&
-                       character.Origin.Equals(expectedOrigin, StringComparison.OrdinalIgnoreCase) &&
-                       character.Class.Equals(expectedClass, StringComparison.OrdinalIgnoreCase) &&
-                       character.Appearance.Equals(expectedAppearance, StringComparison.OrdinalIgnoreCase);
-        var origin = OpenDAO.MainMenu.CharacterProfileRules.OriginFor(character.Origin);
-        var correctArea = origin is not null && profile is not null &&
-                          profile.AreaId.Equals(origin.AreaId, StringComparison.OrdinalIgnoreCase);
-        var correctCutscenePolicy = origin is not null &&
-            (origin.OpeningCutscene.Length == 0
-                ? openingCutscene is null
-                : openingCutscene?.CompletedSuccessfully == true);
-        var gameplayCamera = player.GetNode<Camera3D>("Head/Camera3D");
-        GD.Print($"OPENDAO_GAMEPLAY_CAMERA player={player.GlobalPosition} camera={gameplayCamera.GlobalPosition} " +
-                 $"forward={-gameplayCamera.GlobalBasis.Z} spring={player.GetNode<SpringArm3D>("Head").SpringLength:F2}");
-        var capturePath = System.Environment.GetEnvironmentVariable("OPENDAO_GAME_START_CAPTURE") ?? string.Empty;
-        var capture = capturePath.Length == 0
-            ? Error.Ok
-            : GetViewport().GetTexture().GetImage().SavePng(capturePath);
-        var locomotionPassed = System.Environment.GetEnvironmentVariable("OPENDAO_FLOW_LOCOMOTION") != "1" ||
-                               await LocomotionSmoke.RunAsync(player, cancellationToken);
-        var passed = expected && correctArea && correctCutscenePolicy && capture == Error.Ok &&
-                     player.IsPhysicsProcessing() && locomotionPassed;
-        GD.Print($"OPENDAO_CHARACTER_GAME_START_ACCEPTANCE status={(passed ? "pass" : "fail")} " +
-                 $"character={character.Name} area={profile?.AreaId} player_control={(player.IsPhysicsProcessing() ? 1 : 0)} " +
-                 $"opening_cutscene={(origin?.OpeningCutscene.Length > 0 ? origin.OpeningCutscene : "not-authored-for-area")} " +
-                 $"locomotion={(locomotionPassed ? "pass" : "fail")} capture={capturePath}");
-        await WaitForProcessFrames(ConfiguredFrameCount(GameplayHoldFramesVariable), cancellationToken);
-        GetTree().Quit(passed ? 0 : 59);
-    }
-
-    private void RestoreSession()
-    {
-        if (services is null || profile is null ||
-            System.Environment.GetEnvironmentVariable("OPENDAO_CONTINUE") != "1") return;
-        var session = services.GetRequired<IPlayerSessionRepository>().Load();
-        if (session is null || (session.AreaId.Length > 0 && !string.Equals(session.AreaId, profile.AreaId,
-            StringComparison.OrdinalIgnoreCase))) return;
-        player.GlobalPosition = session.Position;
-        player.Rotation = player.Rotation with { Y = session.Yaw };
-        var head = player.GetNode<Node3D>("Head");
-        head.Rotation = head.Rotation with { X = Mathf.Clamp(session.Pitch, Mathf.DegToRad(-85), Mathf.DegToRad(85)) };
-        GD.Print($"OPENDAO_SESSION restored area={session.AreaId} position={session.Position}");
-    }
-
-    private void SaveSession()
-    {
-        if (services is null || profile is null || !IsInstanceValid(player) ||
-            System.Environment.GetEnvironmentVariable("OPENDAO_TEST_NO_PERSIST") == "1") return;
-        var head = player.GetNodeOrNull<Node3D>("Head");
-        services.GetRequired<IPlayerSessionRepository>().Save(new PlayerSession(string.Empty,
-            profile.AreaId, player.GlobalPosition, player.Rotation.Y, head?.Rotation.X ?? 0,
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
-    }
-
-    private async Task CaptureIfRequested(CancellationToken cancellationToken)
-    {
-        var path = System.Environment.GetEnvironmentVariable("DAOPEN_CAPTURE")?.Trim() ?? string.Empty;
-        if (path.Length == 0) return;
-        if (DisplayServer.GetName().Equals("headless", StringComparison.OrdinalIgnoreCase))
-        {
-            GD.PushError("OPENDAO_CAPTURE status=fail reason=headless-display-server");
-            if (System.Environment.GetEnvironmentVariable("DAOPEN_CAPTURE_EXIT") == "1") GetTree().Quit(1);
-            return;
-        }
-        for (var i = 0; i < 24; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-        }
-        var image = GetViewport().GetTexture().GetImage();
-        var error = image.SavePng(path);
-        GD.Print($"OPENDAO_CAPTURE path={path} status={(error == Error.Ok ? "pass" : "fail")}");
-        if (System.Environment.GetEnvironmentVariable("DAOPEN_CAPTURE_EXIT") == "1")
-            GetTree().Quit(error == Error.Ok ? 0 : 1);
-    }
 }

@@ -1,4 +1,4 @@
-namespace OpenDAO.Domain.World;
+namespace Nikami.Aurora.GodotRuntime.Domain.World;
 
 public sealed record WorldProfile(
     int Schema,
@@ -55,8 +55,41 @@ public sealed record AuthoredLightingProfile(
     float[] FogColor,
     float SunIntensity,
     string ProbeResource,
+    string ProbeResourceSha256,
     AuthoredPointLightProfile[] PointLights,
-    AuthoredPointLightProfile[] CharacterPointLights);
+    AuthoredPointLightProfile[] CharacterPointLights,
+    AuthoredAtmosphereProfile? Atmosphere);
+
+/// <summary>
+/// Exact scalar/vector values exported from the installed ARE ATMO structure.
+/// Renderer enhancements may consume these values, but may not replace them
+/// with a profile-wide color grade.
+/// </summary>
+public sealed record AuthoredAtmosphereProfile(
+    float FogIntensity,
+    float FogCap,
+    float FogZenith,
+    float FogWaterIntensity,
+    float FogWaterCap,
+    float DistanceMultiplier,
+    float AtmosphereAlpha,
+    float[] AtmosphereSunColor,
+    float Turbidity,
+    float RayleighMultiplier,
+    float MieMultiplier,
+    float PhaseEccentricity,
+    float CloudDensity,
+    float CloudSharpness,
+    float CloudDepth,
+    float CloudRange1,
+    float CloudRange2,
+    float[] CloudColor,
+    float MoonScale,
+    float MoonAlpha,
+    float MoonRotation,
+    string SkyDome,
+    int SourceFieldCount,
+    string SourceFieldsSha256);
 
 public sealed record AuthoredPointLightProfile(
     string Name,

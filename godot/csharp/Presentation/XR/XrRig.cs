@@ -1,7 +1,7 @@
 using Godot;
-using OpenDAO.Presentation.Player;
+using Nikami.Aurora.GodotRuntime.Presentation.Player;
 
-namespace OpenDAO.Presentation.XR;
+namespace Nikami.Aurora.GodotRuntime.Presentation.XR;
 
 public partial class XrRig : XROrigin3D
 {
@@ -42,7 +42,7 @@ public partial class XrRig : XROrigin3D
     private void CreateSpectatorMirror()
     {
         GetTree().Root.GuiEmbedSubwindows = false;
-        var window = new Window { Title = "OpenDAO XR Spectator", Size = new(1280, 720), Unresizable = true };
+        var window = new Window { Title = "Nikami.Aurora.GodotRuntime XR Spectator", Size = new(1280, 720), Unresizable = true };
         var container = new SubViewportContainer { Stretch = true };
         container.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         var viewport = new SubViewport
@@ -58,6 +58,6 @@ public partial class XrRig : XROrigin3D
         window.AddChild(container);
         window.AddChild(new Label { Text = "META XR SIMULATOR  •  OPENDAO", Position = new(18, 14) });
         AddChild(window);
-        GD.Print("OPENDAO_XR_SPECTATOR ready=true title=OpenDAO XR Spectator size=1280x720");
+        GD.Print("OPENDAO_XR_SPECTATOR ready=true title=Nikami.Aurora.GodotRuntime XR Spectator size=1280x720");
     }
 }

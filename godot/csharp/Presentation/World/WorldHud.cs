@@ -1,16 +1,16 @@
 using Godot;
-using OpenDAO.Domain.Abilities;
-using OpenDAO.Domain.Inventory;
-using OpenDAO.Domain.Quests;
-using OpenDAO.MainMenu;
-using OpenDAO.Infrastructure.Archives;
-using OpenDAO.Presentation;
-using OpenDAO.Presentation.Player;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.World;
-using OpenDAO.Rendering;
+using Nikami.Aurora.GodotRuntime.Domain.Abilities;
+using Nikami.Aurora.GodotRuntime.Domain.Inventory;
+using Nikami.Aurora.GodotRuntime.Domain.Quests;
+using Nikami.Aurora.GodotRuntime.MainMenu;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Archives;
+using Nikami.Aurora.GodotRuntime.Presentation;
+using Nikami.Aurora.GodotRuntime.Presentation.Player;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.World;
+using Nikami.Aurora.GodotRuntime.Rendering;
 
-namespace OpenDAO.Presentation.World;
+namespace Nikami.Aurora.GodotRuntime.Presentation.World;
 
 internal sealed class WorldHud
 {
@@ -34,7 +34,7 @@ internal sealed class WorldHud
 
     public WorldHud(Node host, AbilityState abilities, InventoryState inventory, QuestJournal quests,
         WorldProfile world, IAreaPresentationProvider areaPresentation,
-        OpenDAO.Domain.Characters.CharacterProfile character, PlayerController player)
+        Nikami.Aurora.GodotRuntime.Domain.Characters.CharacterProfile character, PlayerController player)
     {
         this.abilities = abilities;
         this.inventory = inventory;
@@ -64,7 +64,7 @@ internal sealed class WorldHud
     }
 
     private void BuildAuthoredHud(WorldProfile world, IAreaPresentationProvider areaPresentation,
-        OpenDAO.Domain.Characters.CharacterProfile character, PlayerController player)
+        Nikami.Aurora.GodotRuntime.Domain.Characters.CharacterProfile character, PlayerController player)
     {
         var archivePath = Path.Combine(world.GameRoot, "packages", "core", "data", "guiexport.erf");
         if (!File.Exists(archivePath))

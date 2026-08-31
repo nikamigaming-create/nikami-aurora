@@ -1,4 +1,4 @@
-namespace OpenDAO.Domain.World;
+namespace Nikami.Aurora.GodotRuntime.Domain.World;
 
 public sealed record AreaPresentation(string DisplayName, int NorthQuarterTurns)
 {

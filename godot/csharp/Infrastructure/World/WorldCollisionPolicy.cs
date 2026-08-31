@@ -1,6 +1,6 @@
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
-using OpenDAO.Rendering;
+using Nikami.Aurora.GodotRuntime.Rendering;
 
 internal static class WorldCollisionPolicy
 {

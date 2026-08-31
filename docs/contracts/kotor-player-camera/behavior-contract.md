@@ -12,9 +12,18 @@
 - The proof does not consume a personal save file. Future character creation
   replaces only this selection input, not the assembly contract.
 
+Local import accepts explicit player appearance and portrait row IDs. It still
+fails closed unless `portraits.2da` binds that portrait to the requested
+appearance, then resolves the body, texture variation, head, animation source,
+talk hook, and camera hook through the installed tables/models. Rows 137/18 are
+defaults for the deterministic proof, not hardcoded runtime identity.
+
 The generated player contains 11 meshes, 1,911 vertices, 2,603 triangles, five
 skins, and two hook-bound head skins. `S_Male02` supplies `pause1`, `walk`, and
-`run`.
+`run`. Runtime rejects missing/empty body or head geometry, incomplete skinning,
+invalid source hooks, or absent `pause1`/`walk`/`run`/`talk` clips. Initial spawn
+and equipment swaps publish the requested clip immediately so an imported glTF
+rest pose is never presented as the first character frame.
 
 ## Movement presentation
 

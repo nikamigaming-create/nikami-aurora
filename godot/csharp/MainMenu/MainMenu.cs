@@ -1,10 +1,13 @@
 // Matthew W, 2026-08-12
 
 using Godot;
-using OpenDAO.Launcher;
+using Nikami.Aurora.Profiles.DragonAgeOrigins;
+using Nikami.Aurora.GodotRuntime.Launcher;
+using Nikami.Aurora.GodotRuntime.Infrastructure.World;
+using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 [Tool]
 public partial class MainMenu : Control
@@ -456,6 +459,171 @@ public partial class MainMenu : Control
     internal void BeginCharacterCreationAcceptance() =>
         Callable.From(RunCharacterCreationAcceptance).CallDeferred();
 
+    internal void BeginCharacterPreviewMatrixAcceptance() =>
+        Callable.From(RunCharacterPreviewMatrixAcceptance).CallDeferred();
+
+    private async void RunCharacterPreviewMatrixAcceptance()
+    {
+        try
+        {
+            var outputRoot = OS.GetEnvironment(
+                "OPENDAO_CHARACTER_PREVIEW_MATRIX_OUTPUT");
+            if (string.IsNullOrWhiteSpace(outputRoot))
+                throw new InvalidDataException(
+                    "OPENDAO_CHARACTER_PREVIEW_MATRIX_OUTPUT is required.");
+            outputRoot = Path.GetFullPath(outputRoot);
+            Directory.CreateDirectory(outputRoot);
+            OpenCharacterCreation();
+            await WaitForAcceptanceFrames(
+                "OPENDAO_ACCEPTANCE_CHARACTER_HOLD_FRAMES", 8);
+
+            var selectionKeys = new HashSet<string>(StringComparer.Ordinal);
+            var morphs = new HashSet<string>(StringComparer.Ordinal);
+            var payloadHashes = new HashSet<string>(StringComparer.Ordinal);
+            var imageHashes = new HashSet<string>(StringComparer.Ordinal);
+            var captured = 0;
+            foreach (var appearance in
+                     DragonAgeOriginsCharacterCreationCatalog.Appearances)
+            {
+                var resolution = CachedDaoCharacterAppearanceCatalog.Resolve(
+                    appearance.Race, appearance.Gender, appearance.Preset);
+                if (resolution.Availability !=
+                        DaoCharacterAppearanceAvailability.LegacyEvidence ||
+                    resolution.Appearance?.SelectionKey != appearance.SelectionKey ||
+                    appearance.LegacyStandingSha256 is not { Length: 64 } payloadHash)
+                    throw new InvalidDataException(
+                        "Character preview did not resolve exact legacy evidence: " +
+                        appearance.SelectionKey);
+                var origin = appearance.Race switch
+                {
+                    "human" => "human-noble",
+                    "elf" => "city-elf",
+                    "dwarf" => "dwarf-commoner",
+                    _ => throw new InvalidDataException(
+                        "Unexpected character race: " + appearance.Race)
+                };
+                var profile = CharacterProfile.Create(
+                    "Evidence Warden",
+                    origin,
+                    appearance.Race,
+                    appearance.Gender,
+                    "warrior",
+                    appearance.Preset);
+                if (!ConfigureAndValidatePreview(profile, appearance))
+                    throw new InvalidDataException(
+                        "Character preview rejected source identity: " +
+                        appearance.SelectionKey);
+                await WaitForAcceptanceFrames(
+                    "OPENDAO_ACCEPTANCE_CHARACTER_HOLD_FRAMES", 8);
+
+                var image = characterCreation.CapturePreviewImage();
+                var visual = InspectPreview(image);
+                if (!visual.Passed)
+                    throw new InvalidDataException(
+                        $"Character preview visual gate failed: {appearance.SelectionKey} " +
+                        visual.Failure);
+                var fileStem = appearance.SelectionKey.Replace(':', '-');
+                var path = Path.Combine(outputRoot, fileStem + ".png");
+                if (image.SavePng(path) != Error.Ok)
+                    throw new IOException("Character preview capture failed: " + path);
+                var imageHash = Convert.ToHexString(
+                    SHA256.HashData(image.GetData())).ToLowerInvariant();
+                if (!selectionKeys.Add(appearance.SelectionKey) ||
+                    !morphs.Add(appearance.MorphResource) ||
+                    !payloadHashes.Add(payloadHash) ||
+                    !imageHashes.Add(imageHash))
+                    throw new InvalidDataException(
+                        "Character preview identity or rendered image is duplicated: " +
+                        appearance.SelectionKey);
+
+                if (appearance.Preset == "preset-4")
+                {
+                    var representative = Path.Combine(outputRoot,
+                        $"representative-{appearance.Race}-{appearance.Gender}.png");
+                    if (GetViewport().GetTexture().GetImage().SavePng(representative) !=
+                        Error.Ok)
+                        throw new IOException(
+                            "Representative character capture failed: " + representative);
+                }
+                captured++;
+                GD.Print("OPENDAO_CHARACTER_PREVIEW_MATRIX_ITEM status=pass " +
+                         $"selection={appearance.SelectionKey} " +
+                         $"morph={appearance.MorphResource} " +
+                         $"morph_sha256={appearance.MorphSha256} " +
+                         $"payload_sha256={payloadHash} image_sha256={imageHash} " +
+                         $"provenance={resolution.Provenance} visible_pixels={visual.VisiblePixels} " +
+                         $"bounds={visual.Bounds} clipped=0 facing=root-yaw-180 " +
+                         $"npc_substitution=0 pbr=global-postprocessor capture={path}");
+            }
+
+            var passed = captured ==
+                             DragonAgeOriginsCharacterCreationCatalog.ExpectedSelectionCount &&
+                         selectionKeys.Count == captured && morphs.Count == captured &&
+                         payloadHashes.Count == captured && imageHashes.Count == captured;
+            GD.Print("OPENDAO_CHARACTER_PREVIEW_MATRIX_ACCEPTANCE status=" +
+                     (passed ? "pass" : "fail") +
+                     $" captured={captured} selections={selectionKeys.Count} " +
+                     $"morphs={morphs.Count} payload_hashes={payloadHashes.Count} " +
+                     $"distinct_images={imageHashes.Count} legacy_evidence_ready={captured} " +
+                     "fresh_import_ready=0 release_ready=0 parity_claim=none " +
+                     "npc_substitutions=0 pbr=global-postprocessor " +
+                     $"output={outputRoot}");
+            GetTree().Quit(passed ? 0 : 59);
+        }
+        catch (Exception exception)
+        {
+            GD.PushError("OPENDAO_CHARACTER_PREVIEW_MATRIX_ACCEPTANCE status=fail " +
+                         exception);
+            GetTree().Quit(59);
+        }
+    }
+
+    private bool ConfigureAndValidatePreview(
+        CharacterProfile profile,
+        DragonAgeCharacterCreationAppearance appearance) =>
+        characterCreation.ConfigureForAcceptance(profile) &&
+        Path.GetFullPath(characterCreation.PreviewModelPath).Equals(
+            Path.GetFullPath(CachedDaoCharacterAppearanceCatalog.Resolve(
+                appearance.Race, appearance.Gender, appearance.Preset).StandingPath),
+            StringComparison.OrdinalIgnoreCase);
+
+    private static PreviewVisualEvidence InspectPreview(Image image)
+    {
+        if (image.IsEmpty())
+            return new PreviewVisualEvidence(false, "empty-image", 0, "none");
+        var minimumX = image.GetWidth();
+        var minimumY = image.GetHeight();
+        var maximumX = -1;
+        var maximumY = -1;
+        var visible = 0;
+        for (var y = 0; y < image.GetHeight(); y++)
+            for (var x = 0; x < image.GetWidth(); x++)
+            {
+                var pixel = image.GetPixel(x, y);
+                var luminance = pixel.R * .2126f + pixel.G * .7152f + pixel.B * .0722f;
+                if (pixel.A <= .02f || luminance <= .005f) continue;
+                visible++;
+                minimumX = Math.Min(minimumX, x);
+                minimumY = Math.Min(minimumY, y);
+                maximumX = Math.Max(maximumX, x);
+                maximumY = Math.Max(maximumY, y);
+            }
+        if (visible < image.GetWidth() * image.GetHeight() * .01f)
+            return new PreviewVisualEvidence(false, "blank-or-near-black", visible,
+                "none");
+        var margin = 2;
+        if (minimumX <= margin || minimumY <= margin ||
+            maximumX >= image.GetWidth() - 1 - margin ||
+            maximumY >= image.GetHeight() - 1 - margin)
+            return new PreviewVisualEvidence(false, "visible-mesh-touches-frame", visible,
+                $"{minimumX},{minimumY},{maximumX},{maximumY}");
+        return new PreviewVisualEvidence(true, string.Empty, visible,
+            $"{minimumX},{minimumY},{maximumX},{maximumY}");
+    }
+
+    private sealed record PreviewVisualEvidence(
+        bool Passed, string Failure, int VisiblePixels, string Bounds);
+
     private async void RunCharacterCreationAcceptance()
     {
         try
@@ -651,7 +819,7 @@ public partial class MainMenu : Control
 
     /// <summary>
     /// Opens the imported-area picker without requiring the retail launcher or
-    /// a Dragon Age executable. This is the entry point used by OpenDAO's
+    /// a Dragon Age executable. This is the entry point used by Nikami.Aurora.GodotRuntime's
     /// compatibility-runtime shortcut.
     /// </summary>
     public void OpenAreaBrowser()

@@ -1,9 +1,9 @@
 using System.Text.Json.Nodes;
 using Godot;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.World;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.World;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 public interface IDaoTerrainMaterialFactory
 {
@@ -42,16 +42,12 @@ public sealed class DaoTerrainMaterialFactory(IJsonStore store) : IDaoTerrainMat
         var maskA = LoadTexture(profile.TerrainMaterials, descriptor.MaskA);
         var maskA2 = LoadTexture(profile.TerrainMaterials, descriptor.MaskA2);
         var paletteNormal = SourceNormal(sourceMesh);
-        if (shader is null || palette is null || paletteNormal is null || maskV is null ||
-            maskA is null || maskA2 is null)
-        {
-            GD.PushWarning($"OPENDAO_TERRAIN_MATERIAL status=unavailable definition={definitionName} " +
-                           $"reason=resource-absent shader={(shader is null ? 0 : 1)} " +
-                           $"palette={(palette is null ? 0 : 1)} normal={(paletteNormal is null ? 0 : 1)} " +
-                           $"mask_v={(maskV is null ? 0 : 1)} mask_a={(maskA is null ? 0 : 1)} " +
-                           $"mask_a2={(maskA2 is null ? 0 : 1)}");
-            return null;
-        }
+        if (shader is null || palette is null || paletteNormal is null)
+            throw new InvalidDataException(
+                $"DAO terrain descriptor cannot bind its source resources: " +
+                $"layout={profile.LayoutName} definition={definitionName} " +
+                $"shader={(shader is null ? 0 : 1)} palette={(palette is null ? 0 : 1)} " +
+                $"normal={(paletteNormal is null ? 0 : 1)}");
 
         var material = new ShaderMaterial { Shader = shader };
         material.SetShaderParameter("palette", palette);
@@ -63,9 +59,18 @@ public sealed class DaoTerrainMaterialFactory(IJsonStore store) : IDaoTerrainMat
         material.SetShaderParameter("pal_param", descriptor.PalParam);
         material.SetShaderParameter("uv_scales0", descriptor.UvScales0);
         material.SetShaderParameter("uv_scales1", descriptor.UvScales1);
+        material.SetMeta(DaoCharacterMaterialPostprocessor.WorldMaterialIdentityMeta,
+            $"kind=installed-terrain-contract;name={descriptor.Name};" +
+            $"source_palette_identity_sha256={IdentitySha256(SourceIdentity(sourceMesh))};" +
+            $"palette_resource={descriptor.Palette};" +
+            $"mask_v={FileIdentity(profile.TerrainMaterials, descriptor.MaskV)};" +
+            $"mask_a={FileIdentity(profile.TerrainMaterials, descriptor.MaskA)};" +
+            $"mask_a2={FileIdentity(profile.TerrainMaterials, descriptor.MaskA2)};" +
+            "pbr_status=source-shader;mao_status=source-terrain-contract;" +
+            "semantic_status=haven-maskv-maska-maska2");
         materials[cacheKey] = material;
-        GD.Print($"OPENDAO_TERRAIN_MATERIAL status=ready definition={definitionName} " +
-                 "source=haven-maskv-maska-maska2");
+        GD.Print($"OPENDAO_TERRAIN_MATERIAL status=ready layout={profile.LayoutName.ToLowerInvariant()} " +
+                 $"definition={definitionName} source=haven-maskv-maska-maska2");
         return material;
     }
 
@@ -78,29 +83,31 @@ public sealed class DaoTerrainMaterialFactory(IJsonStore store) : IDaoTerrainMat
             foreach (var record in records.OfType<JsonObject>())
             {
                 var descriptor = new Descriptor(
-                    Text(record, "name"), Text(record, "palette"), Text(record, "maskV"),
-                    Text(record, "maskA"), Text(record, "maskA2"),
-                    Vector(record["palDim"] as JsonArray), Vector(record["palParam"] as JsonArray),
-                    Vector(record["uvScales"] as JsonArray, 0),
-                    Vector(record["uvScales"] as JsonArray, 4));
-                if (descriptor.Name.Length > 0) result[descriptor.Name] = descriptor;
+                    RequiredText(record, "name"), RequiredText(record, "palette"),
+                    RequiredText(record, "maskV"), RequiredText(record, "maskA"),
+                    RequiredText(record, "maskA2"),
+                    RequiredVector(record["palDim"] as JsonArray, 4, "palDim"),
+                    RequiredVector(record["palParam"] as JsonArray, 4, "palParam"),
+                    RequiredVector(record["uvScales"] as JsonArray, 8, "uvScales", 0),
+                    RequiredVector(record["uvScales"] as JsonArray, 8, "uvScales", 4));
+                if (!result.TryAdd(descriptor.Name, descriptor))
+                    throw new InvalidDataException(
+                        $"DAO terrain material descriptor is duplicated: {descriptor.Name}");
             }
         }
         catalogs[manifestPath] = result;
         return result;
     }
 
-    private Texture2D? LoadTexture(string manifestPath, string relativePath)
+    private Texture2D LoadTexture(string manifestPath, string relativePath)
     {
-        if (relativePath.Length == 0) return null;
-        var root = Path.GetDirectoryName(Globalize(manifestPath)) ?? string.Empty;
-        var path = Path.IsPathRooted(relativePath)
-            ? relativePath
-            : Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        var path = ResolvePayload(manifestPath, relativePath);
         if (textures.TryGetValue(path, out var cached)) return cached;
-        if (!File.Exists(path)) return null;
+        if (!File.Exists(path))
+            throw new InvalidDataException($"DAO terrain texture is absent: {path}");
         var image = Image.LoadFromFile(path);
-        if (image is null || image.IsEmpty()) return null;
+        if (image is null || image.IsEmpty())
+            throw new InvalidDataException($"DAO terrain texture cannot be decoded: {path}");
         var texture = ImageTexture.CreateFromImage(image);
         textures[path] = texture;
         return texture;
@@ -126,20 +133,78 @@ public sealed class DaoTerrainMaterialFactory(IJsonStore store) : IDaoTerrainMat
         return null;
     }
 
+    private static string SourceIdentity(Mesh mesh)
+    {
+        for (var surface = 0; surface < mesh.GetSurfaceCount(); surface++)
+        {
+            var material = mesh.SurfaceGetMaterial(surface);
+            if (material?.HasMeta(DaoCharacterMaterialPostprocessor.WorldMaterialIdentityMeta) == true)
+                return material.GetMeta(DaoCharacterMaterialPostprocessor.WorldMaterialIdentityMeta)
+                    .AsString();
+        }
+        throw new InvalidDataException("Terrain palette material has no source identity.");
+    }
+
+    private static string FileIdentity(string manifestPath, string relativePath)
+    {
+        var path = ResolvePayload(manifestPath, relativePath);
+        if (!File.Exists(path))
+            throw new InvalidDataException($"Terrain material payload is absent: {path}");
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            File.ReadAllBytes(path))).ToLowerInvariant();
+    }
+
+    private static string IdentitySha256(string identity) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
+
     private static string Globalize(string path) =>
         path.StartsWith("res://", StringComparison.OrdinalIgnoreCase) ||
         path.StartsWith("user://", StringComparison.OrdinalIgnoreCase)
             ? ProjectSettings.GlobalizePath(path)
             : path;
 
-    private static string Text(JsonObject value, string key) =>
-        value[key]?.GetValue<string>() ?? string.Empty;
-
-    private static Vector4 Vector(JsonArray? values, int start = 0)
+    private static string ResolvePayload(string manifestPath, string relativePath)
     {
-        float At(int index) => values is not null && index < values.Count
-            ? values[index]?.GetValue<float>() ?? 0
-            : 0;
+        if (string.IsNullOrWhiteSpace(relativePath))
+            throw new InvalidDataException("DAO terrain payload path is absent.");
+        var root = Path.GetFullPath(Path.GetDirectoryName(Globalize(manifestPath)) ??
+                                    throw new InvalidDataException(
+                                        "DAO terrain manifest has no parent directory."));
+        var path = Path.GetFullPath(Path.IsPathRooted(relativePath)
+            ? relativePath
+            : Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        var prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                     Path.DirectorySeparatorChar;
+        if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException(
+                $"DAO terrain payload escapes its manifest root: {relativePath}");
+        return path;
+    }
+
+    private static string RequiredText(JsonObject value, string key)
+    {
+        var result = value[key]?.GetValue<string>() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(result))
+            throw new InvalidDataException(
+                $"DAO terrain material descriptor field is absent: {key}");
+        return result;
+    }
+
+    private static Vector4 RequiredVector(JsonArray? values, int expected,
+        string field, int start = 0)
+    {
+        if (values is null || values.Count != expected)
+            throw new InvalidDataException(
+                $"DAO terrain material {field} must contain {expected} values.");
+        float At(int index)
+        {
+            var value = values[index]?.GetValue<float>() ?? float.NaN;
+            if (!float.IsFinite(value))
+                throw new InvalidDataException(
+                    $"DAO terrain material {field}[{index}] is not finite.");
+            return value;
+        }
         return new Vector4(At(start), At(start + 1), At(start + 2), At(start + 3));
     }
 

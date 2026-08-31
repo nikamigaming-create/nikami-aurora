@@ -292,16 +292,21 @@ public sealed record KotorFirstEncounterPresentationConfiguration(
     KotorColorConfiguration MuzzleFlareColor,
     KotorColorConfiguration ImpactColor)
 {
+    private const float MaximumProjectileLengthMeters = 0.72f;
+    private const float MaximumImpactSizeMeters = 0.30f;
+    private const float MaximumImpactLifetimeSeconds = 0.25f;
+
     internal void Validate()
     {
         if (!NonNegativeWithin(FallbackMuzzleHeightMeters, 10) ||
             !NonNegativeWithin(FallbackTargetHeightMeters, 10) ||
-            !PositiveWithin(ProjectileLengthMeters, 10) ||
+            !PositiveWithin(ProjectileLengthMeters, MaximumProjectileLengthMeters) ||
             !PositiveWithin(ProjectileSpeedMetersPerSecond, 1000) ||
             !PositiveWithin(MinimumProjectileTravelSeconds, 10) ||
             !PositiveWithin(MuzzleFlareScale, 1) ||
-            !PositiveWithin(ImpactSizeMeters, 10) ||
-            !PositiveWithin(ImpactLifetimeSeconds, 10))
+            !PositiveWithin(ImpactSizeMeters, MaximumImpactSizeMeters) ||
+            !PositiveWithin(
+                ImpactLifetimeSeconds, MaximumImpactLifetimeSeconds))
             throw new InvalidDataException(
                 "Configured KOTOR first-encounter effect mapping is invalid");
         if (!VolumeIsValid(ShotVolumeDb) || !VolumeIsValid(ImpactVolumeDb))

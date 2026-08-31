@@ -1,9 +1,12 @@
 [CmdletBinding()]
 param(
     [string]$Manifest,
+    [ValidatePattern('^[A-Za-z0-9_]{1,16}$')]
+    [string]$Module = "end_m01aa",
     [string]$Godot,
     [string]$CapturePath,
     [string]$CaptureDialogueNode,
+    [string]$CaptureCreature,
     [int]$CaptureFrame = 0,
     [int]$DialogueChoice = -1,
     [double]$TestMoveMeters = 0,
@@ -17,6 +20,7 @@ param(
     [switch]$TestFirstCorridorTransmission,
     [switch]$TestFirstEncounter,
     [switch]$ShowcaseRoute,
+    [switch]$GenericWorldShowcase,
     [switch]$ExitOnShowcaseComplete,
     [switch]$SkipOpeningDialogue,
     [switch]$OpenXR,
@@ -27,8 +31,14 @@ param(
     [int]$MovieFps = 60,
     [string]$GodotStdoutPath,
     [string]$GodotStderrPath,
+    [ValidateRange(0, 7200)]
+    [int]$TimeoutSeconds = 0,
+    [ValidateRange(65536, 16777216)]
+    [int]$MaximumLogCharacters = 2097152,
     [switch]$CleanCapture,
+    [switch]$SourcePresentation,
     [switch]$LipSyncCloseup,
+    [switch]$P2pEmitterCloseup,
     [switch]$EquipmentCloseup,
     [switch]$ChairCloseup,
     [switch]$XrBodyLookDown,
@@ -41,20 +51,91 @@ param(
     [switch]$TestInventoryQuestFilter,
     [switch]$TestInventoryScroll,
     [switch]$TestInventoryPartySelection,
+    [switch]$TestXrTrackedRig,
+    [switch]$TestXrDialogueControls,
+    [switch]$TestXrMovement,
+    [switch]$TestXrSnapTurn,
     [switch]$CaptureAndExit
 )
+
+function Write-BoundedRuntimeLog {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory = $true)][int]$MaximumCharacters
+    )
+
+    if ($Text.Length -le $MaximumCharacters) {
+        [IO.File]::WriteAllText($Path, $Text)
+        return
+    }
+    $half = [Math]::Max(1, [int][Math]::Floor($MaximumCharacters / 2))
+    $omitted = $Text.Length - 2 * $half
+    $bounded = $Text.Substring(0, $half) + [Environment]::NewLine +
+        "NIKAMI_AURORA_LOG status=truncated omitted_characters=$omitted" +
+        [Environment]::NewLine + $Text.Substring($Text.Length - $half)
+    [IO.File]::WriteAllText($Path, $bounded)
+}
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $hadXrRuntimeJson = Test-Path Env:XR_RUNTIME_JSON
 $previousXrRuntimeJson = $env:XR_RUNTIME_JSON
 if ([string]::IsNullOrWhiteSpace($Manifest)) {
-    $Manifest = Join-Path $repo "local\kotor\end_m01aa\module-manifest.json"
+    $Module = $Module.ToLowerInvariant()
+    $Manifest = Join-Path $repo "local\kotor\$Module\module-manifest.json"
 }
 if (-not (Test-Path -LiteralPath $Manifest -PathType Leaf)) {
     throw "Module manifest not found: $Manifest. Run scripts/Import-KotorModule.ps1 first."
 }
 $manifestContract = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
+if ($manifestContract.schema -ne 'nikami-aurora-kotor-module-v1' -or
+    $manifestContract.profileId -ne 'kotor') {
+    throw "Unsupported KOTOR module manifest contract: $Manifest"
+}
+$manifestModule = [string]$manifestContract.module
+if ($manifestModule -notmatch '^[A-Za-z0-9_]{1,16}$') {
+    throw "KOTOR manifest has an invalid module identifier: $manifestModule"
+}
+$manifestModule = $manifestModule.ToLowerInvariant()
+if ($PSBoundParameters.ContainsKey('Module') -and
+    $Module.ToLowerInvariant() -ne $manifestModule) {
+    throw "Requested module $Module does not match manifest module $manifestModule."
+}
+$isEndarModule = $manifestModule -eq 'end_m01aa'
+$expectedContentMode = if ($isEndarModule) { 'endar-opening' } else { 'generic-world' }
+if ([string]$manifestContract.contentMode -ne $expectedContentMode -or
+    ($isEndarModule -and $null -eq $manifestContract.firstEncounter) -or
+    (-not $isEndarModule -and $null -ne $manifestContract.firstEncounter)) {
+    throw "KOTOR manifest content identity is inconsistent: module=$manifestModule " +
+          "mode=$($manifestContract.contentMode)."
+}
+$reportedSourceAbsences = @($manifestContract.unresolvedTextureReferences).Count
+if ([string]$manifestContract.missingSourceAssetPolicy -ne
+        'source-absence-report-no-fabrication-v1' -or
+    $reportedSourceAbsences -ne
+        [int]$manifestContract.counts.unresolvedTextureReferences) {
+    throw "KOTOR missing-source-asset policy/report inventory is inconsistent."
+}
+$endarOnlyRequested =
+    $OpenFirstDoor -or $OpenFirstLocker -or $EquipOpeningGear -or
+    $TestTutorialXpChain -or $TestFirstCorridorTrigger -or
+    $TestFirstCorridorTransmission -or $TestFirstEncounter -or
+    $ShowcaseRoute -or $ExitOnShowcaseComplete -or $LipSyncCloseup -or
+    $EquipmentCloseup -or $ChairCloseup -or $InventoryScreen -or
+    $EquipmentScreen -or $TestEquipmentMenuTransaction -or
+    $TestFlatMenuNavigation -or $TestInventoryQuestFilter -or
+    $TestInventoryScroll -or $TestInventoryPartySelection -or
+    $TestXrDialogueControls
+if ($endarOnlyRequested -and -not $isEndarModule) {
+    throw "Endar story/camera/UI automation cannot run for generic module $manifestModule."
+}
+if ($GenericWorldShowcase -and $isEndarModule) {
+    throw '-GenericWorldShowcase requires a generic-world module manifest.'
+}
+if ($GenericWorldShowcase -and ($OpenXR -or $OpenXRSimulator)) {
+    throw '-GenericWorldShowcase is a deterministic desktop capture route.'
+}
 $referenceWidth = [int]$manifestContract.ui.hud.layout.extent.width
 $referenceHeight = [int]$manifestContract.ui.hud.layout.extent.height
 $configuredCaptureFrame = [int]$manifestContract.runtimeConfiguration.automation.sceneReadyFrame
@@ -73,8 +154,9 @@ if ([string]::IsNullOrWhiteSpace($Godot)) {
 }
 $resolvedMoviePath = $null
 if (-not [string]::IsNullOrWhiteSpace($MoviePath)) {
-    if (-not $ShowcaseRoute -and -not $TestFirstEncounter) {
-        throw "-MoviePath requires either -ShowcaseRoute or " +
+    if (-not $ShowcaseRoute -and -not $TestFirstEncounter -and
+        -not $GenericWorldShowcase) {
+        throw "-MoviePath requires -ShowcaseRoute, -GenericWorldShowcase, or " +
               "-TestFirstEncounter."
     }
     if ($OpenXR -and -not $OpenXRSimulator) {
@@ -113,6 +195,12 @@ if (-not [string]::IsNullOrWhiteSpace($CapturePath)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($CaptureDialogueNode)) {
     $env:NIKAMI_AURORA_CAPTURE_DIALOGUE_NODE = $CaptureDialogueNode
+}
+if (-not [string]::IsNullOrWhiteSpace($CaptureCreature)) {
+    if ($CaptureCreature -notmatch '^[A-Za-z0-9_]{1,32}$') {
+        throw "Capture creature identity is invalid: $CaptureCreature"
+    }
+    $env:NIKAMI_AURORA_CAPTURE_CREATURE = $CaptureCreature.ToLowerInvariant()
 }
 if ($CaptureAndExit) {
     $env:NIKAMI_AURORA_CAPTURE_EXIT = "1"
@@ -156,6 +244,10 @@ if ($TestFirstEncounter) {
 if ($ShowcaseRoute) {
     $env:NIKAMI_AURORA_SHOWCASE_ROUTE = "1"
 }
+if ($GenericWorldShowcase) {
+    $env:NIKAMI_AURORA_GENERIC_WORLD_SHOWCASE = "1"
+    $env:NIKAMI_AURORA_SHOWCASE_EXIT_ON_COMPLETE = "1"
+}
 if ($ExitOnShowcaseComplete) {
     if (-not $ShowcaseRoute) {
         throw "-ExitOnShowcaseComplete requires -ShowcaseRoute."
@@ -194,8 +286,20 @@ if ($OpenXRSimulator) {
 if ($CleanCapture) {
     $env:NIKAMI_AURORA_CAPTURE_CLEAN = "1"
 }
+$env:NIKAMI_AURORA_PRESENTATION_TIER = if ($SourcePresentation) {
+    "source"
+}
+else {
+    "enhanced"
+}
 if ($LipSyncCloseup) {
     $env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP = "1"
+}
+if ($P2pEmitterCloseup) {
+    if ([string]::IsNullOrWhiteSpace($CapturePath)) {
+        throw "-P2pEmitterCloseup requires -CapturePath."
+    }
+    $env:NIKAMI_AURORA_CAPTURE_P2P_EMITTER_CLOSEUP = "1"
 }
 if ($EquipmentCloseup) {
     $env:NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP = "1"
@@ -277,6 +381,30 @@ if ($LoadingScreenCapture -or $HudScreen -or $InventoryScreen -or $EquipmentScre
     $env:NIKAMI_AURORA_FLAT_UI_REFERENCE_VIEWPORT =
         "$($referenceWidth)x$($referenceHeight)"
 }
+if ($TestXrTrackedRig) {
+    if (-not $OpenXRSimulator) {
+        throw "-TestXrTrackedRig requires -OpenXRSimulator."
+    }
+    $env:NIKAMI_AURORA_TEST_XR_TRACKED_RIG = "1"
+}
+if ($TestXrDialogueControls) {
+    if (-not $OpenXRSimulator) {
+        throw "-TestXrDialogueControls requires -OpenXRSimulator."
+    }
+    $env:NIKAMI_AURORA_TEST_XR_DIALOGUE_CONTROLS = "1"
+}
+if ($TestXrMovement) {
+    if (-not $OpenXRSimulator) {
+        throw "-TestXrMovement requires -OpenXRSimulator."
+    }
+    $env:NIKAMI_AURORA_TEST_XR_MOVEMENT = "1"
+}
+if ($TestXrSnapTurn) {
+    if (-not $OpenXRSimulator) {
+        throw "-TestXrSnapTurn requires -OpenXRSimulator."
+    }
+    $env:NIKAMI_AURORA_TEST_XR_SNAP_TURN = "1"
+}
 
 try {
     & dotnet build (Join-Path $repo "godot\Nikami.Aurora.Godot.csproj") --configuration Debug
@@ -295,9 +423,6 @@ try {
     }
     if ($OpenXR) {
         $godotArguments += @("--xr-mode", "on")
-    }
-    if ($OpenXRSimulator) {
-        $godotArguments += @("--rendering-method", "mobile")
     }
     if (-not [string]::IsNullOrWhiteSpace($resolvedMoviePath)) {
         $godotArguments += @(
@@ -321,15 +446,54 @@ try {
         $stdoutTask = $godotProcess.StandardOutput.ReadToEndAsync()
         $stderrTask = $godotProcess.StandardError.ReadToEndAsync()
     }
-    $godotProcess.WaitForExit()
+    $timedOut = $false
+    if ($TimeoutSeconds -gt 0) {
+        $timedOut = -not $godotProcess.WaitForExit($TimeoutSeconds * 1000)
+        if ($timedOut) {
+            $godotProcess.Kill($true)
+            $godotProcess.WaitForExit()
+        }
+    }
+    else {
+        $godotProcess.WaitForExit()
+    }
     if ($redirectGodotOutput) {
-        [IO.File]::WriteAllText(
-            $resolvedGodotStdoutPath, $stdoutTask.GetAwaiter().GetResult())
-        [IO.File]::WriteAllText(
-            $resolvedGodotStderrPath, $stderrTask.GetAwaiter().GetResult())
+        Write-BoundedRuntimeLog -Path $resolvedGodotStdoutPath `
+            -Text $stdoutTask.GetAwaiter().GetResult() `
+            -MaximumCharacters $MaximumLogCharacters
+        Write-BoundedRuntimeLog -Path $resolvedGodotStderrPath `
+            -Text $stderrTask.GetAwaiter().GetResult() `
+            -MaximumCharacters $MaximumLogCharacters
+    }
+    if ($timedOut) {
+        throw "Godot exceeded the bounded runtime timeout of $TimeoutSeconds seconds."
     }
     if ($godotProcess.ExitCode -ne 0) {
         throw "Godot exited with code $($godotProcess.ExitCode)"
+    }
+    if ($SourcePresentation) {
+        if ($redirectGodotOutput) {
+            $sourceEvidence = (Get-Content -LiteralPath $resolvedGodotStdoutPath -Raw) +
+                              [Environment]::NewLine +
+                              (Get-Content -LiteralPath $resolvedGodotStderrPath -Raw)
+        }
+        else {
+            $runtimeLog = Join-Path $env:APPDATA `
+                'Godot\app_userdata\Nikami Aurora\logs\godot.log'
+            if (-not (Test-Path -LiteralPath $runtimeLog -PathType Leaf)) {
+                throw 'KOTOR source-presentation runtime log is missing.'
+            }
+            $sourceEvidence = Get-Content -LiteralPath $runtimeLog -Raw
+        }
+        $requiredSourceTransfer =
+            'NIKAMI_AURORA_LIGHTMAP_TRANSFER status=ready tier=source ' +
+            'formula=surface-times-clamped-lightmap diffuse_weight=0.00 ' +
+            'baked_weight=1.00 dynamic_ambient_weight=0.00 dynamic_lights=0 ' +
+            'double_light=0'
+        if ($sourceEvidence.IndexOf(
+                $requiredSourceTransfer, [StringComparison]::Ordinal) -lt 0) {
+            throw 'KOTOR source-presentation lightmap transfer evidence is missing.'
+        }
     }
 }
 finally {
@@ -338,6 +502,7 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_CAPTURE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_FRAME -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_DIALOGUE_NODE -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_CREATURE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_EXIT -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_DIALOGUE_CHOICE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_MOVE_METERS -ErrorAction SilentlyContinue
@@ -351,13 +516,16 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRANSMISSION -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_ENCOUNTER -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SHOWCASE_ROUTE -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_GENERIC_WORLD_SHOWCASE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SHOWCASE_EXIT_ON_COMPLETE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_OPENXR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_OPENXR_EXPECT_ACTIVE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_XR_SPECTATOR -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CLEAN -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_PRESENTATION_TIER -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_P2P_EMITTER_CLOSEUP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_XR_BODY_LOOKDOWN -ErrorAction SilentlyContinue
@@ -370,6 +538,10 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_TEST_EQUIPMENT_MENU_TRANSACTION -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_FLAT_MENU_NAVIGATION -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_FLAT_UI_REFERENCE_VIEWPORT -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_XR_TRACKED_RIG -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_XR_DIALOGUE_CONTROLS -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_XR_MOVEMENT -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_XR_SNAP_TURN -ErrorAction SilentlyContinue
     if ($hadXrRuntimeJson) {
         $env:XR_RUNTIME_JSON = $previousXrRuntimeJson
     }

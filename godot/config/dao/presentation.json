@@ -1,12 +1,21 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "gameplayCamera": {
     "fieldOfViewDegrees": 58.0,
     "nearPlaneMeters": 0.05,
     "farPlaneMeters": 1000.0,
     "pitchDegrees": -10.0,
+    "pivotHeightMeters": 0.8,
     "springLengthMeters": 4.2,
     "collisionMarginMeters": 0.08,
+    "enhancedPivotHeightMeters": 1.15,
+    "enhancedCompressedPivotHeightMeters": 0.75,
+    "enhancedCompressedPivotLateralMeters": 0.4,
+    "enhancedCollisionProbeRadiusMeters": 0.22,
+    "enhancedMinimumAvatarClearanceMeters": 1.6,
+    "enhancedAvatarClearanceHysteresisMeters": 0.2,
+    "enhancedAvatarBodyTransparency": 0.25,
+    "enhancedAvatarHeadTransparency": 0.92,
     "calibrationStatus": "pending-retail-match"
   }
 }

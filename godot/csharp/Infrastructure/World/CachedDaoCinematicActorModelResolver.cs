@@ -1,8 +1,8 @@
 using Godot;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 /// <summary>
 /// Resolves actor-specific retail appearance exports without coupling authored

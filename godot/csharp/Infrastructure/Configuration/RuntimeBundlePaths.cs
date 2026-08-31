@@ -1,4 +1,4 @@
-namespace OpenDAO.Infrastructure.Configuration;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
 public sealed class RuntimeBundlePaths(string root = "")
 {

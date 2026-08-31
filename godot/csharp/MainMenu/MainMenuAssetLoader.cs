@@ -1,9 +1,9 @@
 // Matthew W, 2026-08-12
 
 using Godot;
-using OpenDAO.Infrastructure.Archives;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Archives;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal sealed class MainMenuAssetLoader(Control stage)
 {

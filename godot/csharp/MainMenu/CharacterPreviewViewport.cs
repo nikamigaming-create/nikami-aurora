@@ -1,14 +1,12 @@
 using Godot;
-using OpenDAO.Application.Characters;
-using OpenDAO.Infrastructure.World;
-using OpenDAO.Infrastructure.Configuration;
-using OpenDAO.Presentation;
+using Nikami.Aurora.Profiles.DragonAgeOrigins;
+using Nikami.Aurora.GodotRuntime.Infrastructure.World;
+using Nikami.Aurora.GodotRuntime.Presentation;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal sealed partial class CharacterPreviewViewport : SubViewportContainer
 {
-    private static readonly Lazy<IReadOnlyDictionary<string, string>> ModelIndex = new(BuildModelIndex);
     private readonly Dictionary<string, PackedScene> models = new(StringComparer.OrdinalIgnoreCase);
     private SubViewport viewport = null!;
     private Node3D modelRoot = null!;
@@ -20,6 +18,12 @@ internal sealed partial class CharacterPreviewViewport : SubViewportContainer
         this.modelPostprocessor = modelPostprocessor;
 
     internal string CurrentModelPath { get; private set; } = string.Empty;
+    internal string CurrentSelectionKey { get; private set; } = string.Empty;
+    internal string LastFailure { get; private set; } = string.Empty;
+    internal DragonAgeCharacterSelectionState IdentityState { get; private set; } =
+        DragonAgeCharacterSelectionState.Empty;
+
+    internal Image CaptureImage() => viewport.GetTexture().GetImage();
 
     public override void _Ready()
     {
@@ -70,16 +74,26 @@ internal sealed partial class CharacterPreviewViewport : SubViewportContainer
 
     public bool ShowCharacter(string race, string gender, string appearance)
     {
-        var path = ResolveModel(race, gender, appearance);
-        if (path.Length == 0)
+        var resolution = CachedDaoCharacterAppearanceCatalog.Resolve(race, gender, appearance);
+        if (!resolution.IsReady || resolution.Appearance is not { } authored)
         {
-            CurrentModelPath = string.Empty;
+            ClearCharacter();
+            LastFailure = resolution.Failure;
+            GD.PushWarning($"OPENDAO_CHARGEN_PREVIEW status=unsupported race={race} gender={gender} " +
+                           $"appearance={appearance} availability={resolution.Availability} " +
+                           $"reason={resolution.Failure} npc_substitution=0");
             return false;
         }
+        var path = resolution.StandingPath;
         if (!models.TryGetValue(path, out var packed))
         {
             packed = Import(path);
-            if (packed is null) return false;
+            if (packed is null)
+            {
+                ClearCharacter();
+                LastFailure = "source-bound-model-import-failed";
+                return false;
+            }
             models[path] = packed;
         }
 
@@ -90,7 +104,13 @@ internal sealed partial class CharacterPreviewViewport : SubViewportContainer
         Frame(character);
         PlayDefaultAnimation(character);
         CurrentModelPath = path;
-        GD.Print($"OPENDAO_CHARGEN_PREVIEW race={race} gender={gender} appearance={appearance} path={path}");
+        CurrentSelectionKey = authored.SelectionKey;
+        IdentityState = new DragonAgeCharacterSelectionState(authored.SelectionKey, true);
+        LastFailure = string.Empty;
+        GD.Print($"OPENDAO_CHARGEN_PREVIEW status=ready selection={authored.SelectionKey} " +
+                 $"morph={authored.MorphResource} morph_sha256={authored.MorphSha256} " +
+                 $"provenance={resolution.Provenance} path={path} " +
+                 "npc_substitution=0 pbr=global-postprocessor parity_claim=none");
         return true;
     }
 
@@ -126,7 +146,7 @@ internal sealed partial class CharacterPreviewViewport : SubViewportContainer
             GD.PushError($"OPENDAO_CHARGEN_PREVIEW_IMPORT_FAIL stage=generate path={path}");
             return null;
         }
-        modelPostprocessor.Process(imported, state);
+        modelPostprocessor.Process(imported, state, path);
         var packed = new PackedScene();
         var pack = packed.Pack(imported);
         if (pack != Error.Ok)
@@ -139,53 +159,13 @@ internal sealed partial class CharacterPreviewViewport : SubViewportContainer
         return packed;
     }
 
-    private static string ResolveModel(string race, string gender, string appearance)
+    private void ClearCharacter()
     {
-        if (RetailCharacterAppearanceCatalog.Resolve(race, gender, appearance) is { } retail)
-        {
-            var authored = DaoRuntimePaths.Cache(retail.StandingRelativePath);
-            if (File.Exists(authored)) return authored;
-        }
-        var index = int.TryParse(appearance.AsSpan(appearance.LastIndexOf('-') + 1), out var parsed)
-            ? Math.Clamp(parsed, 1, 4)
-            : 1;
-        var candidates = (race, gender) switch
-        {
-            ("dwarf", "female") => new[] { $"bdc100cr_amb_f_{index}.glb", "bdn120cr_rica.glb" },
-            ("dwarf", _) => new[] { $"bdc100cr_amb_m_{index}.glb", "bdn100cr_gorim.glb" },
-            ("elf", "female") => new[]
-            {
-                new[] { "bec210cr_elf_servantf.glb", "bec100cr_elf_commoner_f.glb",
-                    "den300cr_crowd_elf_fem_3.glb", "ntb100cr_elf_female_03.glb" }[index - 1]
-            },
-            ("elf", _) => new[]
-            {
-                new[] { "bec210cr_elf_servantm.glb", "bec100cr_homeless_elf_man.glb",
-                    "den300cr_crowd_elf_male_3.glb", "ntb100cr_elf_male_03.glb" }[index - 1]
-            },
-            ("human", "female") => new[]
-            {
-                new[] { "arl110cr_villager_f_1.glb", "arl110cr_villager_f_2.glb",
-                    "arl150cr_bella.glb", "den211cr_nigella.glb" }[index - 1]
-            },
-            _ => new[]
-            {
-                new[] { "arl100cr_tomas.glb", "arl100cr_militia_1.glb",
-                    "arl100cr_murdock.glb", "arl100cr_watchman.glb" }[index - 1]
-            }
-        };
-        foreach (var candidate in candidates)
-            if (ModelIndex.Value.TryGetValue(candidate, out var match)) return match;
-        return string.Empty;
-    }
-
-    private static IReadOnlyDictionary<string, string> BuildModelIndex()
-    {
-        var root = DaoRuntimePaths.Cache("areas");
-        if (!Directory.Exists(root)) return new Dictionary<string, string>();
-        return Directory.EnumerateFiles(root, "*.glb", SearchOption.AllDirectories)
-            .GroupBy(path => Path.GetFileName(path)!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        character?.QueueFree();
+        character = null;
+        CurrentModelPath = string.Empty;
+        CurrentSelectionKey = string.Empty;
+        IdentityState = DragonAgeCharacterSelectionState.Empty;
     }
 
     private static void PlayDefaultAnimation(Node root)

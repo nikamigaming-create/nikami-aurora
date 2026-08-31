@@ -2,10 +2,11 @@
 
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Serialization;
 using Godot;
-using OpenDAO.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal sealed record CatalogArea(
     string Id,
@@ -81,11 +82,11 @@ internal sealed class AreaCatalog
         {
             foreach (var relative in new[]
             {
-                Path.Combine("OpenDAOData", "cache", "dao-world", "runtime-catalog.json"),
+                Path.Combine("Nikami.Aurora.GodotRuntimeData", "cache", "dao-world", "runtime-catalog.json"),
                 // Support an early sidecar layout during migration, but
                 // prefer the cache root above so companion/interior assets
                 // retain their established relative paths.
-                Path.Combine("OpenDAOData", "dao-world", "runtime-catalog.json"),
+                Path.Combine("Nikami.Aurora.GodotRuntimeData", "dao-world", "runtime-catalog.json"),
             })
             {
                 var sidecar = Path.Combine(executableDirectory, relative);
@@ -400,7 +401,7 @@ internal sealed class AreaCatalog
                 Directory.CreateDirectory(parent);
             }
             File.WriteAllText(destinationPath,
-                profile.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + System.Environment.NewLine);
+                profile.ToJsonString(RuntimeJsonOptions.Indented) + System.Environment.NewLine);
             return true;
         }
         catch (Exception exception)
@@ -443,7 +444,7 @@ internal sealed class AreaCatalog
                 },
             };
             File.WriteAllText(ProjectSettings.GlobalizePath(PendingTransitionPath),
-                JsonSerializer.Serialize(pending, new JsonSerializerOptions { WriteIndented = true }) + "\n");
+                JsonSerializer.Serialize(pending, RuntimeJsonOptions.Indented) + "\n");
             return true;
         }
         catch (Exception exception)

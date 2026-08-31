@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace OpenDAO.Domain.World;
+namespace Nikami.Aurora.GodotRuntime.Domain.World;
 
 public sealed record WorldBlockerPlacement(
     string Template,

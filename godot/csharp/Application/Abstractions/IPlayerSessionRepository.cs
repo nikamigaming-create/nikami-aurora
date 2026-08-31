@@ -1,6 +1,6 @@
-using OpenDAO.Domain.Sessions;
+using Nikami.Aurora.GodotRuntime.Domain.Sessions;
 
-namespace OpenDAO.Application.Abstractions;
+namespace Nikami.Aurora.GodotRuntime.Application.Abstractions;
 
 public interface IPlayerSessionRepository
 {

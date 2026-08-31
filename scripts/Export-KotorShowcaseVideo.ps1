@@ -4,6 +4,9 @@ param(
     [string]$OutputPath,
 
     [string]$Manifest,
+    [Parameter(Mandatory)]
+    [ValidateCount(2, 8)]
+    [string[]]$GenericManifests,
     [string]$Godot,
     [string]$OpenXRRuntimeJson,
 
@@ -19,6 +22,68 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+
+function Assert-EnhancedKotorPbrCoverage {
+    param(
+        [Parameter(Mandatory)][string]$Evidence,
+        [Parameter(Mandatory)][string]$ModuleId
+    )
+    $applicationMarker =
+        'NIKAMI_AURORA_RENDER_QUALITY status=ready scope=application ' +
+        'tier=enhanced backend=forward_plus'
+    if ($Evidence.IndexOf(
+            $applicationMarker, [StringComparison]::Ordinal) -lt 0) {
+        throw "Application-wide enhanced render quality is missing for $ModuleId."
+    }
+    foreach ($scope in @('ROOM', 'DYNAMIC')) {
+        $pattern =
+            "(?m)^NIKAMI_AURORA_${scope}_PBR status=ready " +
+            "module=$([regex]::Escape($ModuleId)) tier=enhanced " +
+            'renderable_surfaces=(?<renderable>\d+) ' +
+            'source_unshaded_surfaces=(?<unshaded>\d+) ' +
+            'pbr_eligible_surfaces=(?<eligible>\d+) ' +
+            'pbr_surfaces=(?<pbr>\d+)\b'
+        $match = [regex]::Match($Evidence, $pattern)
+        if (-not $match.Success) {
+            throw "Enhanced $scope PBR telemetry is missing for $ModuleId."
+        }
+        $renderable = [int]$match.Groups['renderable'].Value
+        $unshaded = [int]$match.Groups['unshaded'].Value
+        $eligible = [int]$match.Groups['eligible'].Value
+        $pbr = [int]$match.Groups['pbr'].Value
+        if ($renderable -le 0 -or $unshaded -lt 0 -or
+            $eligible -ne $renderable - $unshaded -or $pbr -ne $eligible) {
+            throw "Incomplete $scope PBR coverage for ${ModuleId}: " +
+                  "renderable=$renderable unshaded=$unshaded " +
+                  "eligible=$eligible pbr=$pbr"
+        }
+    }
+}
+
+$resolvedGenericManifests = @()
+$genericModules = @()
+foreach ($genericManifest in $GenericManifests) {
+    $resolved = [IO.Path]::GetFullPath($genericManifest)
+    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+        throw "Generic KOTOR showcase manifest was not found: $resolved"
+    }
+    $contract = Get-Content -LiteralPath $resolved -Raw | ConvertFrom-Json
+    if ($contract.schema -ne 'nikami-aurora-kotor-module-v1' -or
+        $contract.profileId -ne 'kotor' -or
+        $contract.contentMode -ne 'generic-world' -or
+        [string]$contract.module -notmatch '^[A-Za-z0-9_]{1,16}$') {
+        throw "Invalid generic KOTOR showcase manifest: $resolved"
+    }
+    $module = ([string]$contract.module).ToLowerInvariant()
+    if ($genericModules -contains $module) {
+        throw "Duplicate generic KOTOR showcase module: $module"
+    }
+    $resolvedGenericManifests += $resolved
+    $genericModules += $module
+}
+if ($Presentation -ne 'Desktop') {
+    throw 'The multi-area cinematic exporter currently requires Desktop presentation.'
+}
 $output = [IO.Path]::GetFullPath($OutputPath)
 if ([IO.Path]::GetExtension($output) -ine '.mp4') {
     throw 'The final showcase output must use the .mp4 extension.'
@@ -51,8 +116,11 @@ if (-not $temporaryDirectory.StartsWith(
 New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
 $intermediate = Join-Path $temporaryDirectory 'godot-showcase.ogv'
 $encoded = Join-Path $temporaryDirectory 'nikami-aurora-kotor-showcase.mp4'
+$concatList = Join-Path $temporaryDirectory 'concat.txt'
 $godotStdoutLog = Join-Path $temporaryDirectory 'godot-stdout.log'
 $godotStderrLog = Join-Path $temporaryDirectory 'godot-stderr.log'
+$genericIntermediates = @()
+$normalizedClips = @()
 $completed = $false
 
 try {
@@ -64,6 +132,7 @@ try {
         MovieFps = $FramesPerSecond
         GodotStdoutPath = $godotStdoutLog
         GodotStderrPath = $godotStderrLog
+        TimeoutSeconds = 1800
     }
     if ($Presentation -eq 'OpenXRSimulator') {
         $launch.OpenXRSimulator = $true
@@ -136,8 +205,15 @@ try {
     }
     $runtimeText = Get-Content -LiteralPath $runtimeLog -Raw
     $requiredTelemetry = @(
-        ('NIKAMI_AURORA_ROOM_EMITTERS status=ready authored=12 ' +
-         'materialized=12 smoke=9 sparks=3'),
+        ('NIKAMI_AURORA_RENDER_PIPELINE status=ready method=forward_plus ' +
+         'tier=enhanced tonemap=agx ssao=1 ssil=1 ssr=1 sdfgi=0 ' +
+         'volumetric_fog=0 glow=1'),
+        ('NIKAMI_AURORA_LIGHTMAP_TRANSFER status=ready tier=enhanced ' +
+         'formula=baked-preserving-bounded-dynamic diffuse_weight=0.12 ' +
+         'baked_weight=1.00 dynamic_ambient_weight=0.15 dynamic_lights=1 ' +
+         'double_light=bounded'),
+        ('NIKAMI_AURORA_ROOM_EMITTERS status=ready module=end_m01aa ' +
+         'authored=12 materialized=12 alpha=9 additive=3 single=0'),
         'NIKAMI_AURORA_SHOWCASE_TRANSMISSION status=pass',
         'NIKAMI_AURORA_FIRST_ENCOUNTER status=pass',
         'NIKAMI_AURORA_SHOWCASE status=pass'
@@ -163,13 +239,81 @@ try {
          $runtimeText -match 'fallback=desktop')) {
         throw 'Showcase runtime log contains an error, failure, or invalid fallback.'
     }
+    if ($runtimeText -notmatch
+        'NIKAMI_AURORA_ROOM_EMITTERS status=ready module=end_m01aa[^\r\n]*smoke=9 sparks=3 soft_fade=9 soft_fade_distance=0\.45') {
+        throw 'Showcase runtime telemetry has incomplete Endar particle coverage.'
+    }
+    Assert-EnhancedKotorPbrCoverage -Evidence $runtimeText -ModuleId 'end_m01aa'
 
+    for ($index = 0; $index -lt $resolvedGenericManifests.Count; $index++) {
+        $module = $genericModules[$index]
+        $genericIntermediate = Join-Path $temporaryDirectory "generic-$index-$module.ogv"
+        $genericStdout = Join-Path $temporaryDirectory "generic-$index-$module-stdout.log"
+        $genericStderr = Join-Path $temporaryDirectory "generic-$index-$module-stderr.log"
+        $genericLaunch = @{
+            Manifest = $resolvedGenericManifests[$index]
+            GenericWorldShowcase = $true
+            CleanCapture = $true
+            MoviePath = $genericIntermediate
+            MovieFps = $FramesPerSecond
+            GodotStdoutPath = $genericStdout
+            GodotStderrPath = $genericStderr
+            TimeoutSeconds = 600
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Godot)) {
+            $genericLaunch.Godot = $Godot
+        }
+        & (Join-Path $PSScriptRoot 'Start-KotorGodot.ps1') @genericLaunch
+        if ($LASTEXITCODE -ne 0) {
+            throw "Generic KOTOR showcase recording failed for $module with exit code $LASTEXITCODE"
+        }
+        if (-not (Test-Path -LiteralPath $genericIntermediate -PathType Leaf) -or
+            (Get-Item -LiteralPath $genericIntermediate).Length -lt 1MB) {
+            throw "Godot Movie Maker did not produce a usable generic clip for $module."
+        }
+        $genericConsole = (Get-Content -LiteralPath $genericStdout -Raw) +
+                          [Environment]::NewLine +
+                          (Get-Content -LiteralPath $genericStderr -Raw)
+        if ($genericConsole -match '(?m)^ERROR:|status=fail' -or
+            $genericConsole.IndexOf(
+                "NIKAMI_AURORA_KOTOR_BOOT status=pass module=$module mode=generic-world",
+                [StringComparison]::Ordinal) -lt 0 -or
+            $genericConsole.IndexOf(
+                "NIKAMI_AURORA_GENERIC_SHOWCASE status=pass module=$module duration=8.000 camera=third-person motion=bounded-orbit+source-walkmesh renderer_scope=application",
+                [StringComparison]::Ordinal) -lt 0 -or
+            $genericConsole.IndexOf(
+                'NIKAMI_AURORA_RENDER_QUALITY status=ready scope=application tier=enhanced backend=forward_plus',
+                [StringComparison]::Ordinal) -lt 0) {
+            throw "Generic KOTOR showcase evidence failed for $module."
+        }
+        Assert-EnhancedKotorPbrCoverage -Evidence $genericConsole -ModuleId $module
+        $genericIntermediates += $genericIntermediate
+    }
+
+    $sourceClips = @($intermediate) + $genericIntermediates
+    for ($index = 0; $index -lt $sourceClips.Count; $index++) {
+        $normalized = Join-Path $temporaryDirectory "normalized-$index.mp4"
+        $trimSeconds = if ($index -eq 0) { 0.0 } else { 1.25 }
+        & $ffmpegCommand.Source -nostdin -hide_banner -loglevel error `
+            -ss $trimSeconds -i $sourceClips[$index] `
+            -map '0:v:0' -map '0:a:0' `
+            -vf 'scale=1280:720:flags=lanczos,setsar=1' `
+            -af 'aresample=48000' `
+            -r $FramesPerSecond -c:v libx264 -preset slow -crf 18 `
+            -pix_fmt yuv420p -c:a aac -b:a 192k $normalized
+        if ($LASTEXITCODE -ne 0) {
+            throw "ffmpeg clip normalization failed at index $index with exit code $LASTEXITCODE"
+        }
+        $normalizedClips += $normalized
+    }
+    $concatLines = $normalizedClips | ForEach-Object {
+        "file '$($_.Replace("'", "''"))'"
+    }
+    [IO.File]::WriteAllLines($concatList, $concatLines)
     & $ffmpegCommand.Source -nostdin -hide_banner -loglevel error `
-        -i $intermediate -map '0:v:0' -map '0:a:0' `
-        -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p `
-        -c:a aac -b:a 192k -movflags '+faststart' $encoded
+        -f concat -safe 0 -i $concatList -c copy -movflags '+faststart' $encoded
     if ($LASTEXITCODE -ne 0) {
-        throw "ffmpeg failed with exit code $LASTEXITCODE"
+        throw "ffmpeg multi-area concatenation failed with exit code $LASTEXITCODE"
     }
 
     $probeJson = (& $ffprobeCommand.Source -v error -show_streams `
@@ -202,6 +346,7 @@ try {
         audioCodec = [string]$audio[0].codec_name
         framesPerSecond = $FramesPerSecond
         presentation = $Presentation
+        modules = @('end_m01aa') + $genericModules
         allowlistedGodotTeardownDiagnostics = $consoleErrors.Count
     }
     $completed = $true

@@ -1,6 +1,6 @@
-using OpenDAO.Domain.Common;
+using Nikami.Aurora.GodotRuntime.Domain.Common;
 
-namespace OpenDAO.Domain.Quests;
+namespace Nikami.Aurora.GodotRuntime.Domain.Quests;
 
 public sealed class QuestJournal
 {

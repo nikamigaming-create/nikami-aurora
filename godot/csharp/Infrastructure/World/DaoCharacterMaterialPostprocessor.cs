@@ -1,9 +1,12 @@
 using Godot;
+using System.Buffers.Binary;
 using System.Text.Json;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.World;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.World;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
+using Nikami.Aurora.Core;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 /// <summary>
 /// Restores BioWare character material semantics lost by generic glTF import.
@@ -14,10 +17,17 @@ namespace OpenDAO.Infrastructure.World;
 public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor, ICharacterLightingBinder
 {
     private const string MaterialContractMetaPrefix = "opendao_character_material_contract_";
+    internal const string WorldMaterialIdentityMetaPrefix = "opendao_world_material_identity_";
+    internal const string WorldMaterialIdentityMeta = "opendao_world_material_identity";
     private const string HairShaderPath = "res://shaders/dao_character_hair.gdshader";
     private const string FaceShaderPath = "res://shaders/dao_facefx_material.gdshader";
     private const string EyelashShaderPath = "res://shaders/dao_character_eyelash.gdshader";
     private const string ArmourSkinShaderPath = "res://shaders/dao_character_armour_skin.gdshader";
+    private const string EnhancedHairShaderPath = "res://shaders/dao_character_hair_enhanced.gdshader";
+    private const string EnhancedFaceShaderPath = "res://shaders/dao_facefx_material_enhanced.gdshader";
+    private const string EnhancedEyelashShaderPath = "res://shaders/dao_character_eyelash_enhanced.gdshader";
+    private const string EnhancedArmourSkinShaderPath =
+        "res://shaders/dao_character_armour_skin_enhanced.gdshader";
     private Shader? hairShader;
     private Shader? faceShader;
     private Shader? eyelashShader;
@@ -52,24 +62,26 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
             if (mesh.Mesh is null) continue;
             for (var surface = 0; surface < mesh.Mesh.GetSurfaceCount(); surface++)
             {
-                if (mesh.GetActiveMaterial(surface) is not ShaderMaterial material) continue;
+                if (mesh.GetActiveMaterial(surface) is not Material activeMaterial) continue;
+                RestoreWorldMaterialIdentity(mesh, surface, activeMaterial);
+                if (activeMaterial is not ShaderMaterial material) continue;
                 RestoreMaterialContract(mesh, surface, material);
-                if (material.ResourceName.EndsWith("_OpenDAOHair", StringComparison.Ordinal))
+                if (material.ResourceName.EndsWith("_Nikami.Aurora.GodotRuntimeHair", StringComparison.Ordinal))
                 {
                     TrackMaterial(hairMaterials, material);
                     if (currentLighting is not null) BindAuthoredLighting(material, currentLighting, true);
                 }
-                else if (material.ResourceName.EndsWith("_OpenDAOFace0", StringComparison.Ordinal))
+                else if (material.ResourceName.EndsWith("_Nikami.Aurora.GodotRuntimeFace0", StringComparison.Ordinal))
                 {
                     TrackMaterial(faceMaterials, material);
                     if (currentLighting is not null) BindAuthoredLighting(material, currentLighting, true);
                 }
-                else if (material.ResourceName.EndsWith("_OpenDAOEyelash0", StringComparison.Ordinal))
+                else if (material.ResourceName.EndsWith("_Nikami.Aurora.GodotRuntimeEyelash0", StringComparison.Ordinal))
                 {
                     TrackMaterial(eyelashMaterials, material);
                     if (currentLighting is not null) BindAuthoredLighting(material, currentLighting, false);
                 }
-                else if (material.ResourceName.EndsWith("_OpenDAOArmourSkin", StringComparison.Ordinal))
+                else if (material.ResourceName.EndsWith("_Nikami.Aurora.GodotRuntimeArmourSkin", StringComparison.Ordinal))
                 {
                     TrackMaterial(armourSkinMaterials, material);
                     if (currentLighting is not null) BindAuthoredLighting(material, currentLighting, true);
@@ -79,12 +91,17 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
         ValidateStoredSkinContinuity(root);
     }
 
-    public void Process(Node3D model, GltfState sourceState)
+    public void Process(Node3D model, GltfState sourceState, string sourcePath)
     {
-        hairShader ??= GD.Load<Shader>(HairShaderPath);
-        faceShader ??= GD.Load<Shader>(FaceShaderPath);
-        eyelashShader ??= GD.Load<Shader>(EyelashShaderPath);
-        armourSkinShader ??= GD.Load<Shader>(ArmourSkinShaderPath);
+        var enhancedPresentation = UseEnhancedPresentation();
+        hairShader ??= GD.Load<Shader>(enhancedPresentation
+            ? EnhancedHairShaderPath : HairShaderPath);
+        faceShader ??= GD.Load<Shader>(enhancedPresentation
+            ? EnhancedFaceShaderPath : FaceShaderPath);
+        eyelashShader ??= GD.Load<Shader>(enhancedPresentation
+            ? EnhancedEyelashShaderPath : EyelashShaderPath);
+        armourSkinShader ??= GD.Load<Shader>(enhancedPresentation
+            ? EnhancedArmourSkinShaderPath : ArmourSkinShaderPath);
         if (hairShader is null || faceShader is null || eyelashShader is null || armourSkinShader is null)
         {
             GD.PushError("OPENDAO_CHARACTER_MATERIAL_FAIL reason=shader-missing " +
@@ -95,6 +112,10 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
         }
 
         using var document = JsonDocument.Parse(Godot.Json.Stringify(sourceState.Json));
+        var worldMaterialIdentities = ReadWorldMaterialIdentities(
+            document.RootElement, sourcePath);
+        var stateMaterialIndices = ReadStateMaterialIndices(
+            sourceState, worldMaterialIdentities.Materials.Count, sourcePath);
         var hairPalettes = ReadHairPalettes(document.RootElement);
         var facePalettes = ReadFacePalettes(document.RootElement);
         var eyelashContracts = ReadEyelashContracts(document.RootElement);
@@ -107,19 +128,37 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
         foreach (var mesh in model.FindChildren("*", "MeshInstance3D", true, false)
                      .OfType<MeshInstance3D>())
         {
-            if (mesh.Mesh is null) continue;
+            // Generated UCX/COLL nodes are source collision carriers, never
+            // render surfaces. The world batching policy suppresses them from
+            // draw submission, so do not invent a material identity for their
+            // Godot-synthesized placeholder material.
+            if (mesh.Mesh is null || WorldCollisionPolicy.IsCollisionProxy(mesh.Name)) continue;
             for (var surface = 0; surface < mesh.Mesh.GetSurfaceCount(); surface++)
             {
-                if (mesh.GetActiveMaterial(surface) is not BaseMaterial3D source ||
-                    source.AlbedoTexture is null) continue;
+                if (mesh.GetActiveMaterial(surface) is not BaseMaterial3D importedSource) continue;
+                var binding = ResolveWorldMaterialBinding(document.RootElement, sourceState,
+                    mesh, surface, importedSource, stateMaterialIndices,
+                    worldMaterialIdentities, sourcePath);
+                if (importedSource.Duplicate() is not BaseMaterial3D source)
+                    throw new InvalidDataException(
+                        $"Imported material cannot be isolated for identity binding: " +
+                        $"path={sourcePath} mesh={mesh.Name} surface={surface}");
+                source.ResourceName = binding.MaterialName;
+                mesh.SetSurfaceOverrideMaterial(surface, source);
+                ApplyImportedPbrContract(source, binding.Pbr,
+                    enhancedPresentation);
+                BindWorldMaterialIdentity(source, binding.Identity);
+                StoreWorldMaterialIdentity(mesh, surface, binding.Identity);
+                if (source.AlbedoTexture is null) continue;
                 if (armourSkinContracts.TryGetValue(source.ResourceName, out var armourSkinContract) &&
                     source.AOTexture is not null)
                 {
                     var material = new ShaderMaterial
                     {
                         Shader = armourSkinShader,
-                        ResourceName = source.ResourceName + "_OpenDAOArmourSkin"
+                        ResourceName = source.ResourceName + "_Nikami.Aurora.GodotRuntimeArmourSkin"
                     };
+                    CopyWorldMaterialIdentity(source, material, "armour-skin-shader");
                     material.SetShaderParameter("albedo", source.AlbedoColor);
                     material.SetShaderParameter("texture_albedo", source.AlbedoTexture);
                     material.SetShaderParameter("texture_tint_mask", source.AOTexture);
@@ -163,17 +202,24 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
                     var material = new ShaderMaterial
                     {
                         Shader = eyelashShader,
-                        ResourceName = source.ResourceName + "_OpenDAOEyelash0"
+                        ResourceName = source.ResourceName + "_Nikami.Aurora.GodotRuntimeEyelash0"
                     };
+                    CopyWorldMaterialIdentity(source, material, "eyelash-shader");
                     material.SetShaderParameter("albedo_texture", source.AlbedoTexture);
                     material.SetShaderParameter("alpha_threshold", eyelashContract.AlphaThreshold);
                     material.SetShaderParameter("mip_bias", eyelashContract.MipBias);
+                    material.SetShaderParameter("roughness", source.Roughness);
+                    material.SetShaderParameter("specular", source.MetallicSpecular);
+                    material.SetShaderParameter("metallic", source.Metallic);
                     mesh.SetSurfaceOverrideMaterial(surface, material);
                     StoreMaterialContract(mesh, surface, new
                     {
                         kind = "eyelash",
                         alphaThreshold = eyelashContract.AlphaThreshold,
-                        mipBias = eyelashContract.MipBias
+                        mipBias = eyelashContract.MipBias,
+                        roughness = source.Roughness,
+                        specular = source.MetallicSpecular,
+                        metallic = source.Metallic
                     });
                     TrackMaterial(eyelashMaterials, material);
                     if (currentLighting is not null) BindAuthoredLighting(material, currentLighting, false);
@@ -186,8 +232,9 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
                     var material = new ShaderMaterial
                     {
                         Shader = hairShader,
-                        ResourceName = source.ResourceName + "_OpenDAOHair"
+                        ResourceName = source.ResourceName + "_Nikami.Aurora.GodotRuntimeHair"
                     };
+                    CopyWorldMaterialIdentity(source, material, "hair-shader");
                     material.SetShaderParameter("albedo_texture", source.AlbedoTexture);
                     material.SetShaderParameter("tint_noise_texture", source.NormalTexture);
                     material.SetShaderParameter("diffuse_tint_0", hairPalette.Diffuse0);
@@ -243,8 +290,9 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
                 var faceMaterial = new ShaderMaterial
                 {
                     Shader = faceShader,
-                    ResourceName = source.ResourceName + "_OpenDAOFace0"
+                    ResourceName = source.ResourceName + "_Nikami.Aurora.GodotRuntimeFace0"
                 };
+                CopyWorldMaterialIdentity(source, faceMaterial, "face-shader");
                 faceMaterial.SetShaderParameter("albedo", source.AlbedoColor);
                 faceMaterial.SetShaderParameter("texture_albedo", source.AlbedoTexture);
                 faceMaterial.SetShaderParameter("texture_tint_mask", source.AOTexture);
@@ -322,6 +370,23 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
             GD.Print($"OPENDAO_CHARACTER_ARMOUR_SKIN_MATERIAL status=ready surfaces={installedArmourSkin} " +
                      "source=retail-character-mat semantic=ArmourSkinTint shader=Ch1ArmTnt " +
                      "skin_mask=alpha lighting=retail-affect-domain-1");
+        var customSurfaces = installedHair + installedFaces + installedEyelashes +
+                             installedArmourSkin;
+        if (customSurfaces > 0)
+            GD.Print("OPENDAO_CHARACTER_PBR_PIPELINE status=ready " +
+                     $"tier={(enhancedPresentation ? "enhanced" : "source")} " +
+                     $"surfaces={customSurfaces} shaded={(enhancedPresentation ? customSurfaces : 0)} " +
+                     $"authored_unshaded={(enhancedPresentation ? 0 : customSurfaces)} " +
+                     $"variant={(enhancedPresentation ? "godot-pbr" : "dao-authored-lighting")} " +
+                     "layout_override=none parity_claim=none");
+        GD.Print($"OPENDAO_IMPORTED_PBR status=ready " +
+                 $"model={worldMaterialIdentities.ModelName} " +
+                 $"materials={worldMaterialIdentities.Materials.Count} " +
+                 $"alpha_mask={worldMaterialIdentities.Materials.Count(value => value.Pbr.AlphaMode == "MASK")} " +
+                 $"alpha_blend={worldMaterialIdentities.Materials.Count(value => value.Pbr.AlphaMode == "BLEND")} " +
+                 $"double_sided={worldMaterialIdentities.Materials.Count(value => value.Pbr.DoubleSided)} " +
+                 $"tier={(enhancedPresentation ? "enhanced" : "source")} " +
+                 "source=gltf-material-contract mao=unsupported layout_override=none");
     }
 
     private static bool IsHairMaterial(MeshInstance3D mesh, BaseMaterial3D material)
@@ -350,6 +415,7 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
         BindTrackedMaterials(eyelashMaterials, currentLighting, false);
         BindTrackedMaterials(armourSkinMaterials, currentLighting, true);
         GD.Print($"OPENDAO_CHARACTER_LIGHTING status=ready probe={lighting.ProbeResource} " +
+                 $"probe_sha256={lighting.ProbeResourceSha256} " +
                  $"point_lights={string.Join(',', nearest.Select(light => light.Name))} " +
                  $"materials=hair:{hairMaterials.Count},face:{faceMaterials.Count},eyelash:{eyelashMaterials.Count}," +
                  $"armour_skin:{armourSkinMaterials.Count} " +
@@ -593,6 +659,27 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
         mesh.SetMeta(MaterialContractMetaPrefix + surface,
             JsonSerializer.Serialize(contract));
 
+    private static void StoreWorldMaterialIdentity(
+        MeshInstance3D mesh, int surface, string identity) =>
+        mesh.SetMeta(WorldMaterialIdentityMetaPrefix + surface, identity);
+
+    internal static bool HasStoredWorldMaterialIdentity(MeshInstance3D mesh, int surface) =>
+        mesh.HasMeta(WorldMaterialIdentityMetaPrefix + surface) &&
+        !string.IsNullOrWhiteSpace(
+            mesh.GetMeta(WorldMaterialIdentityMetaPrefix + surface).AsString());
+
+    private static void RestoreWorldMaterialIdentity(
+        MeshInstance3D mesh, int surface, Material material)
+    {
+        var key = WorldMaterialIdentityMetaPrefix + surface;
+        if (!mesh.HasMeta(key)) return;
+        var identity = mesh.GetMeta(key).AsString();
+        if (string.IsNullOrWhiteSpace(identity))
+            throw new InvalidDataException(
+                $"Stored world material identity is blank: mesh={mesh.Name} surface={surface}");
+        material.SetMeta(WorldMaterialIdentityMeta, identity);
+    }
+
     private static void RestoreMaterialContract(MeshInstance3D mesh, int surface,
         ShaderMaterial material)
     {
@@ -673,6 +760,9 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
                 material.SetShaderParameter("alpha_threshold",
                     contract.GetProperty("alphaThreshold").GetSingle());
                 material.SetShaderParameter("mip_bias", contract.GetProperty("mipBias").GetSingle());
+                material.SetShaderParameter("roughness", contract.GetProperty("roughness").GetSingle());
+                material.SetShaderParameter("specular", contract.GetProperty("specular").GetSingle());
+                material.SetShaderParameter("metallic", contract.GetProperty("metallic").GetSingle());
                 break;
         }
         GD.Print($"OPENDAO_CHARACTER_MATERIAL_CONTRACT status=restored " +
@@ -682,6 +772,554 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
     private static void SetColor(ShaderMaterial material, string parameter,
         JsonElement contract, string property) =>
         material.SetShaderParameter(parameter, ReadColor(contract.GetProperty(property)));
+
+    private static WorldMaterialIdentityCatalog ReadWorldMaterialIdentities(
+        JsonElement root, string sourcePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath))
+            throw new InvalidDataException("Imported source model path is absent.");
+        var sourceModelPath = Path.GetFullPath(sourcePath);
+        ValidateOwnedImportPath(sourceModelPath);
+        if (!File.Exists(sourceModelPath))
+            throw new InvalidDataException($"Imported source model is absent: {sourceModelPath}");
+        var sourceBasePath = Path.GetDirectoryName(sourceModelPath) ??
+                             throw new InvalidDataException(
+                                 $"Imported source model has no parent directory: {sourceModelPath}");
+        var sourceModelBytes = File.ReadAllBytes(sourceModelPath);
+        var sourceModelHash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(sourceModelBytes))
+            .ToLowerInvariant();
+        var materials = root.TryGetProperty("materials", out var materialArray) &&
+                        materialArray.ValueKind == JsonValueKind.Array
+            ? materialArray
+            : default;
+        var textures = root.TryGetProperty("textures", out var textureArray) &&
+                       textureArray.ValueKind == JsonValueKind.Array
+            ? textureArray.EnumerateArray().ToArray()
+            : [];
+        using var sourceGlb = Path.GetExtension(sourceModelPath)
+            .Equals(".glb", StringComparison.OrdinalIgnoreCase)
+            ? ReadSourceGlb(sourceModelBytes, sourceModelPath)
+            : null;
+        var images = root.TryGetProperty("images", out var imageArray) &&
+                     imageArray.ValueKind == JsonValueKind.Array
+            ? imageArray.EnumerateArray().ToArray()
+            : [];
+
+        static float FiniteScalar(JsonElement owner, string property, float fallback)
+        {
+            if (!owner.TryGetProperty(property, out var element)) return fallback;
+            if (element.ValueKind != JsonValueKind.Number || !element.TryGetSingle(out var value) ||
+                !float.IsFinite(value))
+                throw new InvalidDataException(
+                    $"glTF material {property} must be a finite number.");
+            return value;
+        }
+
+        static float[] FiniteVector(JsonElement owner, string property,
+            IReadOnlyList<float> fallback)
+        {
+            if (!owner.TryGetProperty(property, out var element)) return fallback.ToArray();
+            if (element.ValueKind != JsonValueKind.Array ||
+                element.GetArrayLength() != fallback.Count)
+                throw new InvalidDataException(
+                    $"glTF material {property} must contain {fallback.Count} values.");
+            var result = new float[fallback.Count];
+            var index = 0;
+            foreach (var channel in element.EnumerateArray())
+            {
+                if (channel.ValueKind != JsonValueKind.Number ||
+                    !channel.TryGetSingle(out result[index]) || !float.IsFinite(result[index]))
+                    throw new InvalidDataException(
+                        $"glTF material {property}[{index}] must be finite.");
+                index++;
+            }
+            return result;
+        }
+
+        static string Channels(IReadOnlyList<float> values) => string.Join(',', values.Select(
+            value => value.ToString("R", System.Globalization.CultureInfo.InvariantCulture)));
+
+        string TextureIdentity(JsonElement owner, string property)
+        {
+            if (!owner.TryGetProperty(property, out var textureInfo)) return "none";
+            if (textureInfo.ValueKind != JsonValueKind.Object ||
+                !textureInfo.TryGetProperty("index", out var textureIndexElement))
+                throw new InvalidDataException(
+                    $"glTF material {property} must contain a texture index.");
+            var textureIndex = ReadStrictJsonIndex(
+                textureIndexElement, $"glTF material {property} texture");
+            if (textureIndex < 0 || textureIndex >= textures.Length ||
+                !textures[textureIndex].TryGetProperty("source", out var sourceElement))
+                throw new InvalidDataException($"glTF material {property} has an invalid texture index.");
+            var imageIndex = ReadStrictJsonIndex(
+                sourceElement, $"glTF material {property} image");
+            if (imageIndex < 0 || imageIndex >= images.Length)
+                throw new InvalidDataException($"glTF material {property} has an invalid image source.");
+            var image = images[imageIndex];
+            var hasUri = image.TryGetProperty("uri", out var uriElement);
+            var hasBufferView = image.TryGetProperty("bufferView", out var bufferViewElement);
+            if (hasUri == hasBufferView)
+                throw new InvalidDataException(
+                    $"glTF material {property} image must use exactly one URI or bufferView source.");
+            if (hasBufferView)
+            {
+                if (sourceGlb is null ||
+                    !image.TryGetProperty("mimeType", out var mimeTypeElement) ||
+                    mimeTypeElement.ValueKind != JsonValueKind.String)
+                    throw new InvalidDataException(
+                        $"glTF material {property} embedded image has no validated GLB MIME contract.");
+                var bufferView = ReadStrictJsonIndex(bufferViewElement,
+                    $"glTF material {property} embedded image bufferView");
+                return HashEmbeddedImage(sourceGlb, imageIndex, bufferView,
+                    mimeTypeElement.GetString() ?? string.Empty, property);
+            }
+            var uri = Uri.UnescapeDataString(uriElement.GetString() ?? string.Empty);
+            if (uri.Length == 0 || uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"glTF material {property} has no external source identity.");
+            var path = Path.GetFullPath(Path.Combine(sourceBasePath,
+                uri.Replace('/', Path.DirectorySeparatorChar)));
+            ValidateOwnedImportPath(path);
+            if (!File.Exists(path))
+                throw new InvalidDataException($"glTF material texture is absent: {path}");
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                File.ReadAllBytes(path))).ToLowerInvariant();
+            var claimed = Path.GetFileNameWithoutExtension(path);
+            if (claimed.Length != 64 || !claimed.All(character =>
+                    character is >= '0' and <= '9' or >= 'a' and <= 'f') ||
+                !hash.Equals(claimed, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(
+                    $"glTF material texture identity is not content-addressed: {path}");
+            return hash;
+        }
+
+        var result = new List<WorldMaterialIdentity>();
+        if (materials.ValueKind != JsonValueKind.Array)
+            return new WorldMaterialIdentityCatalog(
+                Path.GetFileName(sourceModelPath), sourceModelHash, result);
+        foreach (var record in materials.EnumerateArray())
+        {
+            var name = record.TryGetProperty("name", out var nameElement)
+                ? nameElement.GetString() ?? string.Empty
+                : string.Empty;
+            if (name.Length == 0)
+                throw new InvalidDataException("glTF material has no source name.");
+            var pbr = record.TryGetProperty("pbrMetallicRoughness", out var pbrElement)
+                ? pbrElement
+                : default;
+            if (pbr.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Object))
+                throw new InvalidDataException(
+                    $"glTF material pbrMetallicRoughness must be an object: {name}");
+            var baseColor = pbr.ValueKind == JsonValueKind.Object
+                ? TextureIdentity(pbr, "baseColorTexture")
+                : "none";
+            var metallicRoughness = pbr.ValueKind == JsonValueKind.Object
+                ? TextureIdentity(pbr, "metallicRoughnessTexture")
+                : "none";
+            var normal = TextureIdentity(record, "normalTexture");
+            var occlusion = TextureIdentity(record, "occlusionTexture");
+            var emissive = TextureIdentity(record, "emissiveTexture");
+            var baseColorFactor = pbr.ValueKind == JsonValueKind.Object
+                ? FiniteVector(pbr, "baseColorFactor", [1, 1, 1, 1])
+                : new float[] { 1, 1, 1, 1 };
+            var metallicFactor = pbr.ValueKind == JsonValueKind.Object
+                ? FiniteScalar(pbr, "metallicFactor", 1)
+                : 1;
+            var roughnessFactor = pbr.ValueKind == JsonValueKind.Object
+                ? FiniteScalar(pbr, "roughnessFactor", 1)
+                : 1;
+            if (metallicFactor is < 0 or > 1 || roughnessFactor is < 0 or > 1 ||
+                baseColorFactor.Any(value => value is < 0 or > 1))
+                throw new InvalidDataException(
+                    $"glTF material PBR factors are outside [0,1]: {name}");
+            var alphaMode = record.TryGetProperty("alphaMode", out var alphaModeElement)
+                ? alphaModeElement.GetString() ?? string.Empty
+                : "OPAQUE";
+            if (alphaMode is not ("OPAQUE" or "MASK" or "BLEND"))
+                throw new InvalidDataException(
+                    $"glTF material alpha mode is unsupported: {name} ({alphaMode})");
+            var alphaCutoff = FiniteScalar(record, "alphaCutoff", .5f);
+            if (alphaCutoff is < 0 or > 1)
+                throw new InvalidDataException(
+                    $"glTF material alpha cutoff is outside [0,1]: {name}");
+            var doubleSided = record.TryGetProperty("doubleSided", out var doubleSidedElement) &&
+                              doubleSidedElement.ValueKind == JsonValueKind.True;
+            if (record.TryGetProperty("doubleSided", out doubleSidedElement) &&
+                doubleSidedElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new InvalidDataException(
+                    $"glTF material doubleSided must be boolean: {name}");
+            var normalScale = record.TryGetProperty("normalTexture", out var normalTexture) &&
+                              normalTexture.ValueKind == JsonValueKind.Object
+                ? FiniteScalar(normalTexture, "scale", 1)
+                : 1;
+            if (normalScale < 0)
+                throw new InvalidDataException(
+                    $"glTF material normal scale is negative: {name}");
+            var emissiveFactor = FiniteVector(record, "emissiveFactor", [0, 0, 0]);
+            var pbrContract = new WorldPbrContract(
+                new Color(baseColorFactor[0], baseColorFactor[1], baseColorFactor[2],
+                    baseColorFactor[3]),
+                metallicFactor, roughnessFactor, normalScale, alphaMode,
+                alphaCutoff, doubleSided);
+            result.Add(new WorldMaterialIdentity(name,
+                $"kind=installed-gltf-pbr;model={Path.GetFileName(sourceModelPath)};" +
+                $"model_sha256={sourceModelHash};name={name};base_color={baseColor};" +
+                $"normal={normal};metallic_roughness={metallicRoughness};" +
+                $"occlusion={occlusion};emissive={emissive};" +
+                $"base_color_factor={Channels(baseColorFactor)};" +
+                $"metallic_factor={metallicFactor:R};roughness_factor={roughnessFactor:R};" +
+                $"normal_scale={normalScale:R};emissive_factor={Channels(emissiveFactor)};" +
+                $"alpha_mode={alphaMode};alpha_cutoff={alphaCutoff:R};" +
+                $"double_sided={(doubleSided ? 1 : 0)};pbr_status=ready;" +
+                "mao_status=unsupported;semantic_status=imported-gltf-slots-mao-unresolved",
+                pbrContract));
+        }
+        return new WorldMaterialIdentityCatalog(
+            Path.GetFileName(sourceModelPath), sourceModelHash, result);
+    }
+
+    private static IReadOnlyDictionary<ulong, int> ReadStateMaterialIndices(
+        GltfState sourceState, int expectedCount, string sourcePath)
+    {
+        if (sourceState.Materials.Count != expectedCount)
+            throw new InvalidDataException(
+                $"Godot/source glTF material count mismatch: path={sourcePath} " +
+                $"state={sourceState.Materials.Count} source={expectedCount}");
+        var result = new Dictionary<ulong, int>();
+        for (var index = 0; index < sourceState.Materials.Count; index++)
+        {
+            var material = sourceState.Materials[index] ??
+                           throw new InvalidDataException(
+                               $"Godot glTF material is null: path={sourcePath} material={index}");
+            if (!result.TryAdd(material.GetInstanceId(), index))
+                throw new InvalidDataException(
+                    $"Godot glTF material instance is ambiguous: path={sourcePath} material={index}");
+        }
+        return result;
+    }
+
+    private static WorldSurfaceMaterialBinding ResolveWorldMaterialBinding(
+        JsonElement root, GltfState sourceState, MeshInstance3D mesh, int surface,
+        BaseMaterial3D importedMaterial, IReadOnlyDictionary<ulong, int> stateMaterialIndices,
+        WorldMaterialIdentityCatalog catalog, string sourcePath)
+    {
+        var stateMapped = stateMaterialIndices.TryGetValue(
+            importedMaterial.GetInstanceId(), out var stateMaterialIndex);
+        var nodeIndex = sourceState.GetNodeIndex(mesh);
+        if (nodeIndex < 0)
+        {
+            if (!stateMapped || stateMaterialIndex < 0 ||
+                stateMaterialIndex >= catalog.Materials.Count)
+                throw new InvalidDataException(
+                    $"Imported mesh has neither a state-material nor glTF node mapping: " +
+                    $"path={sourcePath} mesh={mesh.Name} surface={surface} node={nodeIndex}");
+            return CreateIndexedWorldMaterialBinding(importedMaterial,
+                catalog, stateMaterialIndex, surface,
+                "generated-unmapped", "generated-unmapped", "state-resource");
+        }
+        if (!root.TryGetProperty("nodes", out var nodes) ||
+            nodes.ValueKind != JsonValueKind.Array || nodeIndex >= nodes.GetArrayLength())
+            throw new InvalidDataException(
+                $"Imported mesh has no exact glTF node mapping: path={sourcePath} " +
+                $"mesh={mesh.Name} surface={surface} node={nodeIndex}");
+        var node = nodes[nodeIndex];
+        if (!node.TryGetProperty("mesh", out var meshIndexElement))
+            throw new InvalidDataException(
+                $"Imported mesh node has no glTF mesh index: path={sourcePath} " +
+                $"mesh={mesh.Name} surface={surface} node={nodeIndex}");
+        var meshIndex = ReadStrictJsonIndex(meshIndexElement,
+            $"glTF node {nodeIndex} mesh");
+        if (!root.TryGetProperty("meshes", out var meshes) ||
+            meshes.ValueKind != JsonValueKind.Array || meshIndex < 0 ||
+            meshIndex >= meshes.GetArrayLength() ||
+            !meshes[meshIndex].TryGetProperty("primitives", out var primitives) ||
+            primitives.ValueKind != JsonValueKind.Array ||
+            primitives.GetArrayLength() != mesh.Mesh!.GetSurfaceCount() ||
+            surface < 0 || surface >= primitives.GetArrayLength())
+            throw new InvalidDataException(
+                $"Imported mesh surfaces do not match glTF primitives: path={sourcePath} " +
+                $"mesh={mesh.Name} surface={surface} node={nodeIndex} source_mesh={meshIndex}");
+
+        var primitive = primitives[surface];
+        var materialIndex = primitive.TryGetProperty("material", out var materialIndexElement)
+            ? ReadStrictJsonIndex(materialIndexElement,
+                $"glTF mesh {meshIndex} primitive {surface} material")
+            : -1;
+        if (stateMapped && stateMaterialIndex != materialIndex)
+            throw new InvalidDataException(
+                $"Godot/source glTF material mapping disagrees: path={sourcePath} " +
+                $"mesh={mesh.Name} surface={surface} node={nodeIndex} source_mesh={meshIndex} " +
+                $"state_material={stateMaterialIndex} primitive_material={materialIndex}");
+        if (materialIndex < -1 || materialIndex >= catalog.Materials.Count)
+            throw new InvalidDataException(
+                $"glTF primitive material index is out of range: path={sourcePath} " +
+                $"mesh={mesh.Name} surface={surface} node={nodeIndex} source_mesh={meshIndex} " +
+                $"material={materialIndex}");
+
+        var mapping = stateMapped ? "state-resource+primitive" : "primitive-validated";
+        if (materialIndex == -1)
+        {
+            if (stateMapped)
+                throw new InvalidDataException(
+                    $"Godot material exists for a glTF default-material primitive: path={sourcePath} " +
+                    $"mesh={mesh.Name} surface={surface} node={nodeIndex} source_mesh={meshIndex}");
+            return new WorldSurfaceMaterialBinding("gltf_default",
+                $"kind=gltf-default;model={catalog.ModelName};" +
+                $"model_sha256={catalog.ModelSha256};node={nodeIndex};mesh={meshIndex};" +
+                $"surface={surface};material=default;mapping={mapping};" +
+                "pbr_status=ready;mao_status=not-applicable;" +
+                "semantic_status=gltf-default-no-material",
+                WorldPbrContract.Default);
+        }
+
+        return CreateIndexedWorldMaterialBinding(importedMaterial, catalog,
+            materialIndex, surface, nodeIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            meshIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), mapping);
+    }
+
+    private static WorldSurfaceMaterialBinding CreateIndexedWorldMaterialBinding(
+        BaseMaterial3D importedMaterial, WorldMaterialIdentityCatalog catalog,
+        int materialIndex, int surface, string nodeIdentity, string meshIdentity,
+        string mapping)
+    {
+        var sourceMaterial = catalog.Materials[materialIndex];
+        var runtimeNameStatus = importedMaterial.ResourceName.Length == 0
+            ? "blank"
+            : importedMaterial.ResourceName.Equals(sourceMaterial.Name, StringComparison.Ordinal)
+                ? "match"
+                : "mismatch-ignored-index-authoritative";
+        return new WorldSurfaceMaterialBinding(sourceMaterial.Name,
+            sourceMaterial.Identity + $";node={nodeIdentity};mesh={meshIdentity};surface={surface};" +
+            $"material={materialIndex};mapping={mapping};runtime_name_status={runtimeNameStatus}",
+            sourceMaterial.Pbr);
+    }
+
+    private sealed record WorldMaterialIdentity(
+        string Name,
+        string Identity,
+        WorldPbrContract Pbr);
+
+    private sealed record WorldMaterialIdentityCatalog(
+        string ModelName, string ModelSha256, IReadOnlyList<WorldMaterialIdentity> Materials);
+
+    private sealed record WorldSurfaceMaterialBinding(
+        string MaterialName,
+        string Identity,
+        WorldPbrContract Pbr);
+
+    private sealed record WorldPbrContract(
+        Color BaseColor,
+        float Metallic,
+        float Roughness,
+        float NormalScale,
+        string AlphaMode,
+        float AlphaCutoff,
+        bool DoubleSided)
+    {
+        public static WorldPbrContract Default { get; } = new(
+            Colors.White, 1, 1, 1, "OPAQUE", .5f, false);
+    }
+
+    private static SourceGlb ReadSourceGlb(byte[] bytes, string path)
+    {
+        const uint GlbMagic = 0x46546c67;
+        const uint JsonChunk = 0x4e4f534a;
+        const uint BinaryChunk = 0x004e4942;
+        if (bytes.Length < 20 || BinaryPrimitives.ReadUInt32LittleEndian(bytes) != GlbMagic ||
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4)) != 2 ||
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(8)) != bytes.Length)
+            throw new InvalidDataException($"Imported GLB header is malformed: {path}");
+
+        var offset = 12;
+        JsonDocument? json = null;
+        var binaryOffset = -1;
+        var binaryLength = 0;
+        while (offset < bytes.Length)
+        {
+            if (bytes.Length - offset < 8)
+                throw new InvalidDataException($"Imported GLB chunk header is truncated: {path}");
+            var chunkLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset)));
+            var chunkType = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 4));
+            offset += 8;
+            if (chunkLength < 0 || chunkLength > bytes.Length - offset)
+                throw new InvalidDataException($"Imported GLB chunk is out of range: {path}");
+            if (chunkType == JsonChunk)
+            {
+                if (json is not null || binaryOffset >= 0)
+                    throw new InvalidDataException($"Imported GLB JSON chunk order is invalid: {path}");
+                json = JsonDocument.Parse(bytes.AsMemory(offset, chunkLength));
+            }
+            else if (chunkType == BinaryChunk)
+            {
+                if (json is null || binaryOffset >= 0)
+                    throw new InvalidDataException($"Imported GLB binary chunk order is invalid: {path}");
+                binaryOffset = offset;
+                binaryLength = chunkLength;
+            }
+            else
+            {
+                throw new InvalidDataException($"Imported GLB has an unsupported chunk type: {path}");
+            }
+            offset += chunkLength;
+        }
+        if (offset != bytes.Length || json is null)
+        {
+            json?.Dispose();
+            throw new InvalidDataException($"Imported GLB container is incomplete: {path}");
+        }
+        return new SourceGlb(bytes, json, binaryOffset, binaryLength);
+    }
+
+    private static string HashEmbeddedImage(SourceGlb glb, int imageIndex,
+        int expectedBufferView, string expectedMimeType, string property)
+    {
+        if (expectedMimeType is not ("image/png" or "image/jpeg" or "image/webp") ||
+            !glb.Json.RootElement.TryGetProperty("images", out var rawImages) ||
+            rawImages.ValueKind != JsonValueKind.Array || imageIndex >= rawImages.GetArrayLength())
+            throw new InvalidDataException(
+                $"glTF material {property} embedded image MIME/index is unsupported.");
+        var rawImage = rawImages[imageIndex];
+        if (rawImage.TryGetProperty("uri", out _) ||
+            !rawImage.TryGetProperty("bufferView", out var rawBufferViewElement) ||
+            ReadStrictJsonIndex(rawBufferViewElement,
+                $"glTF material {property} source bufferView") != expectedBufferView ||
+            !rawImage.TryGetProperty("mimeType", out var rawMimeTypeElement) ||
+            rawMimeTypeElement.ValueKind != JsonValueKind.String ||
+            !string.Equals(rawMimeTypeElement.GetString(), expectedMimeType,
+                StringComparison.Ordinal))
+            throw new InvalidDataException(
+                $"glTF material {property} embedded image disagrees with the source GLB.");
+        if (!glb.Json.RootElement.TryGetProperty("bufferViews", out var bufferViews) ||
+            bufferViews.ValueKind != JsonValueKind.Array || expectedBufferView < 0 ||
+            expectedBufferView >= bufferViews.GetArrayLength())
+            throw new InvalidDataException(
+                $"glTF material {property} embedded image bufferView is absent.");
+        var view = bufferViews[expectedBufferView];
+        if (!view.TryGetProperty("buffer", out var bufferElement) ||
+            ReadStrictJsonIndex(bufferElement,
+                $"glTF material {property} embedded image buffer") != 0 ||
+            !view.TryGetProperty("byteLength", out var lengthElement))
+            throw new InvalidDataException(
+                $"glTF material {property} embedded image buffer contract is malformed.");
+        var byteOffset = view.TryGetProperty("byteOffset", out var offsetElement)
+            ? ReadStrictJsonIndex(offsetElement,
+                $"glTF material {property} embedded image byteOffset")
+            : 0;
+        var byteLength = ReadStrictJsonIndex(lengthElement,
+            $"glTF material {property} embedded image byteLength");
+        if (glb.BinaryOffset < 0 || byteOffset < 0 || byteLength <= 0 ||
+            byteOffset > glb.BinaryLength - byteLength)
+            throw new InvalidDataException(
+                $"glTF material {property} embedded image byte range is invalid.");
+        var payload = glb.Bytes.AsSpan(glb.BinaryOffset + byteOffset, byteLength);
+        var validSignature = expectedMimeType switch
+        {
+            "image/png" => payload.Length >= 8 &&
+                           payload[..8].SequenceEqual(
+                               new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a }),
+            "image/jpeg" => payload.Length >= 2 && payload[0] == 0xff && payload[1] == 0xd8,
+            "image/webp" => payload.Length >= 12 &&
+                            payload[..4].SequenceEqual("RIFF"u8) &&
+                            payload.Slice(8, 4).SequenceEqual("WEBP"u8),
+            _ => false
+        };
+        if (!validSignature)
+            throw new InvalidDataException(
+                $"glTF material {property} embedded image signature disagrees with its MIME type.");
+        return Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
+    }
+
+    private sealed class SourceGlb(
+        byte[] bytes, JsonDocument json, int binaryOffset, int binaryLength) : IDisposable
+    {
+        public byte[] Bytes { get; } = bytes;
+        public JsonDocument Json { get; } = json;
+        public int BinaryOffset { get; } = binaryOffset;
+        public int BinaryLength { get; } = binaryLength;
+        public void Dispose() => Json.Dispose();
+    }
+
+    private static int ReadStrictJsonIndex(JsonElement value, string label)
+    {
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var number) ||
+            !double.IsFinite(number) || number != Math.Truncate(number) ||
+            number < int.MinValue || number > int.MaxValue)
+            throw new InvalidDataException($"{label} index is not a finite Int32 value.");
+        return (int)number;
+    }
+
+    private static void ValidateOwnedImportPath(string path)
+    {
+        if (IsWithin(path, DaoRuntimePaths.Cache()) ||
+            IsWithin(path, DaoRuntimePaths.Generated())) return;
+        throw new InvalidDataException(
+            $"Imported material payload escapes configured owned-data roots: {path}");
+    }
+
+    private static bool IsWithin(string path, string root)
+    {
+        var fullRoot = Path.GetFullPath(root);
+        var prefix = fullRoot.TrimEnd(Path.DirectorySeparatorChar,
+                         Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var fullPath = Path.GetFullPath(path);
+        return fullPath.Equals(fullRoot, StringComparison.OrdinalIgnoreCase) ||
+               fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void BindWorldMaterialIdentity(Material material, string identity)
+    {
+        if (string.IsNullOrWhiteSpace(identity))
+            throw new InvalidDataException("Imported material source identity is absent.");
+        material.SetMeta(WorldMaterialIdentityMeta, identity);
+    }
+
+    private static void CopyWorldMaterialIdentity(
+        Material source, Material target, string shaderSemantic)
+    {
+        if (!source.HasMeta(WorldMaterialIdentityMeta))
+            throw new InvalidDataException(
+                $"Shader material source identity is absent: {source.ResourceName}");
+        target.SetMeta(WorldMaterialIdentityMeta,
+            source.GetMeta(WorldMaterialIdentityMeta).AsString() +
+            $";runtime_semantic={shaderSemantic}");
+    }
+
+    private static void ApplyImportedPbrContract(BaseMaterial3D material,
+        WorldPbrContract source, bool enhanced)
+    {
+        material.AlbedoColor = source.BaseColor;
+        material.Metallic = source.Metallic;
+        material.Roughness = source.Roughness;
+        material.NormalScale = source.NormalScale;
+        material.NormalEnabled = material.NormalTexture is not null && source.NormalScale > 0;
+        material.CullMode = source.DoubleSided
+            ? BaseMaterial3D.CullModeEnum.Disabled
+            : BaseMaterial3D.CullModeEnum.Back;
+        switch (source.AlphaMode)
+        {
+            case "OPAQUE":
+                material.Transparency = BaseMaterial3D.TransparencyEnum.Disabled;
+                break;
+            case "MASK":
+                material.Transparency = BaseMaterial3D.TransparencyEnum.AlphaScissor;
+                material.AlphaScissorThreshold = source.AlphaCutoff;
+                material.DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.OpaqueOnly;
+                break;
+            case "BLEND":
+                material.Transparency = BaseMaterial3D.TransparencyEnum.Alpha;
+                break;
+            default:
+                throw new InvalidDataException(
+                    $"Unsupported imported glTF alpha mode: {source.AlphaMode}");
+        }
+        // Filtering is a quality tier, not a source material semantic. Source
+        // keeps the importer contract; enhanced Forward+ uses the installed DDS
+        // mip chain anisotropically for oblique terrain, roofs, and cards.
+        if (enhanced)
+            material.TextureFilter =
+                BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic;
+    }
 
     private static Vector3 ReadVector3(JsonElement value)
     {
@@ -695,7 +1333,12 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
 
     private static string BuildCacheFingerprint()
     {
-        var paths = new[] { HairShaderPath, FaceShaderPath, EyelashShaderPath, ArmourSkinShaderPath }
+        var paths = new[]
+            {
+                HairShaderPath, FaceShaderPath, EyelashShaderPath, ArmourSkinShaderPath,
+                EnhancedHairShaderPath, EnhancedFaceShaderPath, EnhancedEyelashShaderPath,
+                EnhancedArmourSkinShaderPath
+            }
             .Select(ProjectSettings.GlobalizePath).ToArray();
         if (paths.Any(path => !File.Exists(path)))
             return "dao-character-materials-v7|shader-missing";
@@ -703,12 +1346,33 @@ public sealed class DaoCharacterMaterialPostprocessor : IGodotModelPostprocessor
         foreach (var path in paths) stream.Write(File.ReadAllBytes(path));
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             stream.ToArray())).ToLowerInvariant();
-        // v7 adds Character.mat/ArmourSkinTint while preserving the v6
+        // v14 selects separate enhanced shaded character shaders while keeping
+        // the source tier on the installed SH/point-light unshaded contract.
+        // v13 binds exact glTF PBR factors, alpha mode/cutoff, and double-sided
+        // state for every imported area and removes name-based foliage repair.
+        // v12 adds hard surface-identity publication diagnostics. v11
+        // preserves exact source identity on MeshInstance metadata so it
+        // can be republished after Godot PackedScene material serialization.
+        // v10 binds exact source-model/material/texture identities and must not
+        // revive v9 PackedScenes created before that metadata existed. v8 also
+        // restores anisotropic source sampling and coverage-tested foliage
+        // instead of sorted alpha cards. v7 adds Character.mat/ArmourSkinTint while preserving the v6
         // mesh-owned copy of every character-material uniform
         // contract and restores it after PackedScene cache loads. Godot 4.7's
         // glTF/PackedScene path does not reliably retain custom ShaderMaterial
         // parameter overrides by itself.
-        return $"dao-character-materials-v7|{hash}";
+        return $"dao-character-materials-v14|tier=" +
+               $"{(UseEnhancedPresentation() ? "enhanced" : "source")}|{hash}";
+    }
+
+    private static bool UseEnhancedPresentation()
+    {
+        var requested = System.Environment.GetEnvironmentVariable(
+            "NIKAMI_AURORA_PRESENTATION_TIER")?.Trim().ToLowerInvariant() ?? string.Empty;
+        var backend = RenderingQualityPolicy.ParseBackend(
+            RenderingServer.GetCurrentRenderingMethod().ToString());
+        return RenderingQualityPolicy.ParseTier(requested, backend) ==
+               RenderingPresentationTier.Enhanced;
     }
 
     private sealed record HairPalette(Color Diffuse0, Color Diffuse1, Color Diffuse2,

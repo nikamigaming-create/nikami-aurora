@@ -1,7 +1,7 @@
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.Common;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.Common;
 
-namespace OpenDAO.Domain.Abilities;
+namespace Nikami.Aurora.GodotRuntime.Domain.Abilities;
 
 public sealed class AbilityState(IClock clock)
 {

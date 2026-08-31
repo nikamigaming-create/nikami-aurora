@@ -24,7 +24,7 @@ uniform vec3 dao_character_light = vec3(0.0);
 
 varying vec3 dao_vertex_lighting;
 
-uniform sampler2D albedo_texture : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D albedo_texture : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float opacity_multiplier = 1.0;
 uniform float alpha_threshold : hint_range(0.0, 1.0) = 0.0784313725490196;
 uniform float mip_bias = -2.5;

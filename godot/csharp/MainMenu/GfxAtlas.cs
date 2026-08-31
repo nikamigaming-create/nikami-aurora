@@ -4,9 +4,9 @@ using System.Globalization;
 using System.Text;
 using System.Xml.Linq;
 using Godot;
-using OpenDAO.Infrastructure.Archives;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Archives;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal sealed record GfxAtlasRegion(
     string SourceName,

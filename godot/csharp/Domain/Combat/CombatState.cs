@@ -1,6 +1,6 @@
-using OpenDAO.Domain.Common;
+using Nikami.Aurora.GodotRuntime.Domain.Common;
 
-namespace OpenDAO.Domain.Combat;
+namespace Nikami.Aurora.GodotRuntime.Domain.Combat;
 
 public sealed record Combatant(int Handle, int CurrentHealth, int MaximumHealth, bool InCombat,
     int TargetHandle, bool Plot, bool Immortal, bool Defeated);
@@ -10,22 +10,25 @@ public sealed class CombatState
     private readonly Dictionary<int, Combatant> combatants = [];
     public event Action<Combatant>? Changed;
     public event Action<Combatant>? Defeated;
-    public IReadOnlyCollection<Combatant> Combatants => combatants.Values.ToArray();
+    public IReadOnlyCollection<Combatant> Combatants => combatants.Values;
 
     public OperationResult Register(int handle, int maximumHealth, bool plot = false, bool immortal = false)
     {
         if (handle <= 0 || maximumHealth <= 0) return OperationResult.Unsupported("combatant-invalid");
-        combatants[handle] = new(handle, maximumHealth, maximumHealth, false, 0, plot, immortal, false);
-        Changed?.Invoke(combatants[handle]);
+        var combatant = new Combatant(
+            handle, maximumHealth, maximumHealth, false, 0, plot, immortal, false);
+        combatants[handle] = combatant;
+        Changed?.Invoke(combatant);
         return OperationResult.Complete(("handle", handle), ("health", maximumHealth));
     }
 
     public OperationResult Attack(int sourceHandle, int targetHandle, int damage)
     {
-        if (!combatants.ContainsKey(sourceHandle) || !combatants.TryGetValue(targetHandle, out var target))
+        if (!combatants.TryGetValue(sourceHandle, out var source) ||
+            !combatants.TryGetValue(targetHandle, out var target))
             return OperationResult.Unsupported("combatant-absent");
         if (damage < 0 || target.Defeated) return OperationResult.Unsupported("damage-invalid");
-        combatants[sourceHandle] = combatants[sourceHandle] with { InCombat = true, TargetHandle = targetHandle };
+        combatants[sourceHandle] = source with { InCombat = true, TargetHandle = targetHandle };
         var floor = target.Plot || target.Immortal ? 1 : 0;
         var current = Math.Max(floor, target.CurrentHealth - damage);
         var defeated = current == 0;
@@ -54,7 +57,8 @@ public sealed class CombatState
     public void LeaveCombat(int handle)
     {
         if (!combatants.TryGetValue(handle, out var target)) return;
-        combatants[handle] = target with { InCombat = false, TargetHandle = 0 };
-        Changed?.Invoke(combatants[handle]);
+        var updated = target with { InCombat = false, TargetHandle = 0 };
+        combatants[handle] = updated;
+        Changed?.Invoke(updated);
     }
 }

@@ -1,18 +1,22 @@
 using System.Security.Cryptography;
 using System.Text;
 using Godot;
-using OpenDAO.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 public sealed class GodotModelCache(IGodotModelPostprocessor modelPostprocessor) : IGodotModelCache, IDisposable
 {
     private const string CacheDirectory = "user://model-cache/v3";
+    private const string DisableDiskCacheVariable = "OPENDAO_DISABLE_MODEL_DISK_CACHE";
     private readonly Dictionary<string, PackedScene> memory =
         new(StringComparer.OrdinalIgnoreCase);
 
     public int Hits { get; private set; }
     public int Misses { get; private set; }
+
+    private static bool DiskCacheEnabled =>
+        OS.GetEnvironment(DisableDiskCacheVariable) != "1";
 
     public PackedScene? Load(string path)
     {
@@ -36,7 +40,7 @@ public sealed class GodotModelCache(IGodotModelPostprocessor modelPostprocessor)
         var sourcePath = DaoRuntimePaths.ResolveSourcePath(path);
         if (!File.Exists(sourcePath)) return null;
         var cachePath = CachePath(sourcePath);
-        if (ResourceLoader.Exists(cachePath))
+        if (DiskCacheEnabled && ResourceLoader.Exists(cachePath))
         {
             scene = ResourceLoader.Load<PackedScene>(cachePath, cacheMode: ResourceLoader.CacheMode.Reuse);
             if (scene is not null)
@@ -52,7 +56,7 @@ public sealed class GodotModelCache(IGodotModelPostprocessor modelPostprocessor)
         if (scene is null) return null;
         memory[path] = scene;
         Misses++;
-        Persist(scene, cachePath);
+        if (DiskCacheEnabled) Persist(scene, cachePath);
         modelPostprocessor.Prepare(scene);
         return scene;
     }
@@ -82,7 +86,7 @@ public sealed class GodotModelCache(IGodotModelPostprocessor modelPostprocessor)
                 else if (File.Exists(DaoRuntimePaths.ResolveSourcePath(path)))
                 {
                     var directCachePath = CachePath(DaoRuntimePaths.ResolveSourcePath(path));
-                    if (ResourceLoader.Exists(directCachePath) && ResourceLoader.LoadThreadedRequest(directCachePath,
+                    if (DiskCacheEnabled && ResourceLoader.Exists(directCachePath) && ResourceLoader.LoadThreadedRequest(directCachePath,
                             "PackedScene", false, ResourceLoader.CacheMode.Reuse) == Error.Ok)
                         pending[path] = directCachePath;
                     else
@@ -91,6 +95,11 @@ public sealed class GodotModelCache(IGodotModelPostprocessor modelPostprocessor)
                 continue;
             }
             if (!File.Exists(path)) continue;
+            if (!DiskCacheEnabled)
+            {
+                directImports.Add(path);
+                continue;
+            }
             var cachePath = CachePath(path);
             if (!ResourceLoader.Exists(cachePath)) continue;
             if (ResourceLoader.LoadThreadedRequest(cachePath, "PackedScene", false,
@@ -129,7 +138,7 @@ public sealed class GodotModelCache(IGodotModelPostprocessor modelPostprocessor)
         var state = new GltfState();
         if (document.AppendFromFile(path, state) != Error.Ok ||
             document.GenerateScene(state) is not Node3D imported) return null;
-        modelPostprocessor.Process(imported, state);
+        modelPostprocessor.Process(imported, state, path);
         var packed = new PackedScene();
         if (packed.Pack(imported) != Error.Ok)
         {
@@ -158,6 +167,6 @@ public sealed class GodotModelCache(IGodotModelPostprocessor modelPostprocessor)
         var result = ResourceSaver.Save(scene, cachePath,
             ResourceSaver.SaverFlags.Compress | ResourceSaver.SaverFlags.OmitEditorProperties);
         if (result != Error.Ok)
-            GD.PushWarning($"OpenDAO model cache write failed: {cachePath} ({result})");
+            GD.PushWarning($"Nikami.Aurora.GodotRuntime model cache write failed: {cachePath} ({result})");
     }
 }

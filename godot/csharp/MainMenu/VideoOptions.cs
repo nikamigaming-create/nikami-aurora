@@ -1,9 +1,9 @@
 // Matthew W, 2026-08-12
 
 using Godot;
-using OpenDAO.Launcher;
+using Nikami.Aurora.GodotRuntime.Launcher;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal sealed class VideoOptions
 {

@@ -5,7 +5,7 @@ using Nikami.Aurora.Profiles.Kotor;
 
 namespace Nikami.Aurora.Acceptance;
 
-internal static class Program
+internal static partial class Program
 {
     public static int Main()
     {
@@ -21,6 +21,46 @@ internal static class Program
             passed++;
             DragonAgeProfileRemainsIndependent(suiteRoot);
             passed++;
+            DragonAgeCharacterCreationCatalogCoversEveryUiSelection();
+            passed++;
+            DragonAgeCharacterCreationReadinessSeparatesLegacyAndFresh();
+            passed++;
+            DragonAgeCharacterCreationClearsUnsupportedSelection();
+            passed++;
+            DragonAgeCharacterGlbAssemblerPreservesContracts(suiteRoot);
+            passed++;
+            DragonAgeCharacterGlbAssemblerFailsClosed(suiteRoot);
+            passed++;
+            DragonAgeCharacterModelHierarchyDecoderIsSourceBound();
+            passed++;
+            DragonAgeMshDecoderIsSourceBound();
+            passed++;
+            DragonAgeMshDecoderFailsClosed();
+            passed++;
+            DragonAgeCityElfEffectCatalogIsSourceBound();
+            passed++;
+            DragonAgeCityElfEffectCatalogRejectsUnknownDefinition();
+            passed++;
+            DragonAgeGenericEffectGraphDecoderIsSourceBound();
+            passed++;
+            DragonAgeEffectReadabilityGateFailsClosed();
+            passed++;
+            DragonAgeGenericEffectGraphDecoderFailsClosed();
+            passed++;
+            DragonAgeNavigationGridDecoderIsSourceBound();
+            passed++;
+            DragonAgeCoordinateBasisPreservesAsymmetricRotation();
+            passed++;
+            DragonAgeRenderPolicyIgnoresLayoutIdentity();
+            passed++;
+            DragonAgePbrCoverageRequiresExactIdentityBoundSurfaces();
+            passed++;
+            EnhancedRenderingQualityIsApplicationWide();
+            passed++;
+            SourceRenderingQualityRemainsSeparateFromEnhancement();
+            passed++;
+            RenderingQualityRejectsSceneKeyedSelection();
+            passed++;
             RegistryRejectsDuplicateProfiles();
             passed++;
             MarkerRejectsTraversal();
@@ -29,9 +69,35 @@ internal static class Program
             passed++;
             KotorMovementRejectsClosedDoor();
             passed++;
+            KotorMovementRejectsDegenerateNavigation();
+            passed++;
             KotorGameplayOwnsOpeningState();
             passed++;
             KotorInventoryProjectionStaysLinear();
+            passed++;
+            KotorEnvironmentMaterialPolicyPreservesSourceContract();
+            passed++;
+            KotorLightmapTransferKeepsSourceAndEnhancedDistinct();
+            passed++;
+            CinematicFramingAcceptsVisibleSubject();
+            passed++;
+            CinematicFramingRejectsWallOcclusion();
+            passed++;
+            KotorDialogueCameraKeepsSpeakerObjectivelyFramed();
+            passed++;
+            KotorDialogueCameraRejectsCoincidentParticipants();
+            passed++;
+            KotorFirstEncounterCameraBeatsRemainSourceBound();
+            passed++;
+            KotorCameraCollisionSelectsOnlySourceOpaqueSurfaces();
+            passed++;
+            KotorGenericModulePresentationRemainsStoryNeutral();
+            passed++;
+            KotorGenericVisualInventoryFailsClosed();
+            passed++;
+            KotorGlobalPbrCoverageRequiresEveryEligibleSurface();
+            passed++;
+            KotorRigIdentityRecognizesSourceBodyFamilies();
             passed++;
             Console.WriteLine($"NIKAMI_AURORA_ACCEPTANCE_PASS tests={passed}");
             return 0;
@@ -86,6 +152,669 @@ internal static class Program
         Expect(result.IsValid, "complete DAO fixture was rejected");
         Expect(result.ProfileId == DragonAgeOriginsGameProfile.ProfileId, "DAO profile identity changed");
         Expect(result.EngineFamily == "Eclipse", "DAO engine-family boundary changed");
+    }
+
+    private static void DragonAgeCharacterCreationCatalogCoversEveryUiSelection()
+    {
+        var appearances = DragonAgeOriginsCharacterCreationCatalog.Appearances;
+        Expect(appearances.Count ==
+               DragonAgeOriginsCharacterCreationCatalog.ExpectedSelectionCount,
+            "DAO character-creation catalog does not cover all 24 UI selections");
+        var expectedKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var race in new[] { "human", "elf", "dwarf" })
+            foreach (var gender in new[] { "female", "male" })
+                for (var preset = 1; preset <= 4; preset++)
+                    expectedKeys.Add($"{race}:{gender}:preset-{preset}");
+
+        foreach (var appearance in appearances)
+        {
+            Expect(expectedKeys.Remove(appearance.SelectionKey),
+                "DAO character-creation catalog contains a duplicate or unexpected selection: " +
+                appearance.SelectionKey);
+            var expectedStem = appearance.MorphResource[..^4];
+            Expect(IsSha256(appearance.MorphSha256) &&
+                   appearance.StandingRelativePath ==
+                   $"quickplay-characters/{expectedStem}.glb" &&
+                   appearance.BedRelativePath ==
+                   $"quickplay-characters/{expectedStem}-bed.glb" &&
+                   appearance.ImportManifestRelativePath ==
+                   $"quickplay-characters/{expectedStem}.import.json",
+                "DAO character-creation selection lost its deterministic source/output join: " +
+                appearance.SelectionKey);
+            Expect(!appearance.StandingRelativePath.Contains("areas/", StringComparison.Ordinal) &&
+                   !appearance.StandingRelativePath.Contains("playable-characters/",
+                       StringComparison.Ordinal) &&
+                   !appearance.BedRelativePath.Contains("playable-character-bed/",
+                       StringComparison.Ordinal),
+                "DAO character-creation catalog contains an area-NPC fallback path");
+        }
+        Expect(expectedKeys.Count == 0,
+            "DAO character-creation catalog is missing UI selections: " +
+            string.Join(',', expectedKeys));
+        Expect(IsSha256(DragonAgeOriginsCharacterCreationCatalog.CatalogContainerSha256) &&
+               IsSha256(DragonAgeOriginsCharacterCreationCatalog.CatalogResourceSha256) &&
+               IsSha256(DragonAgeOriginsCharacterCreationCatalog.SourceContainerSha256),
+            "DAO character-creation source catalog identity is not SHA-256 bound");
+        Expect(DragonAgeOriginsCharacterCreationCatalog.Resolve(
+                   "qunari", "female", "preset-1") is null,
+            "unsupported DAO character race did not fail closed");
+    }
+
+    private static void DragonAgeCharacterCreationReadinessSeparatesLegacyAndFresh()
+    {
+        var appearances = DragonAgeOriginsCharacterCreationCatalog.Appearances;
+        var legacyReady = 0;
+        var freshReady = 0;
+        foreach (var appearance in appearances)
+        {
+            var readiness = DragonAgeOriginsCharacterCreationCatalog.ClassifyImport(
+                appearance,
+                manifest: null,
+                appearance.LegacyStandingSha256,
+                appearance.LegacyBedSha256);
+            if (readiness == DragonAgeCharacterImportReadiness.LegacyEvidence)
+                legacyReady++;
+            if (readiness == DragonAgeCharacterImportReadiness.FreshImport)
+                freshReady++;
+        }
+        Expect(legacyReady == 24 && freshReady == 0,
+            $"DAO character readiness tiers drifted: legacy={legacyReady} fresh={freshReady}");
+
+        var selected = appearances.Single(value => value.SelectionKey ==
+                                                   "human:female:preset-1");
+        const string standingHash =
+            "1111111111111111111111111111111111111111111111111111111111111111";
+        const string bedHash =
+            "2222222222222222222222222222222222222222222222222222222222222222";
+        var manifest = new DragonAgeCharacterCreationImportManifest(
+            DragonAgeOriginsCharacterCreationCatalog.ManifestSchema,
+            DragonAgeOriginsCharacterCreationCatalog.ImporterId,
+            selected.SelectionKey,
+            DragonAgeOriginsCharacterCreationCatalog.CatalogContainerRelativePath,
+            DragonAgeOriginsCharacterCreationCatalog.CatalogContainerSha256,
+            DragonAgeOriginsCharacterCreationCatalog.CatalogResource,
+            DragonAgeOriginsCharacterCreationCatalog.CatalogResourceSha256,
+            DragonAgeOriginsCharacterCreationCatalog.SourceContainerRelativePath,
+            DragonAgeOriginsCharacterCreationCatalog.SourceContainerSha256,
+            selected.MorphResource,
+            selected.MorphSha256,
+            selected.StandingRelativePath,
+            standingHash,
+            selected.BedRelativePath,
+            bedHash);
+        Expect(DragonAgeOriginsCharacterCreationCatalog.ClassifyImport(
+                   selected, manifest, standingHash, bedHash) ==
+               DragonAgeCharacterImportReadiness.FreshImport,
+            "valid source-bound character import manifest was not fresh-import ready");
+        ExpectThrows<InvalidDataException>(() =>
+                DragonAgeOriginsCharacterCreationCatalog.ClassifyImport(
+                    selected,
+                    manifest with { SelectionKey = "elf:female:preset-1" },
+                    standingHash,
+                    bedHash),
+            "character import manifest with a different selection was accepted");
+    }
+
+    private static void DragonAgeCharacterCreationClearsUnsupportedSelection()
+    {
+        var readyAppearance = DragonAgeOriginsCharacterCreationCatalog.Resolve(
+            "elf", "female", "preset-1")!;
+        var state = DragonAgeOriginsCharacterCreationCatalog.TransitionSelection(
+            readyAppearance, DragonAgeCharacterImportReadiness.LegacyEvidence);
+        Expect(state.ActorVisible &&
+               DragonAgeOriginsCharacterCreationCatalog.CanStart(state, readyAppearance),
+            "ready source-bound character selection could not start");
+
+        state = DragonAgeOriginsCharacterCreationCatalog.TransitionSelection(
+            DragonAgeOriginsCharacterCreationCatalog.Resolve(
+                "human", "female", "preset-1"),
+            DragonAgeCharacterImportReadiness.Missing);
+        Expect(!state.ActorVisible && state.SelectionKey.Length == 0,
+            "switching to a missing character import retained the previous preview actor");
+        Expect(!DragonAgeOriginsCharacterCreationCatalog.CanStart(state, readyAppearance),
+            "missing character import retained permission to start with the previous actor");
+    }
+
+    private static void DragonAgeCityElfEffectCatalogIsSourceBound()
+    {
+        var expected = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "fxe_fire_cnd_p", "fxe_fire_m_ns_p", "fxe_dirtywater_p",
+            "fxe_fire_small_p", "fxe_tree_beam_blur", "fxe_water_ripples"
+        };
+        var definitions = DragonAgeOriginsEffectCatalog.SupportedDefinitions.ToArray();
+        Expect(definitions.Length == expected.Count,
+            "City Elf effect definition inventory drifted");
+        foreach (var definition in definitions)
+        {
+            Expect(expected.Remove(definition.ResRef),
+                $"unexpected or duplicate City Elf effect definition: {definition.ResRef}");
+            Expect(IsSha256(definition.ModelHierarchySha256),
+                $"effect MMH identity is invalid: {definition.ResRef}");
+            Expect(definition.Emitters.Count > 0,
+                $"effect has no source-supported emitter: {definition.ResRef}");
+            foreach (var emitter in definition.Emitters)
+            {
+                Expect(IsSha256(emitter.MaterialSha256) && IsSha256(emitter.TextureSha256),
+                    $"effect material/texture identity is invalid: {definition.ResRef}/{emitter.Name}");
+                Expect(emitter.Columns > 0 && emitter.Rows > 0 &&
+                       emitter.FramesPerSecond >= 0 && float.IsFinite(emitter.FramesPerSecond),
+                    $"effect contact-sheet contract is invalid: {definition.ResRef}/{emitter.Name}");
+                Expect(emitter.BirthRate > 0 && emitter.Lifetime > 0 &&
+                       emitter.BirthRateRange >= 0 && emitter.LifetimeRange >= 0,
+                    $"effect timing/range contract is invalid: {definition.ResRef}/{emitter.Name}");
+                Expect(emitter.SourceDirection.LengthSquared() > .99f &&
+                       emitter.LocalRotation.LengthSquared() > .99f,
+                    $"effect basis/direction contract is invalid: {definition.ResRef}/{emitter.Name}");
+            }
+            Expect(DragonAgeOriginsEffectCatalog.TryResolve(
+                       $"models/{definition.ResRef}.glb", out var resolved) &&
+                   ReferenceEquals(resolved, definition),
+                $"effect route resolution failed: {definition.ResRef}");
+        }
+        Expect(expected.Count == 0, "City Elf effect inventory is incomplete");
+    }
+
+    private static void DragonAgeCityElfEffectCatalogRejectsUnknownDefinition()
+    {
+        Expect(!DragonAgeOriginsEffectCatalog.TryResolve(
+                "models/fxe_unknown_fallback.glb", out _),
+            "unknown DAO effect definition did not fail closed");
+    }
+
+    private static void DragonAgeCoordinateBasisPreservesAsymmetricRotation()
+    {
+        var sourceDirection = System.Numerics.Vector3.Normalize(
+            new System.Numerics.Vector3(.23f, -.61f, .74f));
+        var sourceRotation = System.Numerics.Quaternion.Normalize(
+            System.Numerics.Quaternion.CreateFromYawPitchRoll(.71f, -.38f, 1.13f));
+        var expected = DragonAgeOriginsCoordinateSystem.Convert(
+            System.Numerics.Vector3.Transform(sourceDirection, sourceRotation));
+        var actual = System.Numerics.Vector3.Transform(
+            DragonAgeOriginsCoordinateSystem.Convert(sourceDirection),
+            DragonAgeOriginsCoordinateSystem.Convert(sourceRotation));
+        Expect(System.Numerics.Vector3.Distance(expected, actual) < .00001f,
+            "DAO emitter local rotation was not conjugated through the coordinate basis");
+    }
+
+    private static bool IsSha256(string value) =>
+        value.Length == 64 && value.All(character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static void DragonAgeRenderPolicyIgnoresLayoutIdentity()
+    {
+        var first = DragonAgeOriginsRenderFidelityPolicy.Evaluate(
+            "synthetic_desert_l01", "enhanced", "forward_plus", validatedAtmosphere: true);
+        var second = DragonAgeOriginsRenderFidelityPolicy.Evaluate(
+            "unrelated_station_x9", "enhanced", "forward_plus", validatedAtmosphere: true);
+        Expect(first.Layout != second.Layout &&
+               first.Tier == second.Tier &&
+               first.RenderingMethod == second.RenderingMethod &&
+               first.ValidatedAtmosphere == second.ValidatedAtmosphere &&
+               first.EnhancedFeatures == second.EnhancedFeatures &&
+               first.Status == second.Status,
+            "DAO presentation behavior was selected by layout identity");
+
+        var source = DragonAgeOriginsRenderFidelityPolicy.Evaluate(
+            "third_arbitrary_layout", "source", "mobile", validatedAtmosphere: false);
+        Expect(source.Tier == DragonAgePresentationTier.Source &&
+               !source.EnhancedFeatures && source.Status == "unsupported",
+            "DAO source tier did not remain source on an arbitrary layout");
+
+        var rejected = false;
+        try
+        {
+            _ = DragonAgeOriginsRenderFidelityPolicy.Evaluate(
+                "fourth_arbitrary_layout", "enhanced", "mobile", validatedAtmosphere: true);
+        }
+        catch (InvalidOperationException)
+        {
+            rejected = true;
+        }
+        Expect(rejected, "DAO enhanced presentation accepted the mobile renderer");
+    }
+
+    private static void DragonAgePbrCoverageRequiresExactIdentityBoundSurfaces()
+    {
+        DragonAgeOriginsRenderFidelityPolicy.RequirePbrCoverage(
+            new DragonAgePbrCoverage(
+                RenderableSurfaces: 81278,
+                BoundSurfaces: 81278,
+                IdentityReadySurfaces: 81278,
+                PbrReadySurfaces: 81278));
+        Expect(DragonAgeOriginsRenderFidelityPolicy.RequirePbrContract(
+                   "kind=installed-gltf-pbr;pbr_status=ready;mao_status=unsupported") ==
+               DragonAgePbrContractKind.ImportedGltf &&
+               DragonAgeOriginsRenderFidelityPolicy.RequirePbrContract(
+                   "kind=installed-terrain-contract;pbr_status=source-shader") ==
+               DragonAgePbrContractKind.SourceShader &&
+               DragonAgeOriginsRenderFidelityPolicy.RequirePbrContract(
+                   "kind=installed-water-contract;pbr_status=enhanced-shader") ==
+               DragonAgePbrContractKind.EnhancedShader,
+            "DAO known PBR identity statuses did not remain distinct");
+
+        ExpectThrows<InvalidDataException>(
+            () => DragonAgeOriginsRenderFidelityPolicy.RequirePbrCoverage(
+                new DragonAgePbrCoverage(81278, 81278, 81278, 81277)),
+            "DAO global census accepted one non-PBR visible surface");
+        ExpectThrows<InvalidDataException>(
+            () => DragonAgeOriginsRenderFidelityPolicy.RequirePbrContract(
+                "pbr_status=ready-but-partial"),
+            "DAO PBR identity accepted a prefix-compatible partial status");
+        ExpectThrows<InvalidDataException>(
+            () => DragonAgeOriginsRenderFidelityPolicy.RequirePbrContract(
+                "pbr_status=ready;pbr_status=enhanced-shader"),
+            "DAO PBR identity accepted duplicate status tokens");
+        ExpectThrows<InvalidDataException>(
+            () => DragonAgeOriginsRenderFidelityPolicy.RequirePbrContract(
+                "mao_status=unsupported"),
+            "DAO material identity accepted an absent PBR status");
+    }
+
+    private static void EnhancedRenderingQualityIsApplicationWide()
+    {
+        var decision = RenderingQualityPolicy.Resolve(new RenderingQualityRequest(
+            RenderingPresentationTier.Enhanced,
+            RenderingBackend.ForwardPlus,
+            RenderingSelectionScope.Application,
+            SelectionKey: null,
+            RenderingQualityPolicy.AllCapabilities,
+            SourceAuthorizedRenderFeature.Reflections |
+            SourceAuthorizedRenderFeature.IndirectLighting |
+            SourceAuthorizedRenderFeature.Volumetrics));
+
+        Expect(decision.EnabledEnhancedCapabilities == RenderingQualityPolicy.AllCapabilities &&
+               decision.Reflections is
+               {
+                   Enabled: true,
+                   Status: ConditionalRenderFeatureStatus.Enabled
+               } &&
+               decision.Sdfgi is
+               {
+                   Enabled: true,
+                   Status: ConditionalRenderFeatureStatus.Enabled
+               } &&
+               decision.Volumetrics is
+               {
+                   Enabled: true,
+                   Status: ConditionalRenderFeatureStatus.Enabled
+               },
+            "application-wide enhanced rendering did not enable the full authorized capability set");
+        var values = decision.QualityValues;
+        Expect(values is
+        {
+            TemporalAntialiasing: false,
+            MultisampleAntialiasingSamples: 4,
+            Debanding: true,
+            AnisotropicFilteringSamples: 16,
+            TrilinearMipmapFiltering: true,
+            DirectionalShadowMapSize: 8192,
+            PositionalShadowAtlasSize: 8192,
+            SoftShadowFilterQuality: 5,
+            SsaoQuality: 4,
+            SsaoHalfSize: false,
+            SsaoAdaptiveTarget: 1.0f,
+            SsilQuality: 4,
+            SsilHalfSize: false,
+            SsilAdaptiveTarget: 1.0f,
+            ScreenSpaceReflectionHalfSize: false,
+            GiHalfResolution: false,
+            SdfgiProbeRayCount: 5,
+            SdfgiFramesToConverge: 5,
+            SdfgiFramesToUpdateLights: 0,
+            VolumetricFogFilter: 2
+        },
+            "full-blast quality values drifted");
+        Expect(decision.EvidenceIntent == RenderingQualityPolicy.EnhancedEvidenceIntent &&
+               decision.ParityClaim == RenderingQualityPolicy.NoParityClaim &&
+               decision.ToTelemetryMarker().Contains(
+                   "scope=application tier=enhanced backend=forward_plus", StringComparison.Ordinal) &&
+               decision.ToTelemetryMarker().Contains(
+                   "reflection_policy=source_bound_probes_maps_ssr", StringComparison.Ordinal) &&
+               decision.ToTelemetryMarker().Contains(
+                   "sdfgi_gate=enabled volumetrics=1 volumetrics_gate=enabled",
+                   StringComparison.Ordinal) &&
+               decision.ToTelemetryMarker().EndsWith("parity_claim=none", StringComparison.Ordinal),
+            "enhanced rendering telemetry made an unearned parity claim");
+
+        var gated = RenderingQualityPolicy.Resolve(new RenderingQualityRequest(
+            RenderingPresentationTier.Enhanced,
+            RenderingBackend.ForwardPlus,
+            RenderingSelectionScope.Application,
+            SelectionKey: string.Empty,
+            RenderingQualityPolicy.AllCapabilities,
+            SourceAuthorizedRenderFeature.None));
+        Expect(gated.Reflections is
+        {
+            Enabled: false,
+            Status: ConditionalRenderFeatureStatus.SourceEvidenceRequired
+        } &&
+               gated.Volumetrics is
+               {
+                   Enabled: false,
+                   Status: ConditionalRenderFeatureStatus.SourceEvidenceRequired
+               } &&
+               gated.Sdfgi is
+               {
+                   Enabled: false,
+                   Status: ConditionalRenderFeatureStatus.SourceEvidenceRequired
+               },
+            "reflection, SDFGI, or volumetric enhancement bypassed its source-evidence gate");
+
+        var unavailable = RenderingQualityPolicy.Resolve(new RenderingQualityRequest(
+            RenderingPresentationTier.Enhanced,
+            RenderingBackend.ForwardPlus,
+            RenderingSelectionScope.Application,
+            SelectionKey: null,
+            RenderingQualityPolicy.RequiredEnhancedCapabilities,
+            RenderingQualityPolicy.AllSourceAuthorizedFeatures));
+        Expect(unavailable.Reflections.Status ==
+                   ConditionalRenderFeatureStatus.CapabilityUnavailable &&
+               unavailable.Sdfgi.Status ==
+                   ConditionalRenderFeatureStatus.CapabilityUnavailable &&
+               unavailable.Volumetrics.Status ==
+                   ConditionalRenderFeatureStatus.CapabilityUnavailable,
+            "unavailable optional rendering capabilities did not fail closed");
+
+        var missingCapabilityRejected = false;
+        try
+        {
+            _ = RenderingQualityPolicy.Resolve(new RenderingQualityRequest(
+                RenderingPresentationTier.Enhanced,
+                RenderingBackend.ForwardPlus,
+                RenderingSelectionScope.Application,
+                SelectionKey: null,
+                RenderingQualityPolicy.RequiredEnhancedCapabilities &
+                ~EnhancedRenderingCapability.ScreenSpaceIndirectLighting,
+                SourceAuthorizedRenderFeature.None));
+        }
+        catch (InvalidDataException)
+        {
+            missingCapabilityRejected = true;
+        }
+        Expect(missingCapabilityRejected,
+            "enhanced rendering accepted an incomplete mandatory capability set");
+
+        var mobileRejected = false;
+        try
+        {
+            _ = RenderingQualityPolicy.Resolve(new RenderingQualityRequest(
+                RenderingPresentationTier.Enhanced,
+                RenderingBackend.Mobile,
+                RenderingSelectionScope.Application,
+                SelectionKey: null,
+                RenderingQualityPolicy.AllCapabilities,
+                RenderingQualityPolicy.AllSourceAuthorizedFeatures));
+        }
+        catch (InvalidDataException)
+        {
+            mobileRejected = true;
+        }
+        Expect(mobileRejected,
+            "enhanced rendering accepted the mobile backend");
+    }
+
+    private static void SourceRenderingQualityRemainsSeparateFromEnhancement()
+    {
+        var decision = RenderingQualityPolicy.Resolve(new RenderingQualityRequest(
+            RenderingPresentationTier.Source,
+            RenderingBackend.Compatibility,
+            RenderingSelectionScope.Application,
+            SelectionKey: null,
+            RenderingQualityPolicy.AllCapabilities,
+            SourceAuthorizedRenderFeature.Reflections |
+            SourceAuthorizedRenderFeature.Volumetrics));
+
+        Expect(decision.EnabledEnhancedCapabilities == EnhancedRenderingCapability.None &&
+               decision.Reflections.Status == ConditionalRenderFeatureStatus.OwnedBySourceTier &&
+               decision.Volumetrics.Status == ConditionalRenderFeatureStatus.OwnedBySourceTier &&
+               decision.QualityValues is null &&
+               decision.EvidenceIntent == RenderingQualityPolicy.SourceComparisonEvidenceIntent &&
+               decision.ParityClaim == RenderingQualityPolicy.NoParityClaim,
+            "source comparison inherited enhanced rendering or an automatic parity claim");
+
+        var forwardPlusSource = RenderingQualityPolicy.Resolve(new RenderingQualityRequest(
+            RenderingPresentationTier.Source,
+            RenderingBackend.ForwardPlus,
+            RenderingSelectionScope.Application,
+            SelectionKey: null,
+            RenderingQualityPolicy.AllCapabilities,
+            RenderingQualityPolicy.AllSourceAuthorizedFeatures));
+        Expect(forwardPlusSource.EnabledEnhancedCapabilities ==
+                   EnhancedRenderingCapability.None &&
+               ReferenceEquals(forwardPlusSource.QualityValues,
+                   RenderingQualityPolicy.FullBlastValues) &&
+               forwardPlusSource.ToTelemetryMarker().Contains(
+                   "tier=source backend=forward_plus agx=0 shadows=1 shadow_size=8192 " +
+                   "anisotropy=1 anisotropy_samples=16 ssao=0 ssil=0 msaa=4x taa=0 " +
+                   "debanding=1",
+                   StringComparison.Ordinal) &&
+               forwardPlusSource.ToTelemetryMarker().EndsWith(
+                   "parity_claim=none", StringComparison.Ordinal),
+            "source Forward+ telemetry hid global sampling budgets or enabled enhanced lighting");
+    }
+
+    private static void RenderingQualityRejectsSceneKeyedSelection()
+    {
+        foreach (var (scope, key) in new[]
+                 {
+                     (RenderingSelectionScope.Profile, "synthetic-profile"),
+                     (RenderingSelectionScope.Area, "synthetic-area"),
+                     (RenderingSelectionScope.Module, "synthetic-module"),
+                     (RenderingSelectionScope.Layout, "synthetic-layout")
+                 })
+        {
+            var rejected = false;
+            try
+            {
+                _ = RenderingQualityPolicy.Resolve(new RenderingQualityRequest(
+                    RenderingPresentationTier.Enhanced,
+                    RenderingBackend.ForwardPlus,
+                    scope,
+                    key,
+                    RenderingQualityPolicy.AllCapabilities,
+                    SourceAuthorizedRenderFeature.None));
+            }
+            catch (InvalidDataException)
+            {
+                rejected = true;
+            }
+            Expect(rejected, $"rendering presentation accepted a {scope} selector");
+        }
+
+        var applicationKeyRejected = false;
+        try
+        {
+            _ = RenderingQualityPolicy.Resolve(new RenderingQualityRequest(
+                RenderingPresentationTier.Enhanced,
+                RenderingBackend.ForwardPlus,
+                RenderingSelectionScope.Application,
+                "synthetic-layout-smuggled-as-application-key",
+                RenderingQualityPolicy.AllCapabilities,
+                SourceAuthorizedRenderFeature.None));
+        }
+        catch (InvalidDataException)
+        {
+            applicationKeyRejected = true;
+        }
+        Expect(applicationKeyRejected,
+            "application rendering selection accepted a hidden scene key");
+
+        var unknownBackendRejected = false;
+        try
+        {
+            _ = RenderingQualityPolicy.ParseBackend("synthetic_renderer");
+        }
+        catch (InvalidDataException)
+        {
+            unknownBackendRejected = true;
+        }
+        Expect(unknownBackendRejected,
+            "unknown rendering backend did not fail closed");
+
+        var unknownCapabilityRejected = false;
+        try
+        {
+            _ = RenderingQualityPolicy.Resolve(new RenderingQualityRequest(
+                RenderingPresentationTier.Enhanced,
+                RenderingBackend.ForwardPlus,
+                RenderingSelectionScope.Application,
+                SelectionKey: null,
+                RenderingQualityPolicy.AllCapabilities |
+                (EnhancedRenderingCapability)(1 << 20),
+                SourceAuthorizedRenderFeature.None));
+        }
+        catch (InvalidDataException)
+        {
+            unknownCapabilityRejected = true;
+        }
+        Expect(unknownCapabilityRejected,
+            "unknown rendering capability did not fail closed");
+    }
+
+    private static void CinematicFramingAcceptsVisibleSubject()
+    {
+        var result = CinematicFramingGate.Evaluate(
+            new CinematicFramingSample(
+                System.Numerics.Vector3.Zero,
+                System.Numerics.Vector3.UnitZ,
+                System.Numerics.Vector3.UnitY,
+                60,
+                16.0f / 9.0f,
+                0.05f,
+                new System.Numerics.Vector3(0, 0, 3),
+                0.32f,
+                LineOfSightClear: true),
+            new CinematicFramingRequirements(0.05f, 0.05f, 0.75f));
+
+        Expect(result.Accepted && result.Failures == CinematicFramingFailure.None,
+            "visible centered cinematic subject failed the framing gate");
+    }
+
+    private static void CinematicFramingRejectsWallOcclusion()
+    {
+        var result = CinematicFramingGate.Evaluate(
+            new CinematicFramingSample(
+                System.Numerics.Vector3.Zero,
+                System.Numerics.Vector3.UnitZ,
+                System.Numerics.Vector3.UnitY,
+                60,
+                16.0f / 9.0f,
+                0.05f,
+                new System.Numerics.Vector3(0, 0, 3),
+                0.32f,
+                LineOfSightClear: false),
+            new CinematicFramingRequirements(0.05f, 0.05f, 0.75f));
+
+        Expect(!result.Accepted &&
+               result.Failures.HasFlag(CinematicFramingFailure.Occluded),
+            "wall-occluded cinematic subject passed the framing gate");
+    }
+
+    private static void KotorDialogueCameraKeepsSpeakerObjectivelyFramed()
+    {
+        var listener = new System.Numerics.Vector3(0, 1.61f, 0);
+        var speaker = new System.Numerics.Vector3(0, 1.60f, -2.4f);
+        var shot = KotorDialogueCameraComposer.ComposeSpeakerShot(
+            listener, speaker, cameraAngle: 1, verticalFieldOfViewDegrees: 55);
+        var result = CinematicFramingGate.Evaluate(
+            new CinematicFramingSample(
+                shot.Position,
+                shot.Target - shot.Position,
+                shot.Up,
+                shot.VerticalFieldOfViewDegrees,
+                16.0f / 9.0f,
+                0.05f,
+                speaker,
+                0.16f,
+                LineOfSightClear: true),
+            new CinematicFramingRequirements(0.01f, 0.12f, 0.62f));
+
+        Expect(shot.Kind == KotorDialogueShotKind.SpeakerTight,
+            "KOTOR CameraAngle=1 did not select a tight-speaker beat");
+        Expect(result.Accepted,
+            $"KOTOR tight-speaker beat failed framing: {result.Failures}");
+        Expect(result.NormalizedViewportCenter.X is > -0.4f and < 0.1f,
+            "KOTOR tight-speaker beat drifted outside the retail left-third composition");
+        Expect(System.Numerics.Vector3.Distance(shot.Position, speaker) < 1.0f,
+            "KOTOR tight-speaker beat drifted into a distant/first-person gameplay camera");
+
+        var automaticShot = KotorDialogueCameraComposer.ComposeSpeakerShot(
+            listener,
+            new System.Numerics.Vector3(0, 1.60f, -8.0f),
+            cameraAngle: 0,
+            verticalFieldOfViewDegrees: 55);
+        Expect(automaticShot.Kind == KotorDialogueShotKind.SpeakerTight &&
+               System.Numerics.Vector3.Distance(
+                   automaticShot.Position,
+                   new System.Numerics.Vector3(0, 1.60f, -8.0f)) < 1.0f,
+            "KOTOR automatic dialogue framing drifted into a distant midpoint shot");
+    }
+
+    private static void KotorDialogueCameraRejectsCoincidentParticipants()
+    {
+        var threw = false;
+        try
+        {
+            _ = KotorDialogueCameraComposer.ComposeSpeakerShot(
+                System.Numerics.Vector3.One,
+                System.Numerics.Vector3.One,
+                cameraAngle: 1,
+                verticalFieldOfViewDegrees: 55);
+        }
+        catch (ArgumentException)
+        {
+            threw = true;
+        }
+
+        Expect(threw,
+            "KOTOR dialogue camera guessed a shot for coincident participants");
+    }
+
+    private static void KotorFirstEncounterCameraBeatsRemainSourceBound()
+    {
+        var beats = KotorFirstEncounterCameraContract.Beats;
+        Expect(beats.Select(beat => beat.CameraId).SequenceEqual([26, 19, 20]),
+            "KOTOR first-encounter authored camera order drifted");
+        Expect(beats[0].SubjectTag == "PLAYER" &&
+               beats.Skip(1).All(beat => beat.SubjectTag == "end_soldier2"),
+            "KOTOR first-encounter source-event targets drifted");
+        Expect(beats.All(beat => beat.SubjectRadius > 0 &&
+                                beat.MinimumProjectedHeight > 0 &&
+                                beat.MaximumProjectedHeight > beat.MinimumProjectedHeight),
+            "KOTOR first-encounter framing requirements are invalid");
+    }
+
+    private static void KotorCameraCollisionSelectsOnlySourceOpaqueSurfaces()
+    {
+        var selected = KotorCameraCollisionPolicy.RequireBlockingSurfaceIndices(
+        [
+            KotorCameraSurfaceOpacity.SourceOpaque,
+            KotorCameraSurfaceOpacity.SourceTransparent,
+            KotorCameraSurfaceOpacity.SourceOpaque,
+            KotorCameraSurfaceOpacity.SourceTransparent
+        ]);
+        Expect(selected.SequenceEqual([0, 2]),
+            "KOTOR mixed-surface camera collision included a transparent surface");
+        Expect(KotorCameraCollisionPolicy.RequireBlockingSurfaceIndices(
+                [KotorCameraSurfaceOpacity.SourceTransparent]).Count == 0,
+            "KOTOR transparent-only mesh produced camera collision");
+
+        var failedClosed = false;
+        try
+        {
+            _ = KotorCameraCollisionPolicy.RequireBlockingSurfaceIndices(
+            [
+                KotorCameraSurfaceOpacity.SourceOpaque,
+                KotorCameraSurfaceOpacity.Unsupported
+            ]);
+        }
+        catch (InvalidDataException)
+        {
+            failedClosed = true;
+        }
+        Expect(failedClosed,
+            "KOTOR camera collision accepted an unknown surface opacity");
     }
 
     private static void RegistryRejectsDuplicateProfiles()
@@ -173,6 +902,26 @@ internal static class Program
             "closed authored door did not block movement");
         Expect(open.Accepted && open.Moved,
             "open authored door still blocked movement");
+    }
+
+    private static void KotorMovementRejectsDegenerateNavigation()
+    {
+        var rejected = false;
+        try
+        {
+            _ = new KotorMovementSimulation(
+                [new KotorNavigationTriangle(
+                    System.Numerics.Vector3.Zero,
+                    System.Numerics.Vector3.One,
+                    new System.Numerics.Vector3(2, 2, 2))],
+                new KotorMovementConfiguration(2, 6));
+        }
+        catch (ArgumentException)
+        {
+            rejected = true;
+        }
+
+        Expect(rejected, "degenerate navigation triangle was accepted");
     }
 
     private static void KotorGameplayOwnsOpeningState()
@@ -569,6 +1318,187 @@ internal static class Program
             $"limit={configuration.Complexity.MaximumExponent:F4}");
     }
 
+    private static void KotorEnvironmentMaterialPolicyPreservesSourceContract()
+    {
+        Expect(KotorEnvironmentMaterialPolicy.FaceOrder.SequenceEqual(
+                new[]
+                {
+                    "positive-x", "negative-x", "positive-y",
+                    "negative-y", "positive-z", "negative-z"
+                }),
+            "KOTOR cubemap face order drifted");
+        var odysseyForward = KotorEnvironmentMaterialPolicy.ToOdysseySampleDirection(
+            new System.Numerics.Vector3(0, 0, -1));
+        Expect(odysseyForward == System.Numerics.Vector3.UnitY,
+            "Godot forward did not map to Odyssey forward for cubemap sampling");
+        Expect(KotorEnvironmentMaterialPolicy.EnvironmentMapResref(
+                "metal__aurora_envmap_CM_Baremetal__aurora_additive") ==
+               "CM_Baremetal",
+            "environment-map material marker was not parsed deterministically");
+        const string scaledMaterial =
+            "metal__aurora_envmap_CM_Baremetal__aurora_normal_scale_1.3";
+        Expect(KotorEnvironmentMaterialPolicy.AuthoredNormalScale(scaledMaterial) == 1.3f &&
+               KotorEnvironmentMaterialPolicy.EnvironmentMapResref(scaledMaterial) ==
+               "CM_Baremetal" &&
+               KotorEnvironmentMaterialPolicy.AuthoredNormalScale("plain") is null,
+            "TXI bumpmapscaling marker did not preserve its exact material value");
+        Expect(KotorEnvironmentMaterialPolicy.IsSourceDecal(
+                   "floor_mark__aurora_decal") &&
+               !KotorEnvironmentMaterialPolicy.IsSourceDecal("floor_mark") &&
+               KotorEnvironmentMaterialPolicy.SourceDecalRenderPriority == 1,
+            "TXI decal marker did not preserve no-depth-write render ordering");
+        ExpectThrows<InvalidDataException>(
+            () => KotorEnvironmentMaterialPolicy.AuthoredNormalScale(
+                "wall__aurora_normal_scale_nan"),
+            "non-finite normal-scale marker was accepted");
+        Expect(KotorEnvironmentMaterialPolicy.ReflectionStrength(enhanced: false) == 0.0f &&
+               KotorEnvironmentMaterialPolicy.ReflectionStrength(enhanced: true) > 0.0f &&
+               KotorEnvironmentMaterialPolicy.MaximumReflectionWeight(enhanced: true) < 1.0f,
+            "source and enhanced reflection-strength policies collapsed");
+    }
+
+    private static void KotorLightmapTransferKeepsSourceAndEnhancedDistinct()
+    {
+        var source = KotorEnvironmentMaterialPolicy.LightmapTransfer(enhanced: false);
+        var enhanced = KotorEnvironmentMaterialPolicy.LightmapTransfer(enhanced: true);
+        Expect(source.Formula == "surface-times-clamped-lightmap" &&
+               source.DynamicLightAlbedoWeight == 0 &&
+               source.BakedEmissionWeight == 1 &&
+               source.DynamicAmbientEmissionWeight == 0 &&
+               !source.DynamicLightsEnabled,
+            "KOTOR source lightmap transfer can double-light a baked surface");
+
+        var surface = new System.Numerics.Vector3(.8f, .4f, 1.2f);
+        var lightmap = new System.Numerics.Vector3(1.4f, .5f, -.25f);
+        var sourceDark = source.ComputeEmission(
+            surface, lightmap, System.Numerics.Vector3.Zero);
+        var sourceBrightAmbient = source.ComputeEmission(
+            surface, lightmap, new System.Numerics.Vector3(4, 3, 2));
+        Expect(System.Numerics.Vector3.Distance(
+                   sourceDark, new System.Numerics.Vector3(.8f, .2f, 0)) < .000001f &&
+               sourceBrightAmbient == sourceDark,
+            "KOTOR source transfer is not direct surface times clamped lightmap");
+
+        Expect(enhanced.Formula == "baked-preserving-bounded-dynamic" &&
+               enhanced.DynamicLightAlbedoWeight == .12f &&
+               enhanced.BakedEmissionWeight == 1.0f &&
+               enhanced.DynamicAmbientEmissionWeight == .15f &&
+               enhanced.DynamicLightsEnabled,
+            "KOTOR enhanced transfer no longer preserves its bounded dynamic response");
+        var enhancedDark = enhanced.ComputeEmission(
+            surface, new System.Numerics.Vector3(.1f), System.Numerics.Vector3.Zero);
+        var enhancedAmbient = enhanced.ComputeEmission(
+            surface, new System.Numerics.Vector3(.1f), new System.Numerics.Vector3(.8f));
+        Expect(enhancedAmbient.X > enhancedDark.X && enhancedAmbient.Y > enhancedDark.Y,
+            "KOTOR enhanced ambient response is not independently bounded");
+    }
+
+    private static void KotorGenericModulePresentationRemainsStoryNeutral()
+    {
+        var mode = KotorModulePresentationPolicy.RequireContentMode(
+            "TAR_M02AA", KotorModulePresentationPolicy.GenericWorldMode,
+            hasFirstEncounter: false);
+        Expect(mode == KotorModuleContentMode.GenericWorld,
+            "non-Endar KOTOR module did not select generic-world presentation");
+        Expect(KotorEnvironmentMaterialPolicy.EnhancedAuthorizedRenderFeatures ==
+               SourceAuthorizedRenderFeature.Reflections,
+            "generic KOTOR enhancement authorized unproven indirect or atmosphere semantics");
+        Expect(KotorEnvironmentMaterialPolicy.DielectricSpecular(enhanced: false) == 0 &&
+               KotorEnvironmentMaterialPolicy.DielectricSpecular(enhanced: true) > 0 &&
+               KotorEnvironmentMaterialPolicy.FallbackRoughness(enhanced: false) == 1 &&
+               KotorEnvironmentMaterialPolicy.FallbackRoughness(enhanced: true) < 1,
+            "KOTOR source/enhanced material response collapsed");
+
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireEndarAutomation(mode, requested: true),
+            "generic module accepted Endar-only story/camera automation");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireContentMode(
+                "tar_m02aa", KotorModulePresentationPolicy.EndarOpeningMode,
+                hasFirstEncounter: true),
+            "generic module accepted Endar content identity");
+    }
+
+    private static void KotorGenericVisualInventoryFailsClosed()
+    {
+        var complete = new KotorModuleVisualInventory(
+            AuthoredRooms: 17,
+            VisualRooms: 17,
+            AuthoredMaterialSurfaces: 574,
+            ConfiguredMaterialSurfaces: 574,
+            AuthoredEmitters: 0,
+            MaterializedEmitters: 0,
+            EnvironmentMaps: 3,
+            BoundEnvironmentMaps: 3,
+            MissingSourceAssets: 3,
+            ReportedMissingSourceAssets: 3,
+            UnsupportedSourceSemantics: 0);
+        KotorModulePresentationPolicy.RequireVisualInventory(complete);
+
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireVisualInventory(
+                complete with { ConfiguredMaterialSurfaces = 573 }),
+            "generic module accepted incomplete material coverage");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireVisualInventory(
+                complete with { ReportedMissingSourceAssets = 2 }),
+            "generic module hid a missing source asset from its report");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireVisualInventory(
+                complete with { UnsupportedSourceSemantics = 1 }),
+            "generic module accepted unsupported source presentation semantics");
+    }
+
+    private static void KotorGlobalPbrCoverageRequiresEveryEligibleSurface()
+    {
+        var enhanced = new KotorPbrCoverage(
+            RenderableSurfaces: 574,
+            SourceUnshadedSurfaces: 12,
+            PbrSurfaces: 562,
+            EnhancedPresentation: true);
+        KotorModulePresentationPolicy.RequirePbrCoverage(enhanced);
+        KotorModulePresentationPolicy.RequirePbrCoverage(enhanced with
+        {
+            PbrSurfaces = 0,
+            EnhancedPresentation = false
+        });
+
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequirePbrCoverage(
+                enhanced with { PbrSurfaces = 561 }),
+            "KOTOR enhanced presentation accepted one non-PBR eligible surface");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequirePbrCoverage(
+                enhanced with { SourceUnshadedSurfaces = 575 }),
+            "KOTOR PBR census accepted more exclusions than renderable surfaces");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequirePbrCoverage(
+                enhanced with { EnhancedPresentation = false }),
+            "KOTOR source tier accepted enhanced PBR surface counts");
+    }
+
+    private static void KotorRigIdentityRecognizesSourceBodyFamilies()
+    {
+        foreach (var sourceName in new[]
+                 {
+                     "mesh__PMBAM_LArm_2",
+                     "mesh__PMBAM_RArm_3",
+                     "mesh__PMBBM_armL_2",
+                     "mesh__PMBBM_armR_3"
+                 })
+            Expect(KotorRigIdentityPolicy.IsArmMeshName(sourceName),
+                $"KOTOR source arm mesh identity was rejected: {sourceName}");
+
+        foreach (var nonArm in new[]
+                 {
+                     "mesh__PMBAM_Torso_1",
+                     "mesh__PMHA01_head_11",
+                     "mesh__w_Shortswrd_001_w_Shortsword_12"
+                 })
+            Expect(!KotorRigIdentityPolicy.IsArmMeshName(nonArm),
+                $"KOTOR non-arm mesh identity was misclassified: {nonArm}");
+    }
+
     private static void MaterializeMarkers(string root, GameProfileDescriptor descriptor)
     {
         Directory.CreateDirectory(root);
@@ -595,5 +1525,20 @@ internal static class Program
     {
         if (!condition)
             throw new InvalidOperationException(message);
+    }
+
+    private static void ExpectThrows<TException>(Action action, string message)
+        where TException : Exception
+    {
+        try
+        {
+            action();
+        }
+        catch (TException)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(message);
     }
 }

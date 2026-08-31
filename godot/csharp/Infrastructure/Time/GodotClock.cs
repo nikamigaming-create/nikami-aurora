@@ -1,7 +1,7 @@
 using Godot;
-using OpenDAO.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
 
-namespace OpenDAO.Infrastructure.Time;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Time;
 
 public sealed class GodotClock : IClock
 {

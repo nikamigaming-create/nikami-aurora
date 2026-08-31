@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.Presentation;
+namespace Nikami.Aurora.GodotRuntime.Presentation;
 
 internal static class SceneBounds
 {
@@ -14,6 +14,19 @@ internal static class SceneBounds
         {
             result = accumulated * mesh.GetAabb();
             hasBounds = true;
+        }
+        else if (node is MultiMeshInstance3D
+        {
+            Multimesh: { Mesh: not null, InstanceCount: > 0 } multiMesh
+        })
+        {
+            var meshBounds = multiMesh.Mesh.GetAabb();
+            for (var index = 0; index < multiMesh.InstanceCount; index++)
+            {
+                var instanceBounds = accumulated * multiMesh.GetInstanceTransform(index) * meshBounds;
+                result = hasBounds ? result.Merge(instanceBounds) : instanceBounds;
+                hasBounds = true;
+            }
         }
 
         foreach (var child in node.GetChildren())

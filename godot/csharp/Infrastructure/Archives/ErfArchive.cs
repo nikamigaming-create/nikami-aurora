@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 
-namespace OpenDAO.Infrastructure.Archives;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Archives;
 
 /// <summary>
 /// Minimal, read-only DAO ERF/RIM reader used by the runtime. It supports the

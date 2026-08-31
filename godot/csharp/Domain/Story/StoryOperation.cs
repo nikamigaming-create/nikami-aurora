@@ -1,4 +1,4 @@
-namespace OpenDAO.Domain.Story;
+namespace Nikami.Aurora.GodotRuntime.Domain.Story;
 
 public abstract record StoryOperation(int Handle);
 public sealed record SetActive(int Handle, bool Value) : StoryOperation(Handle);

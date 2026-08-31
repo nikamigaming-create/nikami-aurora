@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.Presentation.World;
+namespace Nikami.Aurora.GodotRuntime.Presentation.World;
 
 /// <summary>
 /// Recreates DAO's gold interactable silhouette for authored placeables near

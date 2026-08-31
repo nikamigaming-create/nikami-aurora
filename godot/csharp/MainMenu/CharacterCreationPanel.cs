@@ -1,7 +1,9 @@
 using Godot;
-using OpenDAO.Infrastructure.World;
+using Nikami.Aurora.Profiles.DragonAgeOrigins;
+using Nikami.Aurora.GodotRuntime.Application.Characters;
+using Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 [Tool]
 public partial class CharacterCreationPanel : Control
@@ -29,6 +31,7 @@ public partial class CharacterCreationPanel : Control
     private readonly List<Button> navigationButtons = [];
     private FontFile? font;
     private bool built;
+    private bool previewStatusVisible;
     private int artworkAssetCount;
 
     internal event Action<CharacterProfile>? StartRequested;
@@ -137,6 +140,8 @@ public partial class CharacterCreationPanel : Control
     internal int ArtworkQuadCount => artworkAssetCount;
 
     internal string PreviewModelPath => preview.CurrentModelPath;
+
+    internal Image CapturePreviewImage() => preview.CaptureImage();
 
     internal string CurrentStage => appearanceStage.Visible ? "appearance" : "identity";
 
@@ -370,7 +375,19 @@ public partial class CharacterCreationPanel : Control
     private void RefreshPreview()
     {
         if (preview is null || !IsInstanceValid(preview) || appearanceStrip is null) return;
-        preview.ShowCharacter(raceStrip.Selected.Id, genderStrip.Selected.Id, appearanceStrip.Selected.Id);
+        var ready = preview.ShowCharacter(
+            raceStrip.Selected.Id, genderStrip.Selected.Id, appearanceStrip.Selected.Id);
+        if (playButton is not null) playButton.Disabled = !ready;
+        if (ready)
+        {
+            if (previewStatusVisible) status.Text = string.Empty;
+            previewStatusVisible = false;
+            return;
+        }
+
+        previewStatusVisible = true;
+        SetStatus("This authored preset is not available in the source-bound local import. " +
+                  "Import this selection from your owned Dragon Age installation to continue.");
     }
 
     private void ShowIdentity()
@@ -386,6 +403,7 @@ public partial class CharacterCreationPanel : Control
         appearanceStage.Visible = true;
         status.Text = string.Empty;
         RefreshAppearanceSummary();
+        RefreshPreview();
         nameInput.GrabFocus();
         nameInput.SelectAll();
     }
@@ -402,6 +420,19 @@ public partial class CharacterCreationPanel : Control
         if (!CharacterProfileRules.Validate(profile, out var error))
         {
             SetStatus(error);
+            return;
+        }
+        var authored = RetailCharacterAppearanceCatalog.Resolve(
+            profile.Race, profile.Gender, profile.Appearance);
+        if (authored is null ||
+            !DragonAgeOriginsCharacterCreationCatalog.CanStart(
+                preview.IdentityState, authored))
+        {
+            RefreshPreview();
+            SetStatus("The selected appearance is unavailable. No substitute character will be used.");
+            GD.PushWarning($"OPENDAO_CHARGEN_START status=blocked race={profile.Race} " +
+                           $"gender={profile.Gender} appearance={profile.Appearance} " +
+                           $"preview_selection={preview.CurrentSelectionKey} npc_substitution=0");
             return;
         }
         StartRequested?.Invoke(profile);

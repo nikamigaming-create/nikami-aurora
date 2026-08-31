@@ -1,4 +1,4 @@
-namespace OpenDAO.Domain.Abilities;
+namespace Nikami.Aurora.GodotRuntime.Domain.Abilities;
 
 public interface IAbilityCatalog
 {

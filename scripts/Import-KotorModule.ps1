@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$GameRoot = $env:NIKAMI_KOTOR_ROOT,
 
+    [ValidatePattern('^[A-Za-z0-9_]{1,16}$')]
     [string]$Module = "end_m01aa",
 
     [string]$OutputRoot,
@@ -11,11 +12,18 @@ param(
 
     [string]$RuntimeConfig,
 
+    [ValidateRange(0, 65535)]
+    [int]$PlayerAppearanceId = 137,
+
+    [ValidateRange(0, 65535)]
+    [int]$PlayerPortraitId = 18,
+
     [string]$Python = "py"
 )
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
+$Module = $Module.ToLowerInvariant()
 if ([string]::IsNullOrWhiteSpace($GameRoot)) {
     throw "Pass -GameRoot or set NIKAMI_KOTOR_ROOT."
 }
@@ -45,7 +53,9 @@ $arguments += @(
     "--module", $Module,
     "--output", $OutputRoot,
     "--mdlops", $MdlOps,
-    "--runtime-config", $RuntimeConfig
+    "--runtime-config", $RuntimeConfig,
+    "--player-appearance-id", $PlayerAppearanceId,
+    "--player-portrait-id", $PlayerPortraitId
 )
 
 & $Python @arguments

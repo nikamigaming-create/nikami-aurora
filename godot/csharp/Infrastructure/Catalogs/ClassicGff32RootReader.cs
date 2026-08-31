@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 
-namespace OpenDAO.Infrastructure.Catalogs;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Catalogs;
 
 internal sealed class ClassicGff32RootReader
 {

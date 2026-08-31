@@ -19,6 +19,8 @@ captures/
 logs/
 docs/evidence/*/raw/
 godot/.godot/
+/imgui.ini
+/haventools_settings.ini
 
 # Proprietary game content and generated derivatives
 *.bif

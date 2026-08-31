@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Godot;
 
-namespace OpenDAO.Launcher;
+namespace Nikami.Aurora.GodotRuntime.Launcher;
 
 internal sealed record InstallationScan(
     string GameRoot,

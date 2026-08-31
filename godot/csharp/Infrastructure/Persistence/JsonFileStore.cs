@@ -1,13 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using OpenDAO.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Serialization;
 
-namespace OpenDAO.Infrastructure.Persistence;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Persistence;
 
 public sealed class JsonFileStore(IRuntimeEnvironment environment) : IJsonStore
 {
-    private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
-
     public JsonObject? Read(string path)
     {
         var resolved = Resolve(path);
@@ -27,7 +26,8 @@ public sealed class JsonFileStore(IRuntimeEnvironment environment) : IJsonStore
             var directory = Path.GetDirectoryName(resolved);
             if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
             var temporary = resolved + ".tmp";
-            File.WriteAllText(temporary, document.ToJsonString(WriteOptions) + System.Environment.NewLine);
+            File.WriteAllText(temporary,
+                document.ToJsonString(RuntimeJsonOptions.Indented) + System.Environment.NewLine);
             File.Move(temporary, resolved, true);
             return true;
         }

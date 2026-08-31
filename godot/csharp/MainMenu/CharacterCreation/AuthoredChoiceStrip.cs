@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal sealed partial class AuthoredChoiceStrip : Control
 {

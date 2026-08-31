@@ -1,8 +1,8 @@
 using System.Text.Json;
 using Godot;
-using OpenDAO.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
-namespace OpenDAO.Presentation.Cinematics;
+namespace Nikami.Aurora.GodotRuntime.Presentation.Cinematics;
 
 /// <summary>
 /// Evaluates the installed FaceFX 1.7 data directly. The source assets are decoded once into
@@ -17,6 +17,7 @@ internal sealed class FaceFxRuntime
     private const string SharedActorsPath = "res://assets/generated/cutscenes/arl100cs_sunset/facefx-actors.json";
     private const string ProofPath = "res://assets/generated/cutscenes/arl100cs_sunset/facefx-graph-proof.json";
     private const string ShaderPath = "res://shaders/dao_facefx_material.gdshader";
+    private const string EnhancedShaderPath = "res://shaders/dao_facefx_material_enhanced.gdshader";
     private const string EmotionRoot = "res://assets/generated/cutscenes/arl100cs_sunset/emotions/";
 
     private readonly Dictionary<string, FaceAnimation> animations = new(StringComparer.OrdinalIgnoreCase);
@@ -480,11 +481,12 @@ internal sealed class FaceFxRuntime
                 return null;
 
             if (mesh.GetActiveMaterial(0) is ShaderMaterial existing &&
-                existing.Shader?.ResourcePath == ShaderPath)
+                IsFaceFxShader(existing.Shader?.ResourcePath))
             {
                 BindEmotionMaps(existing, mask0, mask1, normal);
                 GD.Print("OPENDAO_FACE_MATERIAL status=ready source=retail-base-material " +
-                         $"mesh={mesh.Name} reuse=1");
+                         $"mesh={mesh.Name} reuse=1 tier=" +
+                         (existing.Shader?.ResourcePath == EnhancedShaderPath ? "enhanced" : "source"));
                 return existing;
             }
             if (mesh.GetActiveMaterial(0) is not BaseMaterial3D source || source.AlbedoTexture is null)
@@ -522,6 +524,9 @@ internal sealed class FaceFxRuntime
         }
         return null;
     }
+
+    private static bool IsFaceFxShader(string? resourcePath) =>
+        resourcePath is ShaderPath or EnhancedShaderPath;
 
     private static void BindEmotionMaps(ShaderMaterial material, Texture2D mask0,
         Texture2D mask1, Texture2D normal)

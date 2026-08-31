@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.Presentation.Rigging;
+namespace Nikami.Aurora.GodotRuntime.Presentation.Rigging;
 
 internal static class RigAnimationBank
 {
