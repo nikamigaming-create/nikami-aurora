@@ -1,9 +1,6 @@
-namespace OpenDAO.Application.Characters;
+using Nikami.Aurora.Profiles.DragonAgeOrigins;
 
-public sealed record RetailCharacterAppearance(
-    string Morph,
-    string StandingRelativePath,
-    string BedRelativePath);
+namespace Nikami.Aurora.GodotRuntime.Application.Characters;
 
 /// <summary>
 /// Maps an authored character-creation selection to the installed retail
@@ -11,26 +8,10 @@ public sealed record RetailCharacterAppearance(
 /// </summary>
 public static class RetailCharacterAppearanceCatalog
 {
-    public static RetailCharacterAppearance? Resolve(string race, string gender,
-        string appearance) => (race.ToLowerInvariant(), gender.ToLowerInvariant(),
-        appearance.ToLowerInvariant()) switch
-        {
-            ("elf", "female", "preset-1") => new RetailCharacterAppearance(
-                "ef_cps_p01.mop",
-                "quickplay-characters/ef_cps_p01.glb",
-                "quickplay-characters/ef_cps_p01-bed.glb"),
-            ("elf", "female", "preset-2") => new RetailCharacterAppearance(
-                "ef_cps_p02.mop",
-                "quickplay-characters/ef_cps_p02.glb",
-                "quickplay-characters/ef_cps_p02-bed.glb"),
-            ("elf", "female", "preset-3") => new RetailCharacterAppearance(
-                "ef_cps_p03.mop",
-                "quickplay-characters/ef_cps_p03.glb",
-                "quickplay-characters/ef_cps_p03-bed.glb"),
-            ("elf", "female", "preset-4") => new RetailCharacterAppearance(
-                "ef_cps_p04.mop",
-                "quickplay-characters/ef_cps_p04.glb",
-                "quickplay-characters/ef_cps_p04-bed.glb"),
-            _ => null
-        };
+    public static IReadOnlyList<DragonAgeCharacterCreationAppearance> Appearances =>
+        DragonAgeOriginsCharacterCreationCatalog.Appearances;
+
+    public static DragonAgeCharacterCreationAppearance? Resolve(
+        string race, string gender, string appearance) =>
+        DragonAgeOriginsCharacterCreationCatalog.Resolve(race, gender, appearance);
 }

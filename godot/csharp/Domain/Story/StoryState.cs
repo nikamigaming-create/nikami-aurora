@@ -1,6 +1,6 @@
-using OpenDAO.Domain.Common;
+using Nikami.Aurora.GodotRuntime.Domain.Common;
 
-namespace OpenDAO.Domain.Story;
+namespace Nikami.Aurora.GodotRuntime.Domain.Story;
 
 public sealed class StoryState
 {

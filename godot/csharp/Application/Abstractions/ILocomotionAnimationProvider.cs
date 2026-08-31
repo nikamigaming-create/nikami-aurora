@@ -1,6 +1,6 @@
-using OpenDAO.Domain.Characters;
+using Nikami.Aurora.GodotRuntime.Domain.Characters;
 
-namespace OpenDAO.Application.Abstractions;
+namespace Nikami.Aurora.GodotRuntime.Application.Abstractions;
 
 public sealed record LocomotionAnimationSet(
     string BankPath,

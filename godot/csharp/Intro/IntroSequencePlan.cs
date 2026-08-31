@@ -1,6 +1,6 @@
 // Matthew W, 2026-08-12
 
-namespace OpenDAO.Launcher;
+namespace Nikami.Aurora.GodotRuntime.Launcher;
 
 internal sealed record IntroMovieEntry(string ResourceName, string PhysicalPath);
 

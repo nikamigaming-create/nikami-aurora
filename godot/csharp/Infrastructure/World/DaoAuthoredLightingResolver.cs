@@ -1,10 +1,11 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.World;
+using System.Security.Cryptography;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.World;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 /// <summary>
 /// Resolves the installed engine's global irradiance fallback when an area has
@@ -30,7 +31,8 @@ public sealed class DaoAuthoredLightingResolver : IAuthoredLightingResolver
             ProbeMatrixR = coefficients[..16],
             ProbeMatrixG = coefficients[16..32],
             ProbeMatrixB = coefficients[32..48],
-            ProbeResource = NightProbeResource
+            ProbeResource = NightProbeResource,
+            ProbeResourceSha256 = Convert.ToHexString(SHA256.HashData(payload!)).ToLowerInvariant()
         };
     }
 

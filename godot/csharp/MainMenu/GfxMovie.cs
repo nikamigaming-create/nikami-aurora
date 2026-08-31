@@ -1,10 +1,10 @@
-﻿// Matthew W, 2026-08-12
+// Matthew W, 2026-08-12
 
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal readonly record struct GfxMatrix(
     double ScaleX,

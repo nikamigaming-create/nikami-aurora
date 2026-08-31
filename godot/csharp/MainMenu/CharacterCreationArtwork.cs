@@ -1,7 +1,7 @@
 using Godot;
-using OpenDAO.Infrastructure.Archives;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Archives;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 /// <summary>
 /// Provides authored character-generation textures directly from guiexport.erf.

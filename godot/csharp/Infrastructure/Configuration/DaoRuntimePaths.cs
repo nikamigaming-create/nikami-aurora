@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.Infrastructure.Configuration;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
 public static class DaoRuntimePaths
 {

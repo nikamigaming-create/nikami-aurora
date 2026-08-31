@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using System.Text;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.World;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.World;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 public sealed class DaoArlNavigationGridSource : IAuthoredNavigationGridSource
 {

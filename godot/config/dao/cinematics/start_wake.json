@@ -5,7 +5,11 @@
       "cameraActorId": 5,
       "hiddenActorId": 3,
       "targetActorId": 4,
-      "clearanceMode": "selected-head-to-target"
+      "clearanceMode": "selected-head-to-target",
+      "minimumViewportMargin": 0.04,
+      "minimumProjectedHeight": 0.06,
+      "maximumProjectedHeight": 0.65,
+      "requireClearLineOfSight": true
     }
   ]
 }

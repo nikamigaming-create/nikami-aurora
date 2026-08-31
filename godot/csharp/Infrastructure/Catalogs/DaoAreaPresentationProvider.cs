@@ -1,8 +1,8 @@
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.World;
-using OpenDAO.Infrastructure.Archives;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.World;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Archives;
 
-namespace OpenDAO.Infrastructure.Catalogs;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Catalogs;
 
 public sealed class DaoAreaPresentationProvider(IJsonStore store) : IAreaPresentationProvider
 {

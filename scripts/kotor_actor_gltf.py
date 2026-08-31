@@ -278,6 +278,25 @@ def _append_accessor(
     return accessor_index
 
 
+def compose_animation_translation(
+    rest_translation: list[float] | tuple[float, float, float],
+    source_delta: list[float] | tuple[float, float, float],
+) -> np.ndarray:
+    """Compose an Odyssey position key with the node's authored rest pose.
+
+    MDL animation position controllers contain offsets from the model node's
+    rest translation.  Treating them as replacement glTF translations drops
+    the skeleton root to the local origin (and visibly drives feet through the
+    source floor), especially for creature rigs whose RootDummy carries the
+    standing height.
+    """
+    rest = np.asarray(rest_translation[:3], dtype="<f4")
+    delta = np.asarray(source_delta[:3], dtype="<f4")
+    if rest.shape != (3,) or delta.shape != (3,):
+        raise ValueError("animation translations require exactly three components")
+    return rest + delta
+
+
 def patch_actor_glb(
     data: bytes,
     builder: ActorSceneBuilder,
@@ -326,10 +345,16 @@ def patch_actor_glb(
     exported_animations: list[str] = []
     animations = document.setdefault("animations", [])
     by_name = {animation.name.lower(): animation for animation in animation_model.anims}
+    translation_policies = getattr(animation_model, "translation_policies", {})
     for requested in animation_names:
         animation = by_name.get(requested.lower())
         if animation is None:
             continue
+        translation_policy = translation_policies.get(
+            requested.lower(), "source-absolute")
+        if translation_policy not in {"source-absolute", "rest-plus-source-delta"}:
+            raise RuntimeError(
+                f"Unsupported actor animation translation policy: {translation_policy}")
         samplers: list[dict[str, Any]] = []
         channels: list[dict[str, Any]] = []
         for animation_node in animation.all_nodes():
@@ -342,7 +367,16 @@ def patch_actor_glb(
                     continue
                 if controller.controller_type == MDLControllerType.POSITION:
                     path = "translation"
-                    output = np.asarray([row.data[:3] for row in controller.rows], dtype="<f4")
+                    if translation_policy == "rest-plus-source-delta":
+                        rest_translation = builder.rest_trs.get(
+                            scene_name or "", ([0.0, 0.0, 0.0], [], []))[0]
+                        output = np.asarray([
+                            compose_animation_translation(rest_translation, row.data[:3])
+                            for row in controller.rows
+                        ], dtype="<f4")
+                    else:
+                        output = np.asarray(
+                            [row.data[:3] for row in controller.rows], dtype="<f4")
                     accessor_type = "VEC3"
                 elif controller.controller_type == MDLControllerType.ORIENTATION:
                     path = "rotation"
@@ -391,6 +425,8 @@ def export_actor(
     head_texture: str | None,
     weapon_model: Any | None,
     weapon_name: str | None,
+    left_weapon_model: Any | None = None,
+    left_weapon_name: str | None = None,
     animation_model: Any,
     animation_names: tuple[str, ...],
     material_factory: Callable[[Any, str | None], Any],
@@ -438,10 +474,25 @@ def export_actor(
         builder.register_model(
             weapon_model, weapon_name, attach_parent=weapon_parent, prefix="weapon::",
             merge_by_name=False)
+    if left_weapon_model is not None and left_weapon_name:
+        left_weapon_parent = builder.nodes_by_name.get("lhand", "actor_basis")
+        if left_weapon_parent == "actor_basis":
+            raise RuntimeError(
+                f"Actor weapon hook is missing: lhand ({left_weapon_name})")
+        builder.register_model(
+            left_weapon_model, left_weapon_name, attach_parent=left_weapon_parent,
+            prefix="left-weapon::", merge_by_name=False)
     raw = builder.scene.export(file_type="glb")
     animated, exported = patch_actor_glb(raw, builder, animation_model, animation_names)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(animated)
+    bounds = np.asarray(builder.scene.bounds, dtype=np.float64)
+    extent = bounds[1] - bounds[0]
+    translation_policies = getattr(animation_model, "translation_policies", {})
+    exported_translation_policies = {
+        name: translation_policies.get(name.casefold(), "source-absolute")
+        for name in exported
+    }
     return {
         "meshCount": builder.mesh_count,
         "vertexCount": builder.vertex_count,
@@ -449,4 +500,11 @@ def export_actor(
         "skinCount": len(builder.skin_specs),
         "headSkinCount": head_skin_count,
         "animations": exported,
+        "translationPolicy": (
+            exported_translation_policies.get(exported[0], "none")
+            if exported else "none"),
+        "translationPolicies": exported_translation_policies,
+        "boundsMinimum": bounds[0].astype(float).tolist(),
+        "boundsMaximum": bounds[1].astype(float).tolist(),
+        "extent": extent.astype(float).tolist(),
     }

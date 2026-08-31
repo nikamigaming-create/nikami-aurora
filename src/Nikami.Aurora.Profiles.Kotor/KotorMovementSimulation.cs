@@ -65,7 +65,7 @@ public sealed record KotorMovementConfiguration(
 
 public sealed class KotorMovementSimulation
 {
-    private readonly IReadOnlyList<KotorNavigationTriangle> navigation;
+    private readonly IReadOnlyList<PreparedNavigationTriangle> navigation;
     private readonly KotorMovementConfiguration configuration;
 
     public KotorMovementSimulation(
@@ -73,7 +73,7 @@ public sealed class KotorMovementSimulation
         KotorMovementConfiguration configuration)
     {
         this.navigation = navigation.Count > 0
-            ? navigation
+            ? navigation.Select(PreparedNavigationTriangle.Create).ToArray()
             : throw new ArgumentException("Navigation cannot be empty", nameof(navigation));
         this.configuration = configuration.Validate();
     }
@@ -139,17 +139,14 @@ public sealed class KotorMovementSimulation
         var found = false;
         foreach (var triangle in navigation)
         {
-            var a = new Vector2(triangle.A.X, triangle.A.Y);
-            var b = new Vector2(triangle.B.X, triangle.B.Y);
-            var c = new Vector2(triangle.C.X, triangle.C.Y);
-            var point = new Vector2(position.X, position.Y);
-            var denominator = (b.Y - c.Y) * (a.X - c.X) +
-                              (c.X - b.X) * (a.Y - c.Y);
-            if (MathF.Abs(denominator) < 0.000001f) continue;
-            var weightA = ((b.Y - c.Y) * (point.X - c.X) +
-                           (c.X - b.X) * (point.Y - c.Y)) / denominator;
-            var weightB = ((c.Y - a.Y) * (point.X - c.X) +
-                           (a.X - c.X) * (point.Y - c.Y)) / denominator;
+            if (!triangle.BoundsContain(position, configuration.BarycentricTolerance))
+                continue;
+            var weightA = ((triangle.BY - triangle.CY) * (position.X - triangle.CX) +
+                           (triangle.CX - triangle.BX) * (position.Y - triangle.CY)) /
+                          triangle.Denominator;
+            var weightB = ((triangle.CY - triangle.AY) * (position.X - triangle.CX) +
+                           (triangle.AX - triangle.CX) * (position.Y - triangle.CY)) /
+                          triangle.Denominator;
             var weightC = 1.0f - weightA - weightB;
             var tolerance = configuration.BarycentricTolerance;
             if (weightA < -tolerance || weightB < -tolerance || weightC < -tolerance)
@@ -164,5 +161,49 @@ public sealed class KotorMovementSimulation
             found = true;
         }
         return found;
+    }
+
+    private readonly record struct PreparedNavigationTriangle(
+        KotorNavigationTriangle Source,
+        float AX,
+        float AY,
+        float BX,
+        float BY,
+        float CX,
+        float CY,
+        float Denominator,
+        float MinimumX,
+        float MaximumX,
+        float MinimumY,
+        float MaximumY)
+    {
+        public static PreparedNavigationTriangle Create(KotorNavigationTriangle source)
+        {
+            var denominator = (source.B.Y - source.C.Y) * (source.A.X - source.C.X) +
+                              (source.C.X - source.B.X) * (source.A.Y - source.C.Y);
+            if (MathF.Abs(denominator) < 0.000001f)
+                throw new ArgumentException("Navigation cannot contain degenerate triangles");
+            return new PreparedNavigationTriangle(
+                source,
+                source.A.X,
+                source.A.Y,
+                source.B.X,
+                source.B.Y,
+                source.C.X,
+                source.C.Y,
+                denominator,
+                MathF.Min(source.A.X, MathF.Min(source.B.X, source.C.X)),
+                MathF.Max(source.A.X, MathF.Max(source.B.X, source.C.X)),
+                MathF.Min(source.A.Y, MathF.Min(source.B.Y, source.C.Y)),
+                MathF.Max(source.A.Y, MathF.Max(source.B.Y, source.C.Y)));
+        }
+
+        public bool BoundsContain(Vector3 point, float tolerance) =>
+            point.X >= MinimumX - tolerance && point.X <= MaximumX + tolerance &&
+            point.Y >= MinimumY - tolerance && point.Y <= MaximumY + tolerance;
+
+        public Vector3 A => Source.A;
+        public Vector3 B => Source.B;
+        public Vector3 C => Source.C;
     }
 }

@@ -3,9 +3,9 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
-using OpenDAO.Infrastructure.Archives;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Archives;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal sealed class ScaleformGlyph
 {

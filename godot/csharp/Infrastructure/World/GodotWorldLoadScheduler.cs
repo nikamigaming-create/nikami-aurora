@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 public sealed class GodotWorldLoadScheduler : IWorldLoadScheduler
 {

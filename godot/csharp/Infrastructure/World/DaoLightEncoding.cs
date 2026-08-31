@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 /// <summary>
 /// Converts DAO's linear RGB radiance records into Godot's source-color plus

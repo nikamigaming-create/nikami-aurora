@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.Presentation.Cinematics;
+namespace Nikami.Aurora.GodotRuntime.Presentation.Cinematics;
 
 /// <summary>
 /// Plays the authored pose/transition channel and evaluates every active DAO

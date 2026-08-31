@@ -3,7 +3,7 @@
 using Godot;
 using System.Text.Json;
 
-namespace OpenDAO.Launcher;
+namespace Nikami.Aurora.GodotRuntime.Launcher;
 
 [Tool]
 public partial class Launcher : Control
@@ -25,7 +25,7 @@ public partial class Launcher : Control
     private AudioStreamPlayer clickAudio = null!;
     private FileDialog folderDialog = null!;
     private IntroSequenceController introSequence = null!;
-    private OpenDAO.MainMenu.MainMenu startMenu = null!;
+    private Nikami.Aurora.GodotRuntime.MainMenu.MainMenu startMenu = null!;
     private readonly WindowsBackgroundMusic backgroundMusic = new();
     private string configuredGameRoot = string.Empty;
     private InstallationScan? installationScan;
@@ -37,7 +37,9 @@ public partial class Launcher : Control
         // title flow, must honor the same persisted physical display.
         var wantsWorldAutomation = RuntimeAutomation.WantsWorld();
         var wantsCharacterFlowCapture =
-            System.Environment.GetEnvironmentVariable("OPENDAO_CHARACTER_CREATION_ACCEPTANCE") == "1";
+            System.Environment.GetEnvironmentVariable("OPENDAO_CHARACTER_CREATION_ACCEPTANCE") == "1" ||
+            System.Environment.GetEnvironmentVariable(
+                "OPENDAO_CHARACTER_PREVIEW_MATRIX_ACCEPTANCE") == "1";
         if (!Engine.IsEditorHint() &&
             !DisplayServer.GetName().Equals("headless", StringComparison.OrdinalIgnoreCase))
         {
@@ -46,14 +48,14 @@ public partial class Launcher : Control
                 screenOnly: wantsWorldAutomation || wantsCharacterFlowCapture);
         }
 
-        if (!Engine.IsEditorHint() && OpenDAO.MainMenu.GfxHudSmoke.Requested)
+        if (!Engine.IsEditorHint() && Nikami.Aurora.GodotRuntime.MainMenu.GfxHudSmoke.Requested)
         {
-            OpenDAO.MainMenu.GfxHudSmoke.Run(GetTree());
+            Nikami.Aurora.GodotRuntime.MainMenu.GfxHudSmoke.Run(GetTree());
             return;
         }
-        if (!Engine.IsEditorHint() && OpenDAO.MainMenu.CharacterFlowSmoke.Requested)
+        if (!Engine.IsEditorHint() && Nikami.Aurora.GodotRuntime.MainMenu.CharacterFlowSmoke.Requested)
         {
-            OpenDAO.MainMenu.CharacterFlowSmoke.Run(GetTree());
+            Nikami.Aurora.GodotRuntime.MainMenu.CharacterFlowSmoke.Run(GetTree());
             return;
         }
         if (!Engine.IsEditorHint() &&
@@ -78,7 +80,7 @@ public partial class Launcher : Control
         {
             // No Dragon Age executable is selected or run. Installed content is read
             // only after New Game, Continue, or Explore Areas chooses a local route.
-            startMenu = GetNode<OpenDAO.MainMenu.MainMenu>("StartMenu");
+            startMenu = GetNode<Nikami.Aurora.GodotRuntime.MainMenu.MainMenu>("StartMenu");
             if (!startMenu.BuildFromConfiguredInstallation([], out var titleArtworkError))
             {
                 GD.PushWarning(titleArtworkError);
@@ -93,7 +95,11 @@ public partial class Launcher : Control
             {
                 startMenu.OpenStartMenu();
             }
-            if (System.Environment.GetEnvironmentVariable("OPENDAO_CHARACTER_CREATION_ACCEPTANCE") == "1")
+            if (System.Environment.GetEnvironmentVariable(
+                    "OPENDAO_CHARACTER_PREVIEW_MATRIX_ACCEPTANCE") == "1")
+                startMenu.BeginCharacterPreviewMatrixAcceptance();
+            else if (System.Environment.GetEnvironmentVariable(
+                         "OPENDAO_CHARACTER_CREATION_ACCEPTANCE") == "1")
                 startMenu.BeginCharacterCreationAcceptance();
             return;
         }
@@ -151,7 +157,7 @@ public partial class Launcher : Control
         // This runs the actual C# launcher catalog path without opening or
         // interacting with the browser. It deliberately never writes user://
         // state, so it is safe for unattended acceptance.
-        var catalog = new OpenDAO.MainMenu.AreaCatalog();
+        var catalog = new Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog();
         if (!catalog.Load())
         {
             GD.PushError("OPENDAO_LAUNCHER_CATALOG_SMOKE_FAIL catalog=" + catalog.Error);
@@ -167,7 +173,7 @@ public partial class Launcher : Control
         var missingArtwork = catalog.WorldMapMarkers
             .Select(marker => marker.Map)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(map => !File.Exists(OpenDAO.MainMenu.AreaCatalog.ResolveWorldMapArtworkPath(map)))
+            .Where(map => !File.Exists(Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog.ResolveWorldMapArtworkPath(map)))
             .ToArray();
         var passed = catalog.WorldMapMarkers.Count > 0 && travelMarkers.Length > 0 &&
             invalid.Length == 0 && missingArtwork.Length == 0;
@@ -176,7 +182,7 @@ public partial class Launcher : Control
                  " travel=" + travelMarkers.Length +
                  " invalid_arrival_keys=" + invalid.Length +
                  " missing_art=" + missingArtwork.Length +
-                 " catalog=" + OpenDAO.MainMenu.AreaCatalog.ResolvePath());
+                 " catalog=" + Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog.ResolvePath());
         GetTree().Quit(passed ? 0 : 55);
     }
 
@@ -186,7 +192,7 @@ public partial class Launcher : Control
         // relocated catalog/profile. This is headless-only acceptance code:
         // the caller supplies an isolated user-data directory, so no player
         // state is touched.
-        var catalog = new OpenDAO.MainMenu.AreaCatalog();
+        var catalog = new Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog();
         var sourceArea = catalog.Load()
             ? catalog.Areas.FirstOrDefault(area => area.Ready && File.Exists(area.ProfilePath))
             : null;
@@ -265,7 +271,7 @@ public partial class Launcher : Control
             var relocated = sourceArea with { ProfilePath = fakeProfile, CatalogRoot = fakeRoot };
             var selected = Path.Combine(ProjectSettings.GlobalizePath("user://"),
                 "portable-profile-smoke", "selected-area-profile.json");
-            var written = OpenDAO.MainMenu.AreaCatalog.WriteProfileForLoading(relocated, selected, out var error);
+            var written = Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog.WriteProfileForLoading(relocated, selected, out var error);
             using var selectedDocument = written ? JsonDocument.Parse(File.ReadAllText(selected)) : null;
             var rebased = written && values.All(pair =>
                 selectedDocument!.RootElement.TryGetProperty(pair.Key, out var value) &&
@@ -283,7 +289,7 @@ public partial class Launcher : Control
         }
     }
 
-    private static bool ProfileMatchesCatalogKey(OpenDAO.MainMenu.CatalogArea area)
+    private static bool ProfileMatchesCatalogKey(Nikami.Aurora.GodotRuntime.MainMenu.CatalogArea area)
     {
         if (area.ProfilePath.Length == 0 || !File.Exists(area.ProfilePath))
         {
@@ -319,7 +325,7 @@ public partial class Launcher : Control
             return false;
         }
 
-        var catalog = new OpenDAO.MainMenu.AreaCatalog();
+        var catalog = new Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog();
         if (!catalog.Load())
         {
             GD.PushError("OPENDAO_FRESH_GAME_ACCEPTANCE catalog: " + catalog.Error);
@@ -337,16 +343,16 @@ public partial class Launcher : Control
 
         try
         {
-            if (!OpenDAO.MainMenu.AreaCatalog.WriteProfileForLoading(golden, selectedPath,
+            if (!Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog.WriteProfileForLoading(golden, selectedPath,
                     out var profileError))
             {
                 GD.PushError("OPENDAO_FRESH_GAME_ACCEPTANCE profile: " + profileError);
                 GetTree().Quit(54);
                 return false;
             }
-            var character = OpenDAO.MainMenu.CharacterProfile.Create(
+            var character = Nikami.Aurora.GodotRuntime.MainMenu.CharacterProfile.Create(
                 "Acceptance Warden", "human-noble", "human", "female", "warrior", "preset-1");
-            if (!OpenDAO.MainMenu.CharacterProfileStore.Save(character, out var characterError))
+            if (!Nikami.Aurora.GodotRuntime.MainMenu.CharacterProfileStore.Save(character, out var characterError))
             {
                 GD.PushError("OPENDAO_FRESH_GAME_ACCEPTANCE character: " + characterError);
                 GetTree().Quit(54);
@@ -409,7 +415,7 @@ public partial class Launcher : Control
         clickAudio = GetNode<AudioStreamPlayer>("ClickAudio");
         folderDialog = GetNode<FileDialog>("FolderDialog");
         introSequence = GetNode<IntroSequenceController>("IntroSequence");
-        startMenu = GetNode<OpenDAO.MainMenu.MainMenu>("StartMenu");
+        startMenu = GetNode<Nikami.Aurora.GodotRuntime.MainMenu.MainMenu>("StartMenu");
     }
 
     private void ConnectSignals()
@@ -684,7 +690,7 @@ public partial class Launcher : Control
         }
         catch (Exception exception)
         {
-            GD.PushError("OpenDAO title menu failed: " + exception.Message);
+            GD.PushError("Nikami.Aurora.GodotRuntime title menu failed: " + exception.Message);
             return;
         }
 

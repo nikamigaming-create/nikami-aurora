@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.Abilities;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.Abilities;
 
-namespace OpenDAO.Infrastructure.Catalogs;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Catalogs;
 
 public sealed class GdaAbilityCatalog(IJsonStore store) : IAbilityCatalog
 {

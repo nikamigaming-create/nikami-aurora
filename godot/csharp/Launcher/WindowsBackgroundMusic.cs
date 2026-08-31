@@ -3,7 +3,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace OpenDAO.Launcher;
+namespace Nikami.Aurora.GodotRuntime.Launcher;
 
 internal sealed class WindowsBackgroundMusic : IDisposable
 {

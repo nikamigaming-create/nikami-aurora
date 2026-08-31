@@ -1,9 +1,9 @@
 using System.Text.Json.Nodes;
 using Godot;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.Sessions;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.Sessions;
 
-namespace OpenDAO.Infrastructure.Persistence;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Persistence;
 
 public sealed class PlayerSessionRepository(IJsonStore store, IRuntimeEnvironment environment)
     : IPlayerSessionRepository

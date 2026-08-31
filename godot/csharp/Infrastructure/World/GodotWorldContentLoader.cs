@@ -1,11 +1,14 @@
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
+using System.Text;
 using Godot;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.World;
-using OpenDAO.Domain.Story;
-using OpenDAO.Rendering;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.World;
+using Nikami.Aurora.GodotRuntime.Domain.Story;
+using Nikami.Aurora.GodotRuntime.Rendering;
+using Nikami.Aurora.Profiles.DragonAgeOrigins;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 public sealed class GodotWorldContentLoader(
     IJsonStore store,
@@ -66,6 +69,11 @@ public sealed class GodotWorldContentLoader(
             var authoredLights = area?["lights"] is JsonArray lightRecords
                 ? LoadLights(lightRecords, staging)
                 : 0;
+            if (authoredLights > 0)
+                GD.Print("OPENDAO_POINT_LIGHT_SHADOW_SEMANTICS status=unsupported " +
+                         $"layout={profile.LayoutName.ToLowerInvariant()} " +
+                         $"source_lights={authoredLights} source_field=absent " +
+                         "point_shadows=disabled name_heuristic=blocked");
 
             if (area?["placeables"] is JsonArray placeables)
             {
@@ -79,6 +87,28 @@ public sealed class GodotWorldContentLoader(
             var lighting = lightingResolver.Resolve(profile,
                 ReadLightingProfile(area?["environment"] as JsonObject,
                     area?["lights"] as JsonArray));
+            var materialReport = ValidateWorldMaterials(staging, profile.LayoutName);
+            var effectReport = new DaoSourceEffectMaterializer(profile.GameRoot)
+                .Materialize(area?["props"] as JsonObject, profile.LayoutName, staging);
+            var contentStatus = materialReport.BindingReady && materialReport.IdentityReady &&
+                                materialReport.PbrContractReady &&
+                                effectReport.UnsupportedDefinitions == 0 &&
+                                effectReport.UnsupportedDistortionEmitters == 0 &&
+                                effectReport.UnsupportedSemanticEmitters == 0
+                ? "ready"
+                : "partial";
+            GD.Print($"OPENDAO_AREA_CONTENT_FIDELITY status={contentStatus} " +
+                     $"layout={profile.LayoutName.ToLowerInvariant()} " +
+                     $"material_binding={(materialReport.BindingReady ? "ready" : "fail")} " +
+                     $"material_identity={(materialReport.IdentityReady ? "ready" : "partial")} " +
+                     $"pbr_contract={(materialReport.PbrContractReady ? "ready" : "partial")} " +
+                     $"mao_semantics={(materialReport.MaoUnsupported > 0 ? "unsupported" : "not-required")} " +
+                     $"effects={(effectReport.UnsupportedDefinitions > 0 || effectReport.UnsupportedDistortionEmitters > 0 || effectReport.UnsupportedSemanticEmitters > 0 ? "partial" : "source-supported")} " +
+                     $"unsupported_effect_definitions={effectReport.UnsupportedDefinitions} " +
+                     $"unsupported_effect_instances={effectReport.UnsupportedInstances} " +
+                     $"unsupported_distortion_emitters={effectReport.UnsupportedDistortionEmitters} " +
+                     $"unsupported_semantic_emitters={effectReport.UnsupportedSemanticEmitters} " +
+                     "layout_override=none fallback_effect_cards=blocked");
             if (navigation is not null)
             {
                 GD.Print($"OPENDAO_AUTHORED_NAVIGATION status=pass source={navigation.SourcePath} " +
@@ -104,7 +134,7 @@ public sealed class GodotWorldContentLoader(
         catch (Exception error)
         {
             staging.QueueFree();
-            GD.PushError($"OpenDAO world load failed: {error}");
+            GD.PushError($"Nikami.Aurora.GodotRuntime world load failed: {error}");
             return WorldLoadResult.Failed(error.Message);
         }
     }
@@ -167,10 +197,12 @@ public sealed class GodotWorldContentLoader(
         CancellationToken cancellationToken)
     {
         var loaded = 0;
+        var activePlacementOrdinal = 0;
         foreach (var actor in actors.OfType<JsonObject>())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!(actor["active"]?.GetValue<bool>() ?? true)) continue;
+            var placementOrdinal = activePlacementOrdinal++;
             var relative = actor["file"]?.GetValue<string>() ??
                            actor["model"]?.GetValue<string>() ?? string.Empty;
             if (relative.Length == 0) continue;
@@ -179,13 +211,26 @@ public sealed class GodotWorldContentLoader(
                 : Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
             var node = modelCache.Instantiate(path);
             if (node is null) continue;
-            var resref = actor["tag"]?.GetValue<string>() ??
-                         actor["resref"]?.GetValue<string>() ??
-                         actor["template"]?.GetValue<string>() ?? string.Empty;
+            var template = actor["template"]?.GetValue<string>() ?? string.Empty;
+            var tag = actor["tag"]?.GetValue<string>() ?? string.Empty;
+            var resref = tag.Length > 0
+                ? tag
+                : actor["resref"]?.GetValue<string>() ?? template;
             node.Name = SanitizeNodeName(resref.Length > 0 ? resref : $"Actor{loaded}");
             node.Transform = ReadTransform(actor);
             node.SetMeta("dao_actor", true);
             node.SetMeta("dao_resref", resref);
+            node.SetMeta("dao_placement_ordinal", placementOrdinal);
+            node.SetMeta("dao_actor_model_relative", relative);
+            if (template.Length > 0) node.SetMeta("dao_actor_identity", template);
+            if (tag.Length > 0) node.SetMeta("dao_actor_tag", tag);
+            if (TryReadAuthoredTransformIdentity(actor, out var authoredPosition,
+                    out var authoredRotation, out var authoredTransformSha256))
+            {
+                node.SetMeta("dao_authored_position", authoredPosition);
+                node.SetMeta("dao_authored_rotation", authoredRotation);
+                node.SetMeta("dao_authored_transform_sha256", authoredTransformSha256);
+            }
             destination.AddChild(node);
             PlayDefaultAnimation(node);
             loaded++;
@@ -193,6 +238,41 @@ public sealed class GodotWorldContentLoader(
         }
 
         return loaded;
+    }
+
+    private static bool TryReadAuthoredTransformIdentity(JsonObject record,
+        out string position, out string rotation, out string sha256)
+    {
+        position = string.Empty;
+        rotation = string.Empty;
+        sha256 = string.Empty;
+        if (!TryCanonicalArray(record["position"] as JsonArray, 3, out position) ||
+            !TryCanonicalArray(record["rotation"] as JsonArray, 4, out rotation))
+            return false;
+        var contract = $"position={position};rotation={rotation}";
+        sha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(contract)))
+            .ToLowerInvariant();
+        return true;
+    }
+
+    private static bool TryCanonicalArray(JsonArray? source, int count, out string canonical)
+    {
+        canonical = string.Empty;
+        if (source is null || source.Count < count) return false;
+        var values = new string[count];
+        for (var index = 0; index < count; index++)
+        {
+            double value;
+            try { value = source[index]?.GetValue<double>() ?? double.NaN; }
+            catch (Exception error) when (error is InvalidOperationException or FormatException)
+            {
+                return false;
+            }
+            if (!double.IsFinite(value)) return false;
+            values[index] = value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        }
+        canonical = string.Join(',', values);
+        return true;
     }
 
     private static int LoadLights(JsonArray lights, Node3D destination)
@@ -221,8 +301,13 @@ public sealed class GodotWorldContentLoader(
                 Period = Number(record["intensity_period"]),
                 PeriodDelta = Number(record["intensity_period_delta"]),
                 Phase = loaded * 0.713f,
-                ShadowEnabled = name.Contains("Fire", StringComparison.OrdinalIgnoreCase) ||
-                                name.Contains("Candle", StringComparison.OrdinalIgnoreCase)
+                // The installed area manifest does not carry the retail
+                // point-light shadow bit. Inferring it from names such as
+                // "Fire" or "Candle" changes unrelated areas and is not a
+                // source contract. Directional source light shadows remain
+                // available; point shadows stay off until the field is
+                // harvested and validated.
+                ShadowEnabled = false
             };
             destination.AddChild(light);
             loaded++;
@@ -309,6 +394,11 @@ public sealed class GodotWorldContentLoader(
         JsonArray? lights)
     {
         if (environment is null) return null;
+        var sourceIdentity = HasExactEnvironmentContract(environment)
+            ? ValidateExactEnvironment(environment)
+            : default((int FieldCount, string Sha256)?);
+        if (sourceIdentity is null)
+            ValidateBaseEnvironment(environment);
         return new AuthoredLightingProfile(
             environment["probe_loaded"]?.GetValue<bool>() ?? false,
             ReadFloatArray(environment["probe_matrix_r"] as JsonArray, 16),
@@ -320,8 +410,171 @@ public sealed class GodotWorldContentLoader(
             ReadFloatArray(environment["fog_color"] as JsonArray, 3),
             Number(environment["sun_intensity"]),
             environment["probe_matrix_resource"]?.GetValue<string>() ?? string.Empty,
+            string.Empty,
             ReadPointLightProfiles(lights, 2),
-            ReadPointLightProfiles(lights, 1));
+            ReadPointLightProfiles(lights, 1),
+            sourceIdentity is null ? null : new AuthoredAtmosphereProfile(
+                Number(environment["fog_intensity"]),
+                Number(environment["fog_cap"]),
+                Number(environment["fog_zenith"]),
+                Number(environment["fog_water_intensity"]),
+                Number(environment["fog_water_cap"]),
+                Number(environment["distance_multiplier"]),
+                Number(environment["atmosphere_alpha"]),
+                ReadFloatArray(environment["atmosphere_sun_color"] as JsonArray, 3),
+                Number(environment["turbidity"]),
+                Number(environment["rayleigh_multiplier"]),
+                Number(environment["mie_multiplier"]),
+                Number(environment["phase_eccentricity"]),
+                Number(environment["cloud_density"]),
+                Number(environment["cloud_sharpness"]),
+                Number(environment["cloud_depth"]),
+                Number(environment["cloud_range_1"]),
+                Number(environment["cloud_range_2"]),
+                ReadFloatArray(environment["cloud_color"] as JsonArray, 3),
+                Number(environment["moon_scale"]),
+                Number(environment["moon_alpha"]),
+                Number(environment["moon_rotation"]),
+                environment["skydome"]?.GetValue<string>() ?? string.Empty,
+                sourceIdentity.Value.FieldCount,
+                sourceIdentity.Value.Sha256));
+    }
+
+    private static DaoWorldMaterialReport ValidateWorldMaterials(Node root, string layout)
+    {
+        var surfaces = 0;
+        var bound = 0;
+        var missing = 0;
+        var albedo = 0;
+        var normal = 0;
+        var roughness = 0;
+        var metallic = 0;
+        var ambientOcclusion = 0;
+        var cutout = 0;
+        var shaders = 0;
+        var payloadIdentityVerified = 0;
+        var payloadIdentityMissing = 0;
+        var semanticUnsupported = 0;
+        var pbrContractReady = 0;
+        var maoUnsupported = 0;
+        var unresolved = new List<string>();
+
+        void Count(GeometryInstance3D geometry, Mesh mesh,
+            Func<int, Material?> activeMaterial)
+        {
+            for (var surface = 0; surface < mesh.GetSurfaceCount(); surface++)
+            {
+                surfaces++;
+                var material = activeMaterial(surface);
+                if (material is null)
+                {
+                    missing++;
+                    continue;
+                }
+                bound++;
+                if (material.HasMeta(DaoCharacterMaterialPostprocessor.WorldMaterialIdentityMeta))
+                {
+                    payloadIdentityVerified++;
+                    var identity = material.GetMeta(
+                        DaoCharacterMaterialPostprocessor.WorldMaterialIdentityMeta).AsString();
+                    _ = DragonAgeOriginsRenderFidelityPolicy.RequirePbrContract(identity);
+                    pbrContractReady++;
+                    if (identity.Contains("mao_status=unsupported",
+                            StringComparison.OrdinalIgnoreCase)) maoUnsupported++;
+                    if (identity.Contains("semantic_status=unsupported",
+                            StringComparison.OrdinalIgnoreCase) ||
+                        identity.Contains("mao_status=unsupported",
+                            StringComparison.OrdinalIgnoreCase)) semanticUnsupported++;
+                }
+                else
+                {
+                    payloadIdentityMissing++;
+                    var storedMeshIdentity = geometry is MeshInstance3D sourceMesh &&
+                                             DaoCharacterMaterialPostprocessor
+                                                 .HasStoredWorldMaterialIdentity(sourceMesh, surface)
+                        ? 1
+                        : 0;
+                    unresolved.Add($"geometry={geometry.Name},type={geometry.GetType().Name}," +
+                                   $"surface={surface},material={material.ResourceName}," +
+                                   $"material_type={material.GetType().Name}," +
+                                   $"stored_mesh_identity={storedMeshIdentity}");
+                }
+                if (material is ShaderMaterial)
+                {
+                    shaders++;
+                    continue;
+                }
+                if (material is not BaseMaterial3D source) continue;
+                if (source.AlbedoTexture is not null) albedo++;
+                if (source.NormalTexture is not null) normal++;
+                if (source.RoughnessTexture is not null) roughness++;
+                if (source.MetallicTexture is not null) metallic++;
+                if (source.AOTexture is not null) ambientOcclusion++;
+                if (source.Transparency is BaseMaterial3D.TransparencyEnum.AlphaScissor or
+                    BaseMaterial3D.TransparencyEnum.AlphaHash or
+                    BaseMaterial3D.TransparencyEnum.AlphaDepthPrePass)
+                    cutout++;
+            }
+        }
+
+        foreach (var geometry in root.FindChildren("*", "GeometryInstance3D", true, false)
+                     .OfType<GeometryInstance3D>().Where(value => value.Visible))
+        {
+            switch (geometry)
+            {
+                case MeshInstance3D { Mesh: not null } mesh:
+                    // GetActiveMaterial follows Godot's actual render order:
+                    // global override, per-surface override, then Mesh material.
+                    Count(mesh, mesh.Mesh, mesh.GetActiveMaterial);
+                    break;
+                case MultiMeshInstance3D { Multimesh.Mesh: not null } multi:
+                    Count(multi, multi.Multimesh.Mesh,
+                        surface => multi.MaterialOverride ??
+                                   multi.Multimesh.Mesh.SurfaceGetMaterial(surface));
+                    break;
+            }
+        }
+
+        var bindingStatus = missing == 0 && surfaces > 0 ? "ready" : "fail";
+        var identityStatus = payloadIdentityMissing == 0 ? "ready" : "partial";
+        // Payload identity is now verified, but the generated glTF slot mapping
+        // is not itself proof of every installed MAO shader semantic. Keep the
+        // aggregate parity status partial until those source contracts exist.
+        var status = bindingStatus == "fail" ? "fail" : "partial";
+        GD.Print($"OPENDAO_WORLD_MATERIAL_CENSUS status={status} binding_status={bindingStatus} " +
+                 $"identity_status={identityStatus} layout={layout} surfaces={surfaces} " +
+                 $"bound={bound} missing={missing} albedo={albedo} normal={normal} " +
+                 $"roughness={roughness} metallic={metallic} ao={ambientOcclusion} " +
+                 $"shader={shaders} cutout={cutout} " +
+                 $"payload_identity_verified={payloadIdentityVerified} " +
+                 $"unresolved_identity={payloadIdentityMissing} " +
+                 $"pbr_contract_ready={pbrContractReady} " +
+                 $"mao_unsupported={maoUnsupported} " +
+                 $"semantic_unsupported={semanticUnsupported} " +
+                 "mao_identity_status=unsupported " +
+                 "semantic_scope=imported-gltf-slots+terrain-contract+water-contract " +
+                 "collision_proxies=render-suppressed");
+        if (missing > 0 || surfaces == 0)
+            throw new InvalidDataException(
+                $"DAO renderable material coverage is incomplete: surfaces={surfaces} missing={missing}");
+        if (payloadIdentityMissing > 0)
+        {
+            var details = string.Join("|", unresolved
+                .GroupBy(value => value, StringComparer.Ordinal)
+                .Select(group => $"{group.Key},count={group.Count()}")
+                .Take(64));
+            GD.PushError($"OPENDAO_WORLD_MATERIAL_IDENTITY_FAIL layout={layout} " +
+                         $"unresolved={payloadIdentityMissing} details={details}");
+            throw new InvalidDataException(
+                $"DAO visible material identity is incomplete: layout={layout} " +
+                $"unresolved={payloadIdentityMissing}");
+        }
+        DragonAgeOriginsRenderFidelityPolicy.RequirePbrCoverage(
+            new DragonAgePbrCoverage(
+                surfaces, bound, payloadIdentityVerified, pbrContractReady));
+        return new DaoWorldMaterialReport(
+            bindingStatus == "ready", identityStatus == "ready",
+            pbrContractReady == surfaces, surfaces, pbrContractReady, maoUnsupported);
     }
 
     private static AuthoredPointLightProfile[] ReadPointLightProfiles(JsonArray? lights, int affectDomain)
@@ -339,6 +592,133 @@ public sealed class GodotWorldContentLoader(
                 color.X, color.Y, color.Z,
                 Math.Max(0.0001f, Number(record["radius"])));
         }).ToArray();
+    }
+
+    private static readonly (string Name, int ArrayLength, string Kind)[] ExactEnvironmentFields =
+    [
+        ("sun_direction", 3, "array"),
+        ("sun_color", 3, "array"),
+        ("character_sun_color", 4, "array"),
+        ("fog_color", 3, "array"),
+        ("fog_intensity", 0, "number"),
+        ("fog_cap", 0, "number"),
+        ("fog_zenith", 0, "number"),
+        ("fog_water_intensity", 0, "number"),
+        ("fog_water_cap", 0, "number"),
+        ("distance_multiplier", 0, "number"),
+        ("atmosphere_alpha", 0, "number"),
+        ("atmosphere_sun_color", 3, "array"),
+        ("sun_intensity", 0, "number"),
+        ("turbidity", 0, "number"),
+        ("rayleigh_multiplier", 0, "number"),
+        ("mie_multiplier", 0, "number"),
+        ("phase_eccentricity", 0, "number"),
+        ("cloud_density", 0, "number"),
+        ("cloud_sharpness", 0, "number"),
+        ("cloud_depth", 0, "number"),
+        ("cloud_range_1", 0, "number"),
+        ("cloud_range_2", 0, "number"),
+        ("cloud_color", 3, "array"),
+        ("moon_scale", 0, "number"),
+        ("moon_alpha", 0, "number"),
+        ("moon_rotation", 0, "number"),
+        ("skydome", 0, "string"),
+        ("probe_loaded", 0, "bool"),
+        ("probe_matrix_r", 16, "array"),
+        ("probe_matrix_g", 16, "array"),
+        ("probe_matrix_b", 16, "array")
+    ];
+
+    private static readonly (string Name, int ArrayLength, string Kind)[] BaseEnvironmentFields =
+    [
+        ("sun_direction", 3, "array"),
+        ("sun_color", 3, "array"),
+        ("character_sun_color", 4, "array"),
+        ("fog_color", 3, "array"),
+        ("fog_intensity", 0, "number"),
+        ("sun_intensity", 0, "number"),
+        ("skydome", 0, "string"),
+        ("probe_loaded", 0, "bool")
+    ];
+
+    private static bool HasExactEnvironmentContract(JsonObject environment) =>
+        ExactEnvironmentFields.All(field => environment.ContainsKey(field.Name));
+
+    private static void ValidateBaseEnvironment(JsonObject environment)
+    {
+        if (environment.Count != BaseEnvironmentFields.Length ||
+            BaseEnvironmentFields.Any(field => !environment.ContainsKey(field.Name)))
+            throw new InvalidDataException(
+                $"DAO environment is neither the exact ATMO contract nor the exact " +
+                $"base-lighting contract: fields={environment.Count}");
+        ValidateEnvironmentFields(environment, BaseEnvironmentFields);
+    }
+
+    private static (int FieldCount, string Sha256) ValidateExactEnvironment(JsonObject environment)
+    {
+        var canonical = ValidateEnvironmentFields(environment, ExactEnvironmentFields);
+        var hash = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+        return (ExactEnvironmentFields.Length, hash);
+    }
+
+    private static string ValidateEnvironmentFields(JsonObject environment,
+        IReadOnlyList<(string Name, int ArrayLength, string Kind)> fields)
+    {
+        var canonical = new StringBuilder();
+        foreach (var (name, length, kind) in fields)
+        {
+            if (!environment.TryGetPropertyValue(name, out var node) || node is null)
+                throw new InvalidDataException($"DAO authored environment field is absent: {name}");
+            switch (kind)
+            {
+                case "array":
+                    if (node is not JsonArray values || values.Count != length)
+                        throw new InvalidDataException(
+                            $"DAO authored environment field {name} must contain {length} values.");
+                    for (var index = 0; index < values.Count; index++)
+                        _ = RequiredFiniteEnvironmentNumber(values[index], $"{name}[{index}]");
+                    break;
+                case "number":
+                    _ = RequiredFiniteEnvironmentNumber(node, name);
+                    break;
+                case "bool":
+                    try { _ = node.GetValue<bool>(); }
+                    catch (Exception error) when (error is InvalidOperationException or FormatException)
+                    {
+                        throw new InvalidDataException(
+                            $"DAO authored environment field {name} must be boolean.", error);
+                    }
+                    break;
+                case "string":
+                    try { _ = node.GetValue<string>(); }
+                    catch (Exception error) when (error is InvalidOperationException or FormatException)
+                    {
+                        throw new InvalidDataException(
+                            $"DAO authored environment field {name} must be a string.", error);
+                    }
+                    break;
+            }
+            canonical.Append(name).Append('=').Append(node.ToJsonString()).Append('\n');
+        }
+        return canonical.ToString();
+    }
+
+    private static float RequiredFiniteEnvironmentNumber(JsonNode? node, string name)
+    {
+        if (node is null)
+            throw new InvalidDataException($"DAO authored environment value is absent: {name}");
+        float value;
+        try { value = node.GetValue<float>(); }
+        catch (Exception error) when (error is InvalidOperationException or FormatException)
+        {
+            throw new InvalidDataException(
+                $"DAO authored environment value {name} must be numeric.", error);
+        }
+        if (!float.IsFinite(value))
+            throw new InvalidDataException(
+                $"DAO authored environment value {name} must be finite.");
+        return value;
     }
 
     private static int ReadAffectDomain(JsonObject record) =>
@@ -488,3 +868,11 @@ public sealed class GodotWorldContentLoader(
                 left.CollisionShapes + right.CollisionShapes);
     }
 }
+
+internal readonly record struct DaoWorldMaterialReport(
+    bool BindingReady,
+    bool IdentityReady,
+    bool PbrContractReady,
+    int Surfaces,
+    int PbrReadySurfaces,
+    int MaoUnsupported);

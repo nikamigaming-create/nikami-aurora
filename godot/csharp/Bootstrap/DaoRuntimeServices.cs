@@ -1,19 +1,19 @@
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Application.Characters;
-using OpenDAO.Domain.Abilities;
-using OpenDAO.Domain.Combat;
-using OpenDAO.Domain.Inventory;
-using OpenDAO.Domain.Party;
-using OpenDAO.Domain.Quests;
-using OpenDAO.Domain.Story;
-using OpenDAO.Infrastructure.Catalogs;
-using OpenDAO.Infrastructure.Configuration;
-using OpenDAO.Infrastructure.Persistence;
-using OpenDAO.Infrastructure.Time;
-using OpenDAO.Infrastructure.World;
-using OpenDAO.Presentation.Cinematics;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Application.Characters;
+using Nikami.Aurora.GodotRuntime.Domain.Abilities;
+using Nikami.Aurora.GodotRuntime.Domain.Combat;
+using Nikami.Aurora.GodotRuntime.Domain.Inventory;
+using Nikami.Aurora.GodotRuntime.Domain.Party;
+using Nikami.Aurora.GodotRuntime.Domain.Quests;
+using Nikami.Aurora.GodotRuntime.Domain.Story;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Catalogs;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Persistence;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Time;
+using Nikami.Aurora.GodotRuntime.Infrastructure.World;
+using Nikami.Aurora.GodotRuntime.Presentation.Cinematics;
 
-namespace OpenDAO.Bootstrap;
+namespace Nikami.Aurora.GodotRuntime.Bootstrap;
 
 /// <summary>
 /// Explicit City Elf composition root owned by the Aurora DAO adapter. This
@@ -45,7 +45,7 @@ internal sealed class DaoRuntimeServices : IDisposable
         var lighting = new DaoAuthoredLightingResolver();
         var terrainMaterials = new DaoTerrainMaterialFactory(store);
         var waterMaterials = new DaoWaterMaterialFactory(store);
-        var batches = new StaticWorldBatchBuilder(scheduler);
+        var batches = new StaticWorldBatchBuilder(scheduler, characterMaterials);
         var story = new StoryState();
         var worldLoader = new GodotWorldContentLoader(store, modelCache, batches,
             terrainMaterials, waterMaterials, navigation, blockers, lighting,

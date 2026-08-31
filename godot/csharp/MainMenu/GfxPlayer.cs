@@ -1,6 +1,6 @@
 // Matthew W, 2026-08-12
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal sealed record GfxQuad(
     string Key,

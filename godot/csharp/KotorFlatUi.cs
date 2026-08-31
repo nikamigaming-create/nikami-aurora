@@ -358,6 +358,14 @@ public sealed partial class KotorModuleBoot
     private void ConfigureRetailMinimap(Control surface, KotorUiHudRecord source)
     {
         hudMinimapRecord = source.Minimap;
+        if (source.Minimap is null)
+        {
+            hudMinimapClip = null;
+            hudMinimapTexture = null;
+            hudMinimapArrow = null;
+            GD.Print("NIKAMI_AURORA_MINIMAP status=source-absent fabricated=0");
+            return;
+        }
         var border = RequireExtent(RequireControl(source.Controls, "LBL_MAPBORDER"));
         var inset = runtimeConfiguration.Presentation.Hud.MinimapInset;
         var interior = new KotorUiExtent(
@@ -1899,7 +1907,7 @@ public sealed partial class KotorModuleBoot
         IReadOnlyList<KotorUiControlRecord> Controls,
         KotorUiTextureRecord Portrait,
         IReadOnlyList<KotorUiTextureRecord> PartyPortraits,
-        KotorUiMinimapRecord Minimap);
+        KotorUiMinimapRecord? Minimap);
     private sealed record KotorUiMinimapRecord(
         KotorUiTextureRecord Texture,
         IReadOnlyList<float> MapPoint1,

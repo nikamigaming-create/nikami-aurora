@@ -1,7 +1,8 @@
 using Godot;
 using System.Text.Json;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Serialization;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 internal static class RuntimeSavePaths
 {
@@ -97,7 +98,7 @@ internal sealed class NewGameService
             }
         };
         File.WriteAllText(path,
-            JsonSerializer.Serialize(pending, new JsonSerializerOptions { WriteIndented = true }) +
+            JsonSerializer.Serialize(pending, RuntimeJsonOptions.Indented) +
             System.Environment.NewLine);
     }
 

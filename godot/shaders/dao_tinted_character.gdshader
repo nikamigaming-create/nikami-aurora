@@ -35,10 +35,10 @@ void vertex() {
 render_mode blend_mix, depth_prepass_alpha, cull_back, diffuse_burley, specular_schlick_ggx;
 
 uniform vec4 albedo : source_color = vec4(1.0);
-uniform sampler2D texture_albedo : source_color, filter_linear_mipmap, repeat_enable;
-uniform sampler2D texture_normal : hint_normal, filter_linear_mipmap, repeat_enable;
-uniform sampler2D texture_roughness : hint_roughness_g, filter_linear_mipmap, repeat_enable;
-uniform sampler2D texture_metallic : filter_linear_mipmap, repeat_enable;
+uniform sampler2D texture_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D texture_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D texture_roughness : hint_roughness_g, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D texture_metallic : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D texture_tint_mask : filter_linear_mipmap, repeat_enable;
 uniform vec3 tint_zone1 : source_color = vec3(1.0);
 uniform vec3 tint_zone2 : source_color = vec3(1.0);

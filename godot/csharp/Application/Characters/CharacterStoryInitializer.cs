@@ -1,8 +1,8 @@
-using OpenDAO.Domain.Characters;
-using OpenDAO.Domain.Common;
-using OpenDAO.Domain.Story;
+using Nikami.Aurora.GodotRuntime.Domain.Characters;
+using Nikami.Aurora.GodotRuntime.Domain.Common;
+using Nikami.Aurora.GodotRuntime.Domain.Story;
 
-namespace OpenDAO.Application.Characters;
+namespace Nikami.Aurora.GodotRuntime.Application.Characters;
 
 /// <summary>
 /// Projects the selected character into the retail global class/race/gender plot.

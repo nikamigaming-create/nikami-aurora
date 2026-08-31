@@ -1,12 +1,14 @@
 // Matthew W, 2026-08-15
 
-namespace OpenDAO.Launcher;
+namespace Nikami.Aurora.GodotRuntime.Launcher;
 
 internal static class RuntimeAutomation
 {
     internal static readonly string[] WorldFlags =
     [
         "DAOPEN_CAPTURE",
+        "OPENDAO_AREA_RUNTIME_EVIDENCE_ROOT",
+        "OPENDAO_EFFECT_CLOSE_CAPTURE",
         "OPENDAO_CSHARP_WORLD_SMOKE_EXIT",
         "DAOPEN_TOUR",
         "DAOPEN_AREA_VIDEO",

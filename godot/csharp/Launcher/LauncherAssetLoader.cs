@@ -2,7 +2,7 @@
 
 using Godot;
 
-namespace OpenDAO.Launcher;
+namespace Nikami.Aurora.GodotRuntime.Launcher;
 
 internal sealed class LauncherAssetLoader(
     TextureRect launcherArtwork,

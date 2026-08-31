@@ -24,9 +24,11 @@ try:
     from PIL import Image
     from pykotor.extract.capsule import Capsule
     from pykotor.extract.installation import Installation, SearchLocation
+    from pykotor.common.stream import BinaryReader
     from pykotor.resource.formats.lip import read_lip
     from pykotor.resource.formats.lyt import read_lyt
     from pykotor.resource.formats.mdl import read_mdl
+    from pykotor.resource.formats.mdl.io_mdl import MDLBinaryReader
     from pykotor.resource.formats.mdl.mdl_types import MDLControllerType
     from pykotor.resource.formats.ncs import read_ncs
     from pykotor.resource.formats.gff import read_gff
@@ -52,6 +54,10 @@ except ImportError as exc:
 
 
 SCHEMA = "nikami-aurora-kotor-module-v1"
+ENDAR_MODULE = "end_m01aa"
+SOURCE_ROOM_PLACEHOLDER = "****"
+GENERIC_WORLD_MODE = "generic-world"
+ENDAR_OPENING_MODE = "endar-opening"
 KOTOR_TO_GODOT = trimesh.transformations.rotation_matrix(-math.pi / 2.0, [1.0, 0.0, 0.0])
 
 
@@ -65,6 +71,52 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest().upper()
+
+
+def normalize_module_id(value: str) -> str:
+    module = value.strip().lower()
+    if (not module or len(module) > 16 or
+            any(not character.isascii() or
+                (not character.isalnum() and character != "_")
+                for character in module)):
+        raise RuntimeError(f"Unsupported KOTOR module identifier: {value}")
+    return module
+
+
+def module_content_mode(module: str) -> str:
+    return ENDAR_OPENING_MODE if normalize_module_id(module) == ENDAR_MODULE else GENERIC_WORLD_MODE
+
+
+def is_source_room_placeholder(model_name: str) -> bool:
+    return model_name.strip() == SOURCE_ROOM_PLACEHOLDER
+
+
+def resolve_module_rim_filenames(
+    installation: Installation, module: str
+) -> tuple[str, str]:
+    """Resolve physical RIM filename case without changing manifest identity."""
+    normalized = normalize_module_id(module)
+    expected = (f"{normalized}.rim", f"{normalized}_s.rim")
+    matches: dict[str, list[str]] = {name: [] for name in expected}
+    module_root = installation.module_path()
+    if not module_root.is_dir():
+        raise RuntimeError(f"KOTOR module directory was not found: {module_root}")
+    for path in module_root.iterdir():
+        if path.is_file() and path.name.casefold() in matches:
+            matches[path.name.casefold()].append(path.name)
+    ambiguous = {
+        expected_name: sorted(names)
+        for expected_name, names in matches.items()
+        if len(names) > 1
+    }
+    if ambiguous:
+        raise RuntimeError(
+            f"Ambiguous on-disk RIM identity for module {normalized}: {ambiguous}")
+    missing = [name for name, names in matches.items() if not names]
+    if missing:
+        raise RuntimeError(
+            f"Paired module RIMs were not found for {normalized}: {missing}")
+    return matches[expected[0]][0], matches[expected[1]][0]
 
 
 def load_runtime_configuration(path: Path) -> dict[str, Any]:
@@ -231,8 +283,58 @@ def resource_type_name(resource: Any) -> str:
     return str(value).upper()
 
 
+def source_loading_background(
+    installation: Installation,
+    module: str,
+    area: Any,
+) -> tuple[str, str, str | None]:
+    module_resref = f"load_{normalize_module_id(module)}"
+    module_resource, _ = installation.texture_resource_result(module_resref)
+    if module_resource is not None:
+        return module_resref, "module-texture", None
+
+    table_resource = installation.resource("loadscreens", ResourceType.TwoDA)
+    if table_resource is None:
+        raise RuntimeError(
+            f"KOTOR loading background is unresolved for {module}: "
+            "loadscreens.2da is missing")
+    table_bytes = resource_data(table_resource)
+    table = read_2da(table_bytes)
+    row = int(area.loadscreen_id)
+    if row < 0 or row >= table.get_height():
+        raise RuntimeError(
+            f"KOTOR loadscreen row is out of range for {module}: {row}")
+    fallback_resref = str(table.get_cell(row, "bmpresref") or "").strip()
+    if not fallback_resref or fallback_resref == "****":
+        raise RuntimeError(
+            f"KOTOR loadscreen row has no source bitmap for {module}: {row}")
+    fallback_resource, _ = installation.texture_resource_result(fallback_resref)
+    if fallback_resource is None:
+        raise RuntimeError(
+            f"KOTOR source loading background is missing for {module}: "
+            f"{fallback_resref}")
+    return fallback_resref, f"area-loadscreens-row-{row}", sha256_bytes(table_bytes)
+
+
+def read_owned_mdl(mdl_bytes: bytes, mdx_bytes: bytes) -> Any:
+    """Read a retail binary MDL with bounds relative to its geometry payload.
+
+    Odyssey MDL offsets exclude the 12-byte resource wrapper. PyKotor 2.3.9
+    rebases its reader at byte 12 but retains the wrapper-inclusive accessible
+    length, so a valid pointer near the payload boundary can pass its bounds
+    check and then read beyond EOF. Build the same reader over the exact
+    geometry payload extent; no bytes are appended, removed, or substituted.
+    """
+    if len(mdl_bytes) < 16 or mdl_bytes[:4] != b"\0\0\0\0":
+        return read_mdl(mdl_bytes, source_ext=mdx_bytes)
+    reader = MDLBinaryReader(mdl_bytes, source_ext=mdx_bytes)
+    reader._reader = BinaryReader.from_auto(  # noqa: SLF001
+        mdl_bytes, offset=12, size=len(mdl_bytes) - 12)
+    return reader.load()
+
+
 def find_module_resource(installation: Installation, module: str, restype: str) -> Any:
-    for filename in (f"{module}.rim", f"{module}_s.rim"):
+    for filename in resolve_module_rim_filenames(installation, module):
         for resource in installation.module_resources(filename):
             if resource_type_name(resource) == restype:
                 return resource
@@ -242,7 +344,7 @@ def find_module_resource(installation: Installation, module: str, restype: str) 
 def find_named_module_resource(
     installation: Installation, module: str, resname: str, restype: str
 ) -> Any:
-    for filename in (f"{module}.rim", f"{module}_s.rim"):
+    for filename in resolve_module_rim_filenames(installation, module):
         for resource in installation.module_resources(filename):
             if (resource_name(resource).lower() == resname.lower() and
                     resource_type_name(resource) == restype):
@@ -315,12 +417,162 @@ def camera_vectors(camera: Any) -> tuple[list[float], list[float]]:
     )
 
 
+TXI_RENDERED_DIRECTIVES = frozenset({
+    "blending", "bumpmapscaling", "bumpmaptexture", "bumpyshinytexture",
+    "decal", "envmaptexture",
+})
+TXI_UNSUPPORTED_PRESENTATION_DIRECTIVES = frozenset({
+    "channelscale", "channeltranslate",
+    "defaultheight", "defaultwidth", "distort", "distortionamplitude", "fps",
+    "height", "numx", "numy", "proceduretype", "speed", "wateralpha", "width",
+})
+TXI_SAMPLING_OR_METADATA_DIRECTIVES = frozenset({
+    "alphamean", "arturoheight", "arturowidth", "clamp", "compresstexture",
+    "cube", "downsamplemax", "downsamplemin", "filter", "isbumpmap",
+    "isbumpmapcompressed", "isdiffusebumpmap", "islightmap",
+    "isspecularbumpmap", "mipmap", "numchars", "priority", "temporary",
+    "texturewidth", "unique", "xbox_downsample", "xboxdownsample",
+})
+TXI_FOUR_CHANNEL_CONTINUATIONS = frozenset({"channelscale", "channeltranslate"})
+
+
+def parse_txi_directives(source: str) -> dict[str, list[str]]:
+    """Parse source TXI while preserving bounded four-channel continuations.
+
+    Odyssey water/arturo records put a declared channel mode/count on the
+    command line and the four channel coefficients on the next four numeric
+    lines.  Treating those coefficients as commands fabricated 216 unknown
+    directives in the owned-install audit.  A continuation is joined only
+    when all four following non-comment lines are finite numeric scalars;
+    malformed or orphan rows stay visible as ordinary directives so callers
+    continue to fail closed.
+    """
+    lines = []
+    for raw_line in source.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if line:
+            lines.append(line)
+    directives: dict[str, list[str]] = {}
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        parts = line.split(None, 1)
+        key = parts[0].lower()
+        if key == "bumpmapscale":
+            # This spelling occurs in the owned TPC footer even though the
+            # canonical Odyssey/PyKotor property is bumpmapscaling.
+            key = "bumpmapscaling"
+        value = parts[1] if len(parts) > 1 else ""
+        if key in TXI_FOUR_CHANNEL_CONTINUATIONS and index + 4 < len(lines):
+            continuation = lines[index + 1:index + 5]
+            try:
+                declared = float(value)
+                parsed = [declared, *(float(item) for item in continuation)]
+                valid = all(math.isfinite(item) for item in parsed)
+            except ValueError:
+                valid = False
+            if valid:
+                value = " ".join([value.strip(), *continuation]).strip()
+                index += 4
+        directives.setdefault(key, []).append(value.strip())
+        index += 1
+    return directives
+
+
+def txi_directive_class(directive: str, values: Iterable[str]) -> str:
+    """Classify one material directive as rendered, metadata, or unsupported."""
+    key = directive.strip().lower()
+    source_values = list(values)
+    if key == "decal":
+        normalized = [value.strip() for value in source_values]
+        return "rendered" if (
+            normalized and all(value in {"0", "1"} for value in normalized) and
+            all(value == normalized[0] for value in normalized[1:])
+        ) else "unsupported"
+    if key in TXI_RENDERED_DIRECTIVES:
+        return "rendered"
+    if key in TXI_SAMPLING_OR_METADATA_DIRECTIVES:
+        return "metadata"
+    return "unsupported" if key in TXI_UNSUPPORTED_PRESENTATION_DIRECTIVES else "unclassified"
+
+
+def unsupported_material_txi(
+    directives: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    return {
+        directive: values
+        for directive, values in directives.items()
+        if txi_directive_class(directive, values) in {"unsupported", "unclassified"}
+    }
+
+
+def raw_tpc_txi(payload: bytes) -> str:
+    """Recover the exact embedded TPC TXI footer without normalizing commands."""
+    if len(payload) < 0x80:
+        return ""
+    data_size = struct.unpack_from("<I", payload, 0)[0]
+    width, height = struct.unpack_from("<HH", payload, 8)
+    pixel_type = payload[12]
+    mipmap_count = payload[13]
+    if width <= 0 or height <= 0:
+        return ""
+    compressed = data_size != 0
+    layer_count = 1
+    face_height = height
+    if compressed and height // width == 6:
+        layer_count = 6
+        face_height = height // 6
+
+    def level_size(level_width: int, level_height: int) -> int:
+        if compressed:
+            block_bytes = {2: 8, 4: 16}.get(pixel_type)
+            if block_bytes is None:
+                return -1
+            return (max(1, (level_width + 3) // 4) *
+                    max(1, (level_height + 3) // 4) * block_bytes)
+        bytes_per_pixel = {1: 1, 2: 3, 4: 4, 12: 4}.get(pixel_type)
+        return -1 if bytes_per_pixel is None else (
+            level_width * level_height * bytes_per_pixel)
+
+    base_size = data_size if compressed else level_size(width, face_height)
+    if base_size < 0:
+        return ""
+    complete_size = base_size
+    for level in range(1, mipmap_count):
+        size = level_size(max(width >> level, 1), max(face_height >> level, 1))
+        if size < 0:
+            return ""
+        complete_size += size
+    footer_offset = 0x80 + complete_size * layer_count
+    if footer_offset > len(payload):
+        return ""
+    return payload[footer_offset:].decode("ascii", errors="ignore").strip("\x00\r\n ")
+
+
 class TextureCache:
     def __init__(self, installation: Installation):
         self.installation = installation
         self.images: dict[str, Image.Image | None] = {}
         self.alpha_tests: dict[str, float] = {}
         self.txi: dict[str, str] = {}
+        self.raw_txi: dict[str, str] = {}
+        self.missing: set[str] = set()
+        self.environment_maps: set[str] = set()
+
+    def source_identity(self, name: str) -> dict[str, Any] | None:
+        key = name.strip().lower()
+        if not key or key == "null":
+            return None
+        source, _ = self.installation.texture_resource_result(name)
+        if source is None:
+            return None
+        data = resource_data(source)
+        return {
+            "resref": name.strip(),
+            "sourceSha256": sha256_bytes(data),
+            "sourceByteCount": len(data),
+            "sourceType": resource_type_name(source),
+        }
 
     def image(self, name: str) -> Image.Image | None:
         key = name.strip().lower()
@@ -329,13 +581,22 @@ class TextureCache:
         if key in self.images:
             return self.images[key]
 
+        source, sidecar_txi = self.installation.texture_resource_result(name)
         texture = self.installation.texture(name)
         if texture is None:
             self.images[key] = None
             self.alpha_tests[key] = 1.0
             self.txi[key] = ""
+            self.raw_txi[key] = ""
+            self.missing.add(name.strip())
             return None
         self.alpha_tests[key] = float(texture.alpha_test)
+        embedded_txi = (
+            raw_tpc_txi(resource_data(source))
+            if source is not None and resource_type_name(source) == "TPC"
+            else str(sidecar_txi or "")
+        )
+        self.raw_txi[key] = embedded_txi
         self.txi[key] = str(texture.txi or "")
         texture.convert(TPCTextureFormat.RGBA)
         mipmap = texture.get()
@@ -350,7 +611,11 @@ class TextureCache:
             return False
         if key not in self.images:
             self.image(name)
-        return self.alpha_tests.get(key, 1.0) < 0.5 or self.is_source_additive(name)
+        return (
+            self.alpha_tests.get(key, 1.0) < 0.5 or
+            self.is_source_additive(name) or
+            self.is_source_decal(name)
+        )
 
     def is_source_additive(self, name: str) -> bool:
         key = name.strip().lower()
@@ -358,10 +623,171 @@ class TextureCache:
             return False
         if key not in self.images:
             self.image(name)
-        directives = {
-            line.strip().lower() for line in self.txi.get(key, "").splitlines()
+        values = {
+            value.lower() for value in
+            parse_txi_directives(self.source_txi(name)).get("blending", [])
         }
-        return "blending 1" in directives or "blending additive" in directives
+        return bool(values & {"1", "additive"})
+
+    def is_source_decal(self, name: str) -> bool:
+        key = name.strip().lower()
+        if not key or key == "null":
+            return False
+        if key not in self.images:
+            self.image(name)
+        values = parse_txi_directives(self.source_txi(name)).get("decal", [])
+        if not values:
+            return False
+        if any(value.strip() not in {"0", "1"} for value in values) or any(
+                value.strip() != values[0].strip() for value in values[1:]):
+            raise RuntimeError(f"Invalid KOTOR decal semantic for {name}: {values}")
+        return values[-1].strip() == "1"
+
+    def validate_material_txi(self, name: str, role: str) -> None:
+        key = name.strip().lower()
+        if not key or key == "null":
+            return
+        if key not in self.images:
+            self.image(name)
+        unsupported = unsupported_material_txi(
+            parse_txi_directives(self.source_txi(name)))
+        if unsupported:
+            raise RuntimeError(
+                f"Unsupported KOTOR {role} TXI semantics for {name}: {unsupported}")
+
+    def source_txi(self, name: str) -> str:
+        key = name.strip().lower()
+        if not key or key == "null":
+            return ""
+        if key not in self.images:
+            self.image(name)
+        return getattr(self, "raw_txi", {}).get(key, "") or self.txi.get(key, "")
+
+    def source_environment_map(self, name: str) -> str | None:
+        key = name.strip().lower()
+        if not key or key == "null":
+            return None
+        if key not in self.images:
+            self.image(name)
+        directives = parse_txi_directives(self.source_txi(name))
+        candidates: list[tuple[str, str]] = []
+        for directive in ("envmaptexture", "bumpyshinytexture"):
+            values = directives.get(directive, [])
+            if not values:
+                continue
+            tokens = values[-1].split()
+            if not tokens or tokens[0].lower() == "null":
+                continue
+            candidates.append((directive, tokens[0].strip()))
+        identities = {value.lower() for _, value in candidates}
+        if len(identities) > 1:
+            raise RuntimeError(
+                f"Conflicting KOTOR environment-map semantics for {name}: {candidates}")
+        if not candidates:
+            return None
+        environment_map = candidates[-1][1]
+        self.environment_maps.add(environment_map)
+        return environment_map
+
+    def source_bump_map(self, name: str) -> tuple[str | None, str | None]:
+        key = name.strip().lower()
+        if not key or key == "null":
+            return None, None
+        if key not in self.images:
+            self.image(name)
+        directives = parse_txi_directives(self.source_txi(name))
+        candidates: list[tuple[str, str]] = []
+        for directive in ("bumpmaptexture",):
+            values = directives.get(directive, [])
+            if not values:
+                continue
+            tokens = values[-1].split()
+            if not tokens or tokens[0].lower() == "null":
+                continue
+            candidates.append((directive, tokens[0].strip()))
+        identities = {value.lower() for _, value in candidates}
+        if len(identities) > 1:
+            raise RuntimeError(
+                f"Conflicting KOTOR bump-map semantics for {name}: {candidates}")
+        return candidates[-1] if candidates else (None, None)
+
+    def source_bump_scale(self, name: str) -> tuple[float, bool]:
+        key = name.strip().lower()
+        if not key or key == "null":
+            return 1.0, False
+        if key not in self.images:
+            self.image(name)
+        values = parse_txi_directives(
+            self.source_txi(name)).get("bumpmapscaling", [])
+        if not values:
+            return 1.0, False
+        parsed: list[float] = []
+        for source_value in values:
+            tokens = source_value.split()
+            if len(tokens) != 1:
+                raise RuntimeError(
+                    f"Invalid KOTOR bump-map scale semantic for {name}: {source_value}")
+            try:
+                value = float(tokens[0])
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Invalid KOTOR bump-map scale semantic for {name}: {source_value}") from exc
+            if not math.isfinite(value):
+                raise RuntimeError(
+                    f"Non-finite KOTOR bump-map scale semantic for {name}: {source_value}")
+            parsed.append(value)
+        if any(value != parsed[0] for value in parsed[1:]):
+            raise RuntimeError(
+                f"Conflicting KOTOR bump-map scale semantics for {name}: {values}")
+        return parsed[-1], True
+
+    def material_semantics(self, diffuse: str, lightmap: str) -> dict[str, Any]:
+        diffuse_image = self.image(diffuse)
+        lightmap_image = self.image(lightmap)
+        environment_map = self.source_environment_map(diffuse)
+        bump_directive, bump_map = self.source_bump_map(diffuse)
+        bump_scale, bump_scale_authored = self.source_bump_scale(diffuse)
+        bump_image = self.image(bump_map or "")
+        for role, name in (
+            ("diffuse", diffuse),
+            ("lightmap", lightmap),
+            ("bump-map", bump_map or ""),
+            ("environment-map", environment_map or ""),
+        ):
+            self.validate_material_txi(name, role)
+        if bump_scale_authored and not bump_map:
+            raise RuntimeError(
+                f"KOTOR bump-map scale lacks a bump-map texture: {diffuse}")
+        key = diffuse.strip().lower()
+        diffuse_resref = diffuse if key and key != "null" else None
+        lightmap_key = lightmap.strip().lower()
+        lightmap_resref = lightmap if lightmap_key and lightmap_key != "null" else None
+        source_decal = self.is_source_decal(diffuse)
+        blend = "additive" if self.is_source_additive(diffuse) else (
+            "alpha" if self.is_source_transparent(diffuse) else "opaque")
+        return {
+            "diffuseTexture": diffuse_resref,
+            "lightmapTexture": lightmap_resref,
+            "missingDiffuse": bool(diffuse_resref and diffuse_image is None),
+            "missingLightmap": bool(lightmap_resref and lightmap_image is None),
+            "bumpMapTexture": bump_map,
+            "bumpMapDirective": bump_directive,
+            "bumpMapScale": bump_scale if bump_map else None,
+            "bumpMapScaleAuthored": bool(bump_map and bump_scale_authored),
+            "missingBumpMap": bool(bump_map and bump_image is None),
+            "diffuseSource": self.source_identity(diffuse),
+            "lightmapSource": self.source_identity(lightmap),
+            "bumpMapSource": self.source_identity(bump_map or ""),
+            "alphaTest": self.alpha_tests.get(key, 1.0),
+            "blend": blend,
+            "sourceDecal": source_decal,
+            "environmentMap": environment_map,
+            "materialName": material_name(
+                diffuse, blend == "additive", environment_map,
+                bump_scale if bump_map and bump_scale_authored else None,
+                source_decal),
+            "sourceTxi": self.source_txi(diffuse),
+        }
 
 
 def export_effect_texture(
@@ -394,6 +820,63 @@ def export_effect_texture(
     }
 
 
+def export_environment_map(
+    installation: Installation,
+    resref: str,
+    output_root: Path,
+) -> dict[str, Any]:
+    # PyKotor normalizes Odyssey's packed cubemap to the conventional DDS/Godot
+    # X+, X-, Y+, Y-, Z+, Z- order before exposing its six layers. Preserve
+    # that order explicitly; the PNG row flip matches the other TPC payloads
+    # exported by this importer and is declared for runtime fail-closed checks.
+    face_order = (
+        "positive-x", "negative-x", "positive-y",
+        "negative-y", "positive-z", "negative-z",
+    )
+    source, txi = installation.texture_resource_result(resref)
+    texture = installation.texture(resref)
+    if source is None or texture is None:
+        raise RuntimeError(f"Environment map is missing: {resref}")
+    if not texture.is_cube_map or len(texture.layers) != 6:
+        raise RuntimeError(f"Environment map is not a six-face cubemap: {resref}")
+    source_bytes = resource_data(source)
+    texture.convert(TPCTextureFormat.RGBA)
+    faces: list[dict[str, Any]] = []
+    for layer in range(6):
+        mipmap = texture.get(layer, 0)
+        image = Image.frombytes(
+            "RGBA", (mipmap.width, mipmap.height), bytes(mipmap.data))
+        image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+        encoded = io.BytesIO()
+        image.save(encoded, format="PNG", optimize=False)
+        payload = encoded.getvalue()
+        relative = f"environment-maps/{resref.lower()}/face-{layer}.png"
+        path = output_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        faces.append({
+            "layer": layer,
+            "face": face_order[layer],
+            "rowTransform": "flip-top-bottom",
+            "path": relative,
+            "payloadSha256": sha256_bytes(payload),
+            "byteCount": len(payload),
+            "width": mipmap.width,
+            "height": mipmap.height,
+        })
+    return {
+        "schema": "nikami-aurora-kotor-environment-map-v2",
+        "resref": resref,
+        "sourceSha256": sha256_bytes(source_bytes),
+        "sourceByteCount": len(source_bytes),
+        "sourceType": str(source.restype),
+        "sourceTxi": txi,
+        "faceOrder": list(face_order),
+        "sampleBasis": "godot-to-odyssey:x,-z,y",
+        "faces": faces,
+    }
+
+
 def export_kotor_ui(
     installation: Installation,
     module: str,
@@ -404,6 +887,7 @@ def export_kotor_ui(
     portrait_resref: str,
     inventory_items: list[dict[str, Any]],
     runtime_configuration: dict[str, Any],
+    include_endar_party: bool = True,
 ) -> dict[str, Any]:
     """Export source GUI contracts and owned textures for the flat runtime shell."""
     talktable = installation.talktable()
@@ -742,54 +1226,70 @@ def export_kotor_ui(
     equipment_layout, equipment_controls = load_gui("equip")
     top_layout, top_controls = load_gui("top")
     hud_layout, hud_controls = load_gui("mipc8x6")
-    module_loading_resref = f"load_{module}"
+    (module_loading_resref, loading_background_selection,
+     loading_background_table_sha256) = source_loading_background(
+        installation, module, area)
 
-    trask_resource = find_named_module_resource(
-        installation, module, "end_trask", "UTC")
-    if trask_resource is None:
-        raise RuntimeError("Endar Spire party member UTC could not be resolved")
-    trask_utc_bytes = resource_data(trask_resource)
-    trask = read_utc(trask_utc_bytes)
     portraits_resource = installation.resource("portraits", ResourceType.TwoDA)
     if portraits_resource is None:
         raise RuntimeError("portraits.2da could not be resolved for the party UI")
     portraits_bytes = resource_data(portraits_resource)
     portraits = read_2da(portraits_bytes)
-    trask_portrait_resref = str(portraits.get_cell(int(trask.portrait_id), "baseresref"))
-    if not trask_portrait_resref:
-        raise RuntimeError("Endar Spire party portrait could not be resolved")
-
-    trask_armor = next(
-        (item for slot, item in trask.equipment.items() if int(slot.value) == 0x00002),
-        None)
-    if trask_armor is None:
-        raise RuntimeError("Endar Spire party member has no equipped armor definition")
-    trask_armor_resref = canonical_resref(trask_armor.resref)
-    trask_armor_resource = installation.resource(trask_armor_resref, ResourceType.UTI)
-    if trask_armor_resource is None:
-        raise RuntimeError(
-            f"Endar Spire party armor could not be resolved: {trask_armor_resref}")
-    trask_armor_bytes = resource_data(trask_armor_resource)
-    trask_armor_uti = read_uti(trask_armor_bytes)
-    baseitems_resource = installation.resource("baseitems", ResourceType.TwoDA)
-    if baseitems_resource is None:
-        raise RuntimeError("baseitems.2da could not be resolved for party defense")
-    baseitems_bytes = resource_data(baseitems_resource)
-    baseitems = read_2da(baseitems_bytes)
-    armor_base_ac = int(baseitems.get_cell(int(trask_armor_uti.base_item), "baseac") or "0")
-    armor_dexterity_limit = int(
-        baseitems.get_cell(int(trask_armor_uti.base_item), "dexbonus") or "-1")
-    dexterity_modifier = math.floor((int(trask.dexterity) - 10) / 2)
-    applied_dexterity_modifier = (
-        dexterity_modifier
-        if armor_dexterity_limit < 0
-        else min(dexterity_modifier, armor_dexterity_limit)
-    )
-    trask_defense = (
-        10 + int(trask.natural_ac) + armor_base_ac + applied_dexterity_modifier)
-    trask_display_name = talktable.string(int(trask.first_name.stringref))
-    if not trask_display_name:
-        raise RuntimeError("Endar Spire party member name could not be resolved")
+    companion_party_member: dict[str, Any] | None = None
+    companion_portrait_resref: str | None = None
+    if include_endar_party:
+        trask_resource = find_named_module_resource(
+            installation, module, "end_trask", "UTC")
+        trask_utc_bytes = resource_data(trask_resource)
+        trask = read_utc(trask_utc_bytes)
+        companion_portrait_resref = str(
+            portraits.get_cell(int(trask.portrait_id), "baseresref"))
+        if not companion_portrait_resref:
+            raise RuntimeError("Endar Spire party portrait could not be resolved")
+        trask_armor = next(
+            (item for slot, item in trask.equipment.items() if int(slot.value) == 0x00002),
+            None)
+        if trask_armor is None:
+            raise RuntimeError("Endar Spire party member has no equipped armor definition")
+        trask_armor_resref = canonical_resref(trask_armor.resref)
+        trask_armor_resource = installation.resource(trask_armor_resref, ResourceType.UTI)
+        if trask_armor_resource is None:
+            raise RuntimeError(
+                f"Endar Spire party armor could not be resolved: {trask_armor_resref}")
+        trask_armor_bytes = resource_data(trask_armor_resource)
+        trask_armor_uti = read_uti(trask_armor_bytes)
+        baseitems_resource = installation.resource("baseitems", ResourceType.TwoDA)
+        if baseitems_resource is None:
+            raise RuntimeError("baseitems.2da could not be resolved for party defense")
+        baseitems_bytes = resource_data(baseitems_resource)
+        baseitems = read_2da(baseitems_bytes)
+        armor_base_ac = int(
+            baseitems.get_cell(int(trask_armor_uti.base_item), "baseac") or "0")
+        armor_dexterity_limit = int(
+            baseitems.get_cell(int(trask_armor_uti.base_item), "dexbonus") or "-1")
+        dexterity_modifier = math.floor((int(trask.dexterity) - 10) / 2)
+        applied_dexterity_modifier = (
+            dexterity_modifier
+            if armor_dexterity_limit < 0
+            else min(dexterity_modifier, armor_dexterity_limit)
+        )
+        trask_display_name = talktable.string(int(trask.first_name.stringref))
+        if not trask_display_name:
+            raise RuntimeError("Endar Spire party member name could not be resolved")
+        companion_party_member = {
+            "id": canonical_resref(trask.tag).lower(),
+            "displayName": trask_display_name,
+            "portrait": export_texture(companion_portrait_resref),
+            "currentVitality": int(trask.current_hp),
+            "maximumVitality": int(trask.max_hp),
+            "defense": 10 + int(trask.natural_ac) + armor_base_ac + applied_dexterity_modifier,
+            "isPlayer": False,
+            "sourceKind": "utc",
+            "utcSha256": sha256_bytes(trask_utc_bytes),
+            "armorResref": trask_armor_resref,
+            "armorUtiSha256": sha256_bytes(trask_armor_bytes),
+            "baseItemsSha256": sha256_bytes(baseitems_bytes),
+        }
 
     loading_music = installation.sounds(
         {"mus_loadscreen"}, [SearchLocation.MUSIC]).get("mus_loadscreen")
@@ -840,12 +1340,45 @@ def export_kotor_ui(
         })
 
     player_party_member = runtime_configuration["gameplay"]["playerPartyMember"]
+    player_party_record = {
+        "id": player_party_member["id"],
+        "displayName": player_party_member["displayName"],
+        "portrait": export_texture(portrait_resref),
+        "currentVitality": player_party_member["currentVitality"],
+        "maximumVitality": player_party_member["maximumVitality"],
+        "defense": player_party_member["defense"],
+        "isPlayer": True,
+        "sourceKind": "profile",
+        "utcSha256": None,
+        "armorResref": None,
+        "armorUtiSha256": None,
+        "baseItemsSha256": None,
+    }
+    party_portraits = [export_texture(portrait_resref)]
+    party_members = [player_party_record]
+    if companion_portrait_resref is not None and companion_party_member is not None:
+        party_portraits.append(export_texture(companion_portrait_resref))
+        party_members.append(companion_party_member)
+    minimap_resref = f"lbl_map{area_resref}"
+    minimap_source, _ = installation.texture_resource_result(minimap_resref)
+    minimap_record = None if minimap_source is None else {
+        "texture": export_texture(minimap_resref),
+        "mapPoint1": [float(area.map_point_1.x), float(area.map_point_1.y)],
+        "mapPoint2": [float(area.map_point_2.x), float(area.map_point_2.y)],
+        "worldPoint1": [float(area.world_point_1.x), float(area.world_point_1.y)],
+        "worldPoint2": [float(area.world_point_2.x), float(area.world_point_2.y)],
+        "resolutionX": int(area.map_res_x),
+        "zoom": int(area.map_zoom),
+        "northAxis": int(area.north_axis),
+    }
     ui_contract: dict[str, Any] = {
         "schema": "nikami-aurora-kotor-ui-v1",
         "loading": {
             "layout": loading_layout,
             "controls": loading_controls,
             "background": export_texture(module_loading_resref),
+            "backgroundSelection": loading_background_selection,
+            "backgroundTableSha256": loading_background_table_sha256,
             "logo": export_texture("logo_sw_02"),
             "progress": export_texture("bluefill"),
             "loadingText": talktable.string(42493),
@@ -863,41 +1396,9 @@ def export_kotor_ui(
             "topControls": top_controls,
             "background": export_texture("lbl_invent"),
             "portrait": export_texture(portrait_resref),
-            "partyPortraits": [
-                export_texture(portrait_resref),
-                export_texture(trask_portrait_resref),
-            ],
+            "partyPortraits": party_portraits,
             "partyPortraitsSourceSha256": sha256_bytes(portraits_bytes),
-            "partyMembers": [
-                {
-                    "id": player_party_member["id"],
-                    "displayName": player_party_member["displayName"],
-                    "portrait": export_texture(portrait_resref),
-                    "currentVitality": player_party_member["currentVitality"],
-                    "maximumVitality": player_party_member["maximumVitality"],
-                    "defense": player_party_member["defense"],
-                    "isPlayer": True,
-                    "sourceKind": "profile",
-                    "utcSha256": None,
-                    "armorResref": None,
-                    "armorUtiSha256": None,
-                    "baseItemsSha256": None,
-                },
-                {
-                    "id": canonical_resref(trask.tag).lower(),
-                    "displayName": trask_display_name,
-                    "portrait": export_texture(trask_portrait_resref),
-                    "currentVitality": int(trask.current_hp),
-                    "maximumVitality": int(trask.max_hp),
-                    "defense": trask_defense,
-                    "isPlayer": False,
-                    "sourceKind": "utc",
-                    "utcSha256": sha256_bytes(trask_utc_bytes),
-                    "armorResref": trask_armor_resref,
-                    "armorUtiSha256": sha256_bytes(trask_armor_bytes),
-                    "baseItemsSha256": sha256_bytes(baseitems_bytes),
-                },
-            ],
+            "partyMembers": party_members,
             "items": item_records,
             "allItems": {
                 "text": talktable.string(41822),
@@ -911,10 +1412,7 @@ def export_kotor_ui(
             "topControls": top_controls,
             "background": export_texture("lbl_equip"),
             "portrait": export_texture(portrait_resref),
-            "partyPortraits": [
-                export_texture(portrait_resref),
-                export_texture(trask_portrait_resref),
-            ],
+            "partyPortraits": party_portraits,
             "partyPortraitsSourceSha256": sha256_bytes(portraits_bytes),
             "items": item_records,
             "slotIcons": {
@@ -953,20 +1451,8 @@ def export_kotor_ui(
             "layout": hud_layout,
             "controls": hud_controls,
             "portrait": export_texture(portrait_resref),
-            "partyPortraits": [
-                export_texture(portrait_resref),
-                export_texture(trask_portrait_resref),
-            ],
-            "minimap": {
-                "texture": export_texture(f"lbl_map{area_resref}"),
-                "mapPoint1": [float(area.map_point_1.x), float(area.map_point_1.y)],
-                "mapPoint2": [float(area.map_point_2.x), float(area.map_point_2.y)],
-                "worldPoint1": [float(area.world_point_1.x), float(area.world_point_1.y)],
-                "worldPoint2": [float(area.world_point_2.x), float(area.world_point_2.y)],
-                "resolutionX": int(area.map_res_x),
-                "zoom": int(area.map_zoom),
-                "northAxis": int(area.north_axis),
-            },
+            "partyPortraits": party_portraits,
+            "minimap": minimap_record,
         },
     }
     unresolved_references: list[str] = []
@@ -1028,6 +1514,14 @@ def export_first_encounter_effects(
                 f"Emitter controller {controller_type.name} is missing on {node.name}")
         return float(values[0])
 
+    def vector(node: Any, controller_type: MDLControllerType,
+               fallback: list[float]) -> list[float]:
+        values = controller_value(node, controller_type, fallback)
+        if len(values) < len(fallback) or not all(math.isfinite(value) for value in values):
+            raise RuntimeError(
+                f"Emitter controller {controller_type.name} is invalid on {node.name}")
+        return values
+
     projectile_emitters = emitters(projectile)
     muzzle_emitters = emitters(muzzle)
     if len(projectile_emitters) != 1 or len(muzzle_emitters) != 5:
@@ -1050,8 +1544,45 @@ def export_first_encounter_effects(
             abs(muzzle_size - 0.3) > 0.0001 or
             abs(muzzle_lifetime - 0.02) > 0.0001):
         raise RuntimeError("First-encounter emitter dimensions drifted")
+    projectile_blur_length = scalar(projectile_node, MDLControllerType.BLURLENGTH)
+    projectile_life_expectancy = scalar(projectile_node, MDLControllerType.LIFEEXP)
+    if (abs(projectile_blur_length - 0.01) > 0.0001 or
+            projectile_life_expectancy != -1.0 or
+            str(projectile_emitter.update).lower() != "explosion" or
+            int(projectile_emitter.flags) != 0x42):
+        raise RuntimeError("First-encounter projectile motion contract drifted")
+
+    muzzle_records = []
+    for node, emitter in muzzle_emitters:
+        size = scalar(node, MDLControllerType.SIZESTART)
+        lifetime = scalar(node, MDLControllerType.LIFEEXP)
+        node_transform = quaternion_matrix(node)
+        if (str(emitter.update).lower() != "explosion" or
+                str(emitter.render).lower() != "billboard_to_local_z" or
+                str(emitter.blend).lower() != "lighten" or
+                int(emitter.flags) != 0x42 or size <= 0 or lifetime <= 0):
+            raise RuntimeError(
+                f"First-encounter muzzle layer contract drifted: {node.name}")
+        muzzle_records.append({
+            "node": str(node.name),
+            "position": vector(
+                node, MDLControllerType.POSITION, vector3(node.position)),
+            "basisRight": [float(value) for value in node_transform[:3, 0]],
+            "basisUp": [float(value) for value in node_transform[:3, 1]],
+            "basisForward": [float(value) for value in node_transform[:3, 2]],
+            "textureResref": str(emitter.texture),
+            "update": str(emitter.update),
+            "render": str(emitter.render),
+            "blend": str(emitter.blend),
+            "flags": int(emitter.flags),
+            "size": size,
+            "lifetime": lifetime,
+            "color": vector(
+                node, MDLControllerType.COLORSTART, [1.0, 1.0, 1.0]),
+            "alpha": scalar(node, MDLControllerType.ALPHASTART),
+        })
     return {
-        "schema": "nikami-aurora-kotor-first-encounter-effects-v1",
+        "schema": "nikami-aurora-kotor-first-encounter-effects-v2",
         "projectileModel": "w_laserfire_r",
         "projectileMdlSha256": sha256_bytes(projectile_mdl),
         "projectileMdxSha256": sha256_bytes(projectile_mdx),
@@ -1059,8 +1590,15 @@ def export_first_encounter_effects(
         "muzzleMdlSha256": sha256_bytes(muzzle_mdl),
         "muzzleMdxSha256": sha256_bytes(muzzle_mdx),
         "projectileSize": projectile_size,
+        "projectileUpdate": str(projectile_emitter.update),
+        "projectileRender": str(projectile_emitter.render),
+        "projectileBlend": str(projectile_emitter.blend),
+        "projectileFlags": int(projectile_emitter.flags),
+        "projectileBlurLength": projectile_blur_length,
+        "projectileLifeExpectancy": projectile_life_expectancy,
         "muzzleSize": muzzle_size,
         "muzzleLifetime": muzzle_lifetime,
+        "muzzleEmitters": muzzle_records,
         "laserTexture": export_effect_texture(
             installation, textures, "Fx_laser_01", output_root),
         "muzzleTexture": export_effect_texture(
@@ -1070,13 +1608,34 @@ def export_first_encounter_effects(
     }
 
 
+def material_name(texture_name: str, source_additive: bool,
+                  environment_map: str | None,
+                  authored_bump_scale: float | None = None,
+                  source_decal: bool = False) -> str:
+    name = texture_name or "untextured"
+    if environment_map:
+        name += f"__aurora_envmap_{environment_map}"
+    if authored_bump_scale is not None:
+        name += f"__aurora_normal_scale_{format(authored_bump_scale, '.9g')}"
+    if source_additive:
+        name += "__aurora_additive"
+    if source_decal:
+        name += "__aurora_decal"
+    return name
+
+
 def material_for(mesh: Any, textures: TextureCache, override_texture: str | None = None) -> Any:
     texture_name = str(override_texture or mesh.texture_1 or "").strip()
     image = textures.image(texture_name)
     lightmap_name = str(mesh.texture_2 or "").strip()
     lightmap = textures.image(lightmap_name)
     source_additive = image is not None and textures.is_source_additive(texture_name)
+    source_decal = image is not None and textures.is_source_decal(texture_name)
     source_transparent = image is not None and textures.is_source_transparent(texture_name)
+    environment_map = textures.source_environment_map(texture_name)
+    _, bump_map_name = textures.source_bump_map(texture_name)
+    bump_scale, bump_scale_authored = textures.source_bump_scale(texture_name)
+    bump_map = textures.image(bump_map_name or "")
     diffuse = mesh.diffuse
     color = [
         max(0, min(255, round(float(diffuse.r) * 255))),
@@ -1090,12 +1649,15 @@ def material_for(mesh: Any, textures: TextureCache, override_texture: str | None
         # it by a dark pre-lighting material factor.
         color = [255, 255, 255, 255]
     return trimesh.visual.material.PBRMaterial(
-        name=(texture_name + "__aurora_additive") if source_additive else
-        (texture_name or "untextured"),
+        name=material_name(
+            texture_name, source_additive, environment_map,
+            bump_scale if bump_map is not None and bump_scale_authored else None,
+            source_decal),
         baseColorTexture=image,
         baseColorFactor=color,
         emissiveTexture=lightmap,
         emissiveFactor=[1.0, 1.0, 1.0] if lightmap is not None else None,
+        normalTexture=bump_map,
         metallicFactor=0.0,
         roughnessFactor=1.0,
         alphaMode="BLEND" if source_transparent else "OPAQUE",
@@ -1103,7 +1665,263 @@ def material_for(mesh: Any, textures: TextureCache, override_texture: str | None
     )
 
 
-def patch_glb_texture_channels(data: bytes) -> bytes:
+def room_emitter_controller_values(node: Any) -> dict[str, Any]:
+    def scalar(controller_type: MDLControllerType, fallback: float) -> float:
+        return controller_value(node, controller_type, [fallback])[0]
+
+    def color(controller_type: MDLControllerType) -> list[float]:
+        return controller_value(node, controller_type, [1.0, 1.0, 1.0])
+
+    return {
+        # Gravity and mass are distinct Odyssey controllers. Mass remains
+        # provenance and must not be substituted for authored gravity.
+        "birthRate": scalar(MDLControllerType.BIRTHRATE, 0.0),
+        "randomBirthRate": scalar(MDLControllerType.RANDOMBIRTHRATE, 0.0),
+        "velocity": scalar(MDLControllerType.VELOCITY, 0.0),
+        "randomVelocity": scalar(MDLControllerType.RANDVEL, 0.0),
+        # Odyssey emitter extents are authored in hundredths of a metre.
+        # Keep the raw controller values and export the converted footprint
+        # separately so the runtime cannot silently reinterpret their units.
+        "xSize": scalar(MDLControllerType.XSIZE, 0.0),
+        "ySize": scalar(MDLControllerType.YSIZE, 0.0),
+        "gravity": scalar(MDLControllerType.GRAV, 0.0),
+        "mass": scalar(MDLControllerType.MASS, 0.0),
+        "particleRotation": scalar(MDLControllerType.PARTICLEROT, 0.0),
+        "spreadRadians": scalar(MDLControllerType.SPREAD, 0.0),
+        "lifeExpectancy": scalar(MDLControllerType.LIFEEXP, 1.0),
+        "colorStart": color(MDLControllerType.COLORSTART),
+        "colorMid": color(MDLControllerType.COLORMID),
+        "colorEnd": color(MDLControllerType.COLOREND),
+        "percentStart": scalar(MDLControllerType.PERCENTSTART, 0.0),
+        "percentMid": scalar(MDLControllerType.PERCENTMID, 0.5),
+        "percentEnd": scalar(MDLControllerType.PERCENTEND, 1.0),
+        "alphaStart": scalar(MDLControllerType.ALPHASTART, 1.0),
+        "alphaMid": scalar(MDLControllerType.ALPHAMID, 1.0),
+        "alphaEnd": scalar(MDLControllerType.ALPHAEND, 0.0),
+        "sizeStart": scalar(MDLControllerType.SIZESTART, 1.0),
+        "sizeMid": scalar(MDLControllerType.SIZEMID, 1.0),
+        "sizeEnd": scalar(MDLControllerType.SIZEEND, 1.0),
+        "frameStart": scalar(MDLControllerType.FRAMESTART, 0.0),
+        "frameEnd": scalar(MDLControllerType.FRAMEEND, 0.0),
+        "fps": scalar(MDLControllerType.FPS, 0.0),
+        "blurLength": scalar(MDLControllerType.BLURLENGTH, 0.0),
+        # Odyssey controller 92 is the authored restitution coefficient used
+        # when EMITTER_FLAG_BOUNCE is set.  Keep the value source-bound in the
+        # v2 manifest instead of substituting a destination-engine default.
+        "bounceCoefficient": scalar(MDLControllerType.BOUNCECO, 0.0),
+    }
+
+
+SUPPORTED_ROOM_EMITTER_UPDATES = frozenset({"fountain", "single"})
+SUPPORTED_ROOM_EMITTER_RENDERS = frozenset({
+    "normal",
+    "motion_blur",
+    "billboard_to_local_z",
+    "billboard_to_world_z",
+    "aligned_to_particle_dir",
+})
+SUPPORTED_ROOM_EMITTER_BLENDS = frozenset({"normal", "lighten"})
+ROOM_EMITTER_POINT_TO_POINT_FLAG = 0x0001
+ROOM_EMITTER_POINT_TO_POINT_BEZIER_FLAG = 0x0002
+ROOM_EMITTER_COLLISION_BOUNCE_FLAG = 0x0010
+# These flags change particle motion or require a render target/collision join
+# that this source-room path does not own. Straight point-to-point acceleration
+# is handled separately through a static authored child target. P2P_SEL without
+# P2P is only a mode selector; TINTED and RANDOM are rendered below.
+UNSUPPORTED_ROOM_EMITTER_FLAGS = (
+    0x0004 |  # wind
+    0x0080 |  # parent velocity inheritance
+    0x0200 |  # collision splat
+    0x0400 |  # particle inheritance
+    0x0800 |  # depth-texture sampling
+    0x1000    # unknown source flag
+)
+GODOT_RENDER_PRIORITY_MIN = -128
+GODOT_RENDER_PRIORITY_MAX = 127
+ROOM_EMITTER_MAXIMUM_QUAD_EXTENT_METERS = 8.0
+
+
+def room_emitter_visual_safety_reasons(emitter: dict[str, Any]) -> tuple[str, ...]:
+    """Validate atlas addressing and final card extent without rescaling source."""
+    reasons: set[str] = set()
+    x_grid = max(1, int(emitter.get("xGrid", 0)))
+    y_grid = max(1, int(emitter.get("yGrid", 0)))
+    frame_count = x_grid * y_grid
+    frame_start = float(emitter.get("frameStart", float("nan")))
+    frame_end = float(emitter.get("frameEnd", float("nan")))
+    fps = float(emitter.get("fps", float("nan")))
+    persistent_single = (
+        str(emitter.get("update", "")).lower() == "single" and
+        float(emitter.get("lifeExpectancy", 0.0)) == -1.0)
+    minimum_frame = 1.0 if persistent_single else 0.0
+    maximum_frame = float(frame_count if persistent_single else frame_count - 1)
+    if (not math.isfinite(frame_start) or not math.isfinite(frame_end) or
+            frame_start != math.trunc(frame_start) or
+            frame_end != math.trunc(frame_end) or
+            frame_start < minimum_frame or frame_end > maximum_frame or
+            frame_start > frame_end or not math.isfinite(fps) or fps < 0):
+        reasons.add("atlas_range")
+
+    sizes = [
+        float(emitter.get(name, float("nan")))
+        for name in ("sizeStart", "sizeMid", "sizeEnd")
+    ]
+    blur_length = float(emitter.get("blurLength", 0.0))
+    if (any(not math.isfinite(size) or size < 0 for size in sizes) or
+            not math.isfinite(blur_length) or blur_length < 0 or
+            max(sizes, default=0.0) <= 0):
+        reasons.add("quad_extent")
+    else:
+        maximum_size = max(sizes)
+        aspect = 1.0
+        if str(emitter.get("render", "")).lower() == "motion_blur":
+            aspect = max(1.0, blur_length / max(0.001, sizes[0]))
+        extent = maximum_size * aspect
+        if (not math.isfinite(extent) or
+                extent > ROOM_EMITTER_MAXIMUM_QUAD_EXTENT_METERS):
+            reasons.add("quad_extent")
+    return tuple(sorted(reasons))
+
+
+def room_emitter_point_to_point_target(node: Any) -> list[float] | None:
+    """Return a static straight-P2P child target, otherwise fail closed.
+
+    The gravity-target source form has P2P set, the Bezier selector clear, and
+    exactly one child reference. A time-varying child position would require a
+    frame-pose join, so only an absent position controller or one authored row
+    at time zero matching the rest position is accepted.
+    """
+    source = node.emitter
+    if source is None or not int(source.flags) & ROOM_EMITTER_POINT_TO_POINT_FLAG:
+        return None
+    if int(source.flags) & ROOM_EMITTER_POINT_TO_POINT_BEZIER_FLAG:
+        return None
+    if len(node.children) != 1:
+        return None
+    target = node.children[0]
+    if target.children:
+        return None
+    position_controllers = [
+        controller for controller in target.controllers
+        if controller.controller_type == MDLControllerType.POSITION
+    ]
+    if len(position_controllers) > 1:
+        return None
+    target_position = vector3(target.position)
+    if position_controllers:
+        rows = position_controllers[0].rows
+        if len(rows) != 1 or abs(float(rows[0].time)) > 1e-6:
+            return None
+        authored = [float(item) for item in rows[0].data[:3]]
+        if (len(authored) != 3 or
+                any(not math.isfinite(item) for item in authored) or
+                any(abs(authored[index] - target_position[index]) > 1e-5
+                    for index in range(3))):
+            return None
+    if any(not math.isfinite(item) for item in target_position):
+        return None
+    return target_position
+
+
+def room_emitter_unsupported_reasons(
+    emitter: dict[str, Any], texture_available: bool = True
+) -> tuple[str, ...]:
+    """Classify source semantics without selecting on a module or room ID.
+
+    Odyssey treats an authored zero atlas dimension as one cell. Keep that
+    behavior in the predicate; export records retain the authored dimensions
+    separately from their effective, runtime-safe grid.
+    """
+    update = str(emitter["update"]).lower()
+    render = str(emitter["render"]).lower()
+    blend = str(emitter["blend"]).lower()
+    reasons: set[str] = set()
+    if update not in SUPPORTED_ROOM_EMITTER_UPDATES:
+        reasons.add("update")
+    if render not in SUPPORTED_ROOM_EMITTER_RENDERS:
+        reasons.add("render")
+    if blend not in SUPPORTED_ROOM_EMITTER_BLENDS:
+        reasons.add("blend")
+    source_flags = int(emitter.get("flags", 0))
+    point_to_point = bool(source_flags & ROOM_EMITTER_POINT_TO_POINT_FLAG)
+    collision_bounce = bool(source_flags & ROOM_EMITTER_COLLISION_BOUNCE_FLAG)
+    depth_texture = str(emitter.get("depthTexture", "") or "").strip().lower()
+    render_order = int(emitter.get("renderOrder", 0))
+    if (
+        source_flags & UNSUPPORTED_ROOM_EMITTER_FLAGS or
+        int(emitter.get("spawnType", 0)) != 0 or
+        int(emitter.get("frameBlender", 0)) != 0 or
+        depth_texture not in {"", "null"} or
+        render_order < GODOT_RENDER_PRIORITY_MIN or
+        render_order > GODOT_RENDER_PRIORITY_MAX
+    ):
+        reasons.add("render")
+    if point_to_point:
+        target = emitter.get("pointToPointTargetPosition")
+        gravity = float(emitter.get("gravity", 0.0))
+        if (source_flags & ROOM_EMITTER_POINT_TO_POINT_BEZIER_FLAG or
+                not isinstance(target, (list, tuple)) or len(target) != 3 or
+                any(not math.isfinite(float(item)) for item in target) or
+                not math.isfinite(gravity) or gravity <= 0):
+            reasons.add("render")
+    if collision_bounce:
+        bounce_coefficient = float(emitter.get("bounceCoefficient", float("nan")))
+        if (not math.isfinite(bounce_coefficient) or
+                bounce_coefficient < 0.0 or bounce_coefficient > 1.0):
+            reasons.add("render")
+    for extent_name in ("xSize", "ySize"):
+        extent = float(emitter.get(extent_name, 0.0))
+        if not math.isfinite(extent) or extent < 0:
+            reasons.add("render")
+    authored_x_grid = int(emitter["xGrid"])
+    authored_y_grid = int(emitter["yGrid"])
+    if authored_x_grid < 0 or authored_y_grid < 0:
+        reasons.add("grid")
+    birth_rate = float(emitter["birthRate"])
+    life_expectancy = float(emitter["lifeExpectancy"])
+    if update == "fountain" and (birth_rate <= 0 or life_expectancy <= 0):
+        reasons.add("lifetime")
+    if update == "single":
+        frame_count = max(1, authored_x_grid) * max(1, authored_y_grid)
+        constant_size = (
+            float(emitter["sizeStart"]) == float(emitter["sizeMid"]) ==
+            float(emitter["sizeEnd"])
+        )
+        persistent_sprite = (
+            render in {"normal", "billboard_to_local_z"} and blend == "normal" and
+            life_expectancy == -1.0 and birth_rate == 1.0 and
+            float(emitter["velocity"]) == 0.0 and
+            float(emitter["gravity"]) == 0.0 and
+            constant_size and float(emitter["sizeStart"]) > 0 and
+            int(emitter["frameStart"]) >= 1 and
+            int(emitter["frameEnd"]) <= frame_count and
+            int(emitter["frameStart"]) <= int(emitter["frameEnd"])
+        )
+        finite_particle = life_expectancy > 0
+        if not persistent_sprite and not finite_particle:
+            reasons.add("lifetime")
+    visual_fields = {
+        "sizeStart", "sizeMid", "sizeEnd", "frameStart", "frameEnd", "fps"
+    }
+    if visual_fields.issubset(emitter) and room_emitter_visual_safety_reasons(emitter):
+        reasons.add("render")
+    if not texture_available:
+        reasons.add("texture")
+    return tuple(sorted(reasons))
+
+
+def validate_room_emitter_semantics(emitter: dict[str, Any], identity: str) -> None:
+    reasons = room_emitter_unsupported_reasons(emitter)
+    if reasons:
+        raise RuntimeError(
+            f"Unsupported KOTOR room-emitter semantic: {identity} "
+            f"reasons={','.join(reasons)} update={emitter['update']} "
+            f"render={emitter['render']} blend={emitter['blend']}")
+
+
+def patch_glb_texture_channels(
+    data: bytes, normal_scales: dict[str, float] | None = None
+) -> bytes:
     """Promote trimesh custom UV2 attributes to standard glTF TEXCOORD_1."""
     if data[:4] != b"glTF":
         raise RuntimeError("Expected a binary glTF payload")
@@ -1124,6 +1942,11 @@ def patch_glb_texture_channels(data: bytes) -> bytes:
         if "emissiveTexture" in material:
             material["emissiveTexture"]["texCoord"] = 1
             material["emissiveFactor"] = [1.0, 1.0, 1.0]
+            changed = True
+        material_name_value = str(material.get("name", ""))
+        if (normal_scales and material_name_value in normal_scales and
+                isinstance(material.get("normalTexture"), dict)):
+            material["normalTexture"]["scale"] = normal_scales[material_name_value]
             changed = True
     if not changed:
         return data
@@ -1152,13 +1975,14 @@ def export_room(
 
     mdl_bytes = resource_data(mdl_resource)
     mdx_bytes = resource_data(mdx_resource)
-    model = read_mdl(mdl_bytes, source_ext=mdx_bytes)
+    model = read_owned_mdl(mdl_bytes, mdx_bytes)
     scene = trimesh.Scene(base_frame="kotor_model")
     mesh_count = 0
     vertex_count = 0
     triangle_count = 0
     diffuse_textures: set[str] = set()
     lightmaps: set[str] = set()
+    material_contracts: dict[tuple[Any, ...], dict[str, Any]] = {}
     lights: list[dict[str, Any]] = []
     emitters: list[dict[str, Any]] = []
     walkmesh_triangles: list[list[list[float]]] = []
@@ -1170,12 +1994,6 @@ def export_room(
         if node.emitter is not None:
             emitter = node.emitter
 
-            def scalar(controller_type: MDLControllerType, fallback: float) -> float:
-                return controller_value(node, controller_type, [fallback])[0]
-
-            def emitter_color(controller_type: MDLControllerType) -> list[float]:
-                return controller_value(node, controller_type, [1.0, 1.0, 1.0])
-
             texture_name = str(emitter.texture or "").strip()
             if not texture_name or texture_name.lower() == "null":
                 raise RuntimeError(
@@ -1186,47 +2004,56 @@ def export_room(
                 raise RuntimeError(
                     f"Room emitter {model_name}/{node_path} has no direction")
             direction /= direction_length
-            emitters.append({
-                "schema": "nikami-aurora-kotor-room-emitter-v1",
+            basis_right = world_transform @ np.asarray([1.0, 0.0, 0.0, 0.0])
+            basis_up = world_transform @ np.asarray([0.0, 1.0, 0.0, 0.0])
+            basis_forward = world_transform @ np.asarray([0.0, 0.0, 1.0, 0.0])
+            authored_x_grid = int(emitter.x_grid)
+            authored_y_grid = int(emitter.y_grid)
+            controller_values = room_emitter_controller_values(node)
+            point_to_point_target = room_emitter_point_to_point_target(node)
+            point_to_point_target_position = None
+            if point_to_point_target is not None:
+                resolved_target = world_transform @ np.asarray(
+                    [*point_to_point_target, 1.0], dtype=np.float64)
+                point_to_point_target_position = [
+                    float(item) for item in resolved_target[:3]
+                ]
+            emitter_record = {
+                "schema": "nikami-aurora-kotor-room-emitter-v2",
                 "nodePath": node_path,
                 "authoredPosition": vector3(node.position),
                 "position": [float(item) for item in world_transform[:3, 3]],
                 "direction": [float(item) for item in direction[:3]],
+                "basisRight": [float(item) for item in basis_right[:3]],
+                "basisUp": [float(item) for item in basis_up[:3]],
+                "basisForward": [float(item) for item in basis_forward[:3]],
                 "texture": export_effect_texture(
                     installation, textures, texture_name, output_path.parent.parent),
                 "update": str(emitter.update),
                 "render": str(emitter.render),
                 "blend": str(emitter.blend),
                 "flags": int(emitter.flags),
-                "xGrid": int(emitter.x_grid),
-                "yGrid": int(emitter.y_grid),
-                # Controller slot 88 is BIRTHRATE for emitter nodes (and RADIUS
-                # for light nodes); slot 140 is emitter RANDVEL/light MULTIPLIER.
-                "birthRate": scalar(MDLControllerType.BIRTHRATE, 0.0),
-                "randomBirthRate": scalar(MDLControllerType.RANDOMBIRTHRATE, 0.0),
-                "velocity": scalar(MDLControllerType.VELOCITY, 0.0),
-                "randomVelocity": scalar(MDLControllerType.RANDVEL, 0.0),
-                "mass": scalar(MDLControllerType.MASS, 0.0),
-                "particleRotation": scalar(MDLControllerType.PARTICLEROT, 0.0),
-                "spreadRadians": scalar(MDLControllerType.SPREAD, 0.0),
-                "lifeExpectancy": scalar(MDLControllerType.LIFEEXP, 1.0),
-                "colorStart": emitter_color(MDLControllerType.COLORSTART),
-                "colorMid": emitter_color(MDLControllerType.COLORMID),
-                "colorEnd": emitter_color(MDLControllerType.COLOREND),
-                "percentStart": scalar(MDLControllerType.PERCENTSTART, 0.0),
-                "percentMid": scalar(MDLControllerType.PERCENTMID, 0.5),
-                "percentEnd": scalar(MDLControllerType.PERCENTEND, 1.0),
-                "alphaStart": scalar(MDLControllerType.ALPHASTART, 1.0),
-                "alphaMid": scalar(MDLControllerType.ALPHAMID, 1.0),
-                "alphaEnd": scalar(MDLControllerType.ALPHAEND, 0.0),
-                "sizeStart": scalar(MDLControllerType.SIZESTART, 1.0),
-                "sizeMid": scalar(MDLControllerType.SIZEMID, 1.0),
-                "sizeEnd": scalar(MDLControllerType.SIZEEND, 1.0),
-                "frameStart": scalar(MDLControllerType.FRAMESTART, 0.0),
-                "frameEnd": scalar(MDLControllerType.FRAMEEND, 0.0),
-                "fps": scalar(MDLControllerType.FPS, 0.0),
-                "blurLength": scalar(MDLControllerType.BLURLENGTH, 0.0),
-            })
+                "spawnType": int(emitter.spawn_type),
+                "loop": int(emitter.loop),
+                "twoSidedTexture": int(emitter.two_sided_texture),
+                "renderOrder": int(emitter.render_order),
+                "frameBlender": int(emitter.frame_blender),
+                "depthTexture": "" if str(emitter.depth_texture or "").strip().lower() == "null"
+                else str(emitter.depth_texture or ""),
+                "authoredXGrid": authored_x_grid,
+                "authoredYGrid": authored_y_grid,
+                "xGrid": max(1, authored_x_grid),
+                "yGrid": max(1, authored_y_grid),
+                "spawnWidthMeters": float(controller_values["xSize"]) * 0.01,
+                "spawnHeightMeters": float(controller_values["ySize"]) * 0.01,
+                "pointToPointTargetPosition": point_to_point_target_position,
+                **controller_values,
+            }
+            validate_room_emitter_semantics(
+                {**emitter_record,
+                 "xGrid": authored_x_grid, "yGrid": authored_y_grid},
+                f"{model_name}/{node_path}")
+            emitters.append(emitter_record)
         if node.light is not None:
             color = controller_value(node, MDLControllerType.COLOR, color3(node.light.color))
             radius = controller_value(node, MDLControllerType.RADIUS, [float(node.light.radius)])[0]
@@ -1311,6 +2138,23 @@ def export_room(
                 triangle_count += len(faces)
                 texture_name = str(mesh.texture_1 or "").strip()
                 lightmap_name = str(mesh.texture_2 or "").strip()
+                contract_key = (
+                    texture_name.lower(), lightmap_name.lower(),
+                    int(mesh.transparency_hint), bool(mesh.animate_uv),
+                    bool(mesh.background_geometry), bool(mesh.tangent_space),
+                )
+                if contract_key not in material_contracts:
+                    contract = textures.material_semantics(
+                        texture_name, lightmap_name)
+                    contract.update({
+                        "meshCount": 0,
+                        "meshTransparencyHint": int(mesh.transparency_hint),
+                        "animateUv": bool(mesh.animate_uv),
+                        "backgroundGeometry": bool(mesh.background_geometry),
+                        "tangentSpace": bool(mesh.tangent_space),
+                    })
+                    material_contracts[contract_key] = contract
+                material_contracts[contract_key]["meshCount"] += 1
                 if texture_name and texture_name.lower() != "null":
                     diffuse_textures.add(texture_name)
                 if lightmap_name and lightmap_name.lower() != "null":
@@ -1335,15 +2179,65 @@ def export_room(
         "triangleCount": triangle_count,
         "diffuseTextures": sorted(diffuse_textures, key=str.lower),
         "lightmaps": sorted(lightmaps, key=str.lower),
+        "materialContracts": sorted(
+            material_contracts.values(),
+            key=lambda item: (
+                str(item["diffuseTexture"] or "").lower(),
+                str(item["lightmapTexture"] or "").lower()),
+        ),
         "lights": lights,
         "emitters": emitters,
         "walkmeshTriangles": walkmesh_triangles,
     }
     if mesh_count > 0:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(patch_glb_texture_channels(scene.export(file_type="glb")))
+        normal_scales = {
+            str(contract["materialName"]): float(contract["bumpMapScale"])
+            for contract in material_contracts.values()
+            if contract["bumpMapScaleAuthored"]
+        }
+        output_path.write_bytes(patch_glb_texture_channels(
+            scene.export(file_type="glb"), normal_scales))
         record["glb"] = output_path.as_posix()
     return record
+
+
+def source_room_placeholder_record(model_name: str) -> dict[str, Any]:
+    if not is_source_room_placeholder(model_name):
+        raise RuntimeError(f"Not an Odyssey room placeholder: {model_name}")
+    return {
+        "model": SOURCE_ROOM_PLACEHOLDER,
+        "glb": None,
+        "sourcePlaceholder": True,
+        "mdlSha256": None,
+        "mdxSha256": None,
+        "meshCount": 0,
+        "vertexCount": 0,
+        "triangleCount": 0,
+        "diffuseTextures": [],
+        "lightmaps": [],
+        "materialContracts": [],
+        "lights": [],
+        "emitters": [],
+        "walkmeshTriangles": [],
+    }
+
+
+def mixed_source_material_counts(
+    room_records: list[dict[str, Any]],
+) -> tuple[int, int]:
+    additive_environment = 0
+    additive_lightmapped = 0
+    for room in room_records:
+        for contract in room["materialContracts"]:
+            if contract["blend"] != "additive":
+                continue
+            surfaces = int(contract["meshCount"])
+            if contract["environmentMap"]:
+                additive_environment += surfaces
+            if contract["lightmapTexture"]:
+                additive_lightmapped += surfaces
+    return additive_environment, additive_lightmapped
 
 
 def find_node_transform(model: Any, target_name: str) -> np.ndarray | None:
@@ -1608,6 +2502,232 @@ def export_humanoid_actor(
         "animation": animation_report,
         "talkOffset": talk_offset,
     }
+
+
+def export_source_creature_actor(
+    installation: Installation,
+    module: str,
+    utc_resref: str,
+    output_path: Path,
+    textures: TextureCache,
+    mdlops: Path,
+    animation_cache: Path,
+) -> dict[str, Any]:
+    """Assemble one placed creature from its module UTC and owned model graph.
+
+    Unlike the story-specific actor helpers, this path follows the UTC's exact
+    appearance, equipment, body supermodel chain, and hook attachments.  A
+    failed resolution is reported by the caller and is never substituted with
+    a different creature.
+    """
+    utc_resource = find_named_module_resource(
+        installation, module, utc_resref, "UTC")
+    if utc_resource is None:
+        raise RuntimeError(f"{utc_resref}.utc could not be resolved in {module}")
+    utc_bytes = resource_data(utc_resource)
+    utc = read_utc(utc_bytes)
+    order = [SearchLocation.OVERRIDE, SearchLocation.CHITIN]
+
+    def table(name: str) -> tuple[Any, bytes]:
+        resource = installation.resource(name, ResourceType.TwoDA, order)
+        if resource is None:
+            raise RuntimeError(f"{name}.2da could not be resolved")
+        data = resource_data(resource)
+        return read_2da(data), data
+
+    appearance, appearance_bytes = table("appearance")
+    heads, heads_bytes = table("heads")
+    baseitems, baseitems_bytes = table("baseitems")
+    body_name, body_texture = creature_tools.get_body_model(
+        utc, installation, appearance=appearance, baseitems=baseitems)
+    head_name, head_texture = creature_tools.get_head_model(
+        utc, installation, appearance=appearance, heads=heads)
+    right_name, left_name = creature_tools.get_weapon_models(
+        utc, installation, appearance=appearance, baseitems=baseitems)
+    if not body_name:
+        raise RuntimeError(f"{utc_resref} body model could not be resolved")
+
+    body, body_mdl, body_mdx = load_model_pair(installation, body_name)
+    head = head_mdl = head_mdx = None
+    if head_name:
+        head, head_mdl, head_mdx = load_model_pair(installation, head_name)
+    right = right_mdl = right_mdx = None
+    if right_name:
+        right, right_mdl, right_mdx = load_model_pair(installation, right_name)
+    left = left_mdl = left_mdx = None
+    if left_name:
+        left, left_mdl, left_mdx = load_model_pair(installation, left_name)
+
+    animation_models = [body]
+    animation_sources = [{
+        "model": body_name,
+        "sourceSha256": sha256_bytes(body_mdl + body_mdx),
+        "kind": "body",
+    }]
+    supermodel_name = str(getattr(body, "supermodel", "") or "").strip()
+    visited = {str(body_name).casefold()}
+    while supermodel_name and supermodel_name.casefold() not in {"null", "****"}:
+        key = supermodel_name.casefold()
+        if key in visited:
+            raise RuntimeError(
+                f"Creature supermodel cycle for {utc_resref}: {supermodel_name}")
+        if len(visited) >= 16:
+            raise RuntimeError(
+                f"Creature supermodel depth exceeded for {utc_resref}")
+        visited.add(key)
+        supermodel, source_hash = load_animation_supermodel(
+            installation, mdlops, animation_cache, supermodel_name)
+        animation_models.append(supermodel)
+        animation_sources.append({
+            "model": supermodel_name,
+            "sourceSha256": source_hash,
+            "kind": "supermodel",
+        })
+        supermodel_name = str(
+            getattr(supermodel, "supermodel", "") or "").strip()
+
+    animations_by_name: dict[str, Any] = {}
+    animation_origins: dict[str, dict[str, str]] = {}
+    for model_index, model in enumerate(animation_models):
+        for animation in model.anims:
+            key = animation.name.casefold()
+            if key in animations_by_name:
+                continue
+            animations_by_name[key] = animation
+            animation_origins[key] = animation_sources[model_index]
+    def translation_policy(origin: dict[str, str]) -> str:
+        kind = origin.get("kind")
+        if kind == "body":
+            return "rest-plus-source-delta"
+        if kind == "supermodel":
+            return "source-absolute"
+        raise RuntimeError(
+            f"Unsupported creature animation origin for {utc_resref}: {kind}")
+
+    animation_model = SimpleNamespace(
+        anims=list(animations_by_name.values()),
+        translation_policies={
+            key: translation_policy(animation_origins[key])
+            for key in animations_by_name
+        },
+    )
+    idle_animation = next(
+        (animation.name for animation in animation_model.anims
+         if animation.name.casefold() == "pause1"),
+        next(
+            (animation.name for animation in animation_model.anims
+             if animation.name.casefold().endswith("pause1")),
+            None),
+    )
+    idle_origin = animation_origins.get(
+        idle_animation.casefold() if idle_animation else "")
+    animation_report = export_actor(
+        output_path,
+        body_model=body,
+        body_name=body_name,
+        body_texture=body_texture,
+        head_model=head,
+        head_name=head_name,
+        head_texture=head_texture,
+        weapon_model=right,
+        weapon_name=right_name,
+        left_weapon_model=left,
+        left_weapon_name=left_name,
+        animation_model=animation_model,
+        animation_names=(idle_animation,) if idle_animation else (),
+        material_factory=lambda mesh, override: material_for(
+            mesh, textures, override),
+    )
+    talk_offset = None
+    if head is not None:
+        head_hook = find_node_transform(body, "headhook")
+        talk_dummy = find_node_transform(head, "talkdummy")
+        if head_hook is not None and talk_dummy is not None:
+            talk_offset = [
+                float(item) for item in (head_hook @ talk_dummy)[:3, 3]]
+
+    model_records = [{
+        "role": "body",
+        "model": body_name,
+        "overrideTexture": body_texture,
+        "mdlSha256": sha256_bytes(body_mdl),
+        "mdxSha256": sha256_bytes(body_mdx),
+    }]
+    for role, name, override, mdl_bytes, mdx_bytes in (
+        ("head", head_name, head_texture, head_mdl, head_mdx),
+        ("rightWeapon", right_name, None, right_mdl, right_mdx),
+        ("leftWeapon", left_name, None, left_mdl, left_mdx),
+    ):
+        if name and mdl_bytes is not None and mdx_bytes is not None:
+            model_records.append({
+                "role": role,
+                "model": name,
+                "overrideTexture": override,
+                "mdlSha256": sha256_bytes(mdl_bytes),
+                "mdxSha256": sha256_bytes(mdx_bytes),
+            })
+    return {
+        "renderImportSchema": "nikami-aurora-kotor-source-creature-v1",
+        "renderStatus": "ready",
+        "glb": f"actors/{output_path.name}",
+        "sourceTemplate": normalize_module_id(utc_resref),
+        "utcSha256": sha256_bytes(utc_bytes),
+        "appearanceId": int(utc.appearance_id),
+        "appearanceTableSha256": sha256_bytes(appearance_bytes),
+        "headsTableSha256": sha256_bytes(heads_bytes),
+        "baseItemsTableSha256": sha256_bytes(baseitems_bytes),
+        "models": model_records,
+        "animationSources": animation_sources,
+        "idleAnimationOrigin": idle_origin,
+        "animation": animation_report,
+        "idleAnimation": idle_animation,
+        "renderExtent": animation_report["extent"],
+        "talkOffset": talk_offset,
+    }
+
+
+def export_source_creature_records(
+    installation: Installation,
+    module: str,
+    git: Any,
+    output_root: Path,
+    textures: TextureCache,
+    mdlops: Path,
+) -> list[dict[str, Any]]:
+    exports: dict[str, dict[str, Any]] = {}
+    records: list[dict[str, Any]] = []
+    for creature in git.creatures:
+        template = canonical_resref(creature.resref)
+        key = template.casefold()
+        if key not in exports:
+            try:
+                exports[key] = export_source_creature_actor(
+                    installation,
+                    module,
+                    template,
+                    output_root / "actors" / f"creature-{key}.glb",
+                    textures,
+                    mdlops,
+                    output_root / "_cache" / "animations",
+                )
+            except Exception as exc:
+                exports[key] = {
+                    "renderImportSchema":
+                        "nikami-aurora-kotor-source-creature-v1",
+                    "renderStatus": "unsupported",
+                    "glb": None,
+                    "sourceTemplate": key,
+                    "renderBlocker":
+                        f"{type(exc).__name__}:{str(exc).strip() or '<empty>'}",
+                }
+        records.append({
+            "template": template,
+            "tag": str(getattr(creature, "tag", "")),
+            "position": vector3(creature.position),
+            "bearing": float(creature.bearing),
+            **exports[key],
+        })
+    return records
 
 
 def export_trask_actor(
@@ -1950,6 +3070,113 @@ def export_player_actor(
             },
         ],
         "equipmentVariants": equipment_variants,
+    }
+
+
+def export_generic_player_actor(
+    installation: Installation,
+    output_path: Path,
+    textures: TextureCache,
+    mdlops: Path,
+    animation_cache: Path,
+    appearance_id: int = 137,
+    portrait_id: int = 18,
+) -> dict[str, Any]:
+    """Export the source-bound base avatar without Endar locker variants."""
+    appearance_resource = installation.resource("appearance", ResourceType.TwoDA)
+    heads_resource = installation.resource("heads", ResourceType.TwoDA)
+    portraits_resource = installation.resource("portraits", ResourceType.TwoDA)
+    if appearance_resource is None or heads_resource is None or portraits_resource is None:
+        raise RuntimeError("Player appearance tables could not be resolved")
+    appearance_bytes = resource_data(appearance_resource)
+    heads_bytes = resource_data(heads_resource)
+    portraits_bytes = resource_data(portraits_resource)
+    appearance = read_2da(appearance_bytes)
+    heads = read_2da(heads_bytes)
+    portraits = read_2da(portraits_bytes)
+    portrait_appearance = int(portraits.get_cell(portrait_id, "appearancenumber"))
+    if portrait_appearance != appearance_id:
+        raise RuntimeError(
+            f"Portrait {portrait_id} resolves appearance {portrait_appearance}, expected {appearance_id}")
+    portrait_resref = str(portraits.get_cell(portrait_id, "baseresref"))
+    if not portrait_resref or installation.texture(portrait_resref) is None:
+        raise RuntimeError(
+            f"Player portrait texture could not be resolved: portrait row {portrait_id}")
+    body_name = str(appearance.get_cell(appearance_id, "modela"))
+    body_texture_prefix = str(appearance.get_cell(appearance_id, "texa"))
+    body_texture = body_texture_prefix
+    if installation.texture(body_texture) is None:
+        body_texture = f"{body_texture_prefix}01"
+        if installation.texture(body_texture) is None:
+            raise RuntimeError(
+                f"Player body texture could not be resolved: {body_texture_prefix}")
+    head_index = int(appearance.get_cell(appearance_id, "normalhead"))
+    head_name = str(heads.get_cell(head_index, "head"))
+    body, body_mdl, body_mdx = load_model_pair(installation, body_name)
+    head, head_mdl, head_mdx = load_model_pair(installation, head_name)
+    animation_model, animation_source_hash = load_animation_supermodel(
+        installation, mdlops, animation_cache)
+    animation_report = export_actor(
+        output_path,
+        body_model=body,
+        body_name=body_name,
+        body_texture=body_texture,
+        head_model=head,
+        head_name=head_name,
+        head_texture=None,
+        weapon_model=None,
+        weapon_name=None,
+        animation_model=animation_model,
+        animation_names=("pause1", "walk", "run", "talk"),
+        material_factory=lambda mesh, override: material_for(mesh, textures, override),
+    )
+    head_hook = find_node_transform(body, "headhook")
+    talk_dummy = find_node_transform(head, "talkdummy")
+    camera_hook = find_node_transform(body, "camerahook")
+    talk_offset = None
+    if head_hook is not None and talk_dummy is not None:
+        talk_transform = head_hook @ talk_dummy
+        talk_offset = [float(item) for item in talk_transform[:3, 3]]
+    return {
+        "schema": "nikami-aurora-kotor-player-v1",
+        "glb": f"actors/{output_path.name}",
+        "portraitId": portrait_id,
+        "portraitResref": portrait_resref,
+        "appearanceId": appearance_id,
+        "appearanceLabel": str(appearance.get_cell(appearance_id, "label")),
+        "bodyModel": body_name,
+        "bodyTexture": body_texture,
+        "headIndex": head_index,
+        "headModel": head_name,
+        "height": float(appearance.get_cell(appearance_id, "height")),
+        "walkDistance": float(appearance.get_cell(appearance_id, "walkdist")),
+        "runDistance": float(appearance.get_cell(appearance_id, "rundist")),
+        "talkOffset": talk_offset,
+        "cameraOffset": (
+            [float(item) for item in camera_hook[:3, 3]]
+            if camera_hook is not None else None
+        ),
+        "animationSource": "S_Male02",
+        "animationSourceSha256": animation_source_hash,
+        "animation": animation_report,
+        "appearanceTableSha256": sha256_bytes(appearance_bytes),
+        "headsTableSha256": sha256_bytes(heads_bytes),
+        "portraitsTableSha256": sha256_bytes(portraits_bytes),
+        "models": [
+            {
+                "model": body_name,
+                "overrideTexture": body_texture,
+                "mdlSha256": sha256_bytes(body_mdl),
+                "mdxSha256": sha256_bytes(body_mdx),
+            },
+            {
+                "model": head_name,
+                "overrideTexture": None,
+                "mdlSha256": sha256_bytes(head_mdl),
+                "mdxSha256": sha256_bytes(head_mdx),
+            },
+        ],
+        "equipmentVariants": [],
     }
 
 
@@ -2759,23 +3986,335 @@ def export_opening_script_contracts(
     ]
 
 
-def import_module(
+def _import_generic_module(
     game_root: Path,
     module: str,
     output_root: Path,
     mdlops: Path,
     runtime_configuration_path: Path,
+    player_appearance_id: int = 137,
+    player_portrait_id: int = 18,
 ) -> Path:
+    module = normalize_module_id(module)
+    if module == ENDAR_MODULE:
+        raise RuntimeError("Generic KOTOR world importer cannot omit Endar story semantics")
     executable = game_root / "swkotor.exe"
     if not executable.is_file():
         raise RuntimeError(f"KOTOR executable not found: {executable}")
-    base_rim = game_root / "modules" / f"{module}.rim"
-    story_rim = game_root / "modules" / f"{module}_s.rim"
-    if not base_rim.is_file() or not story_rim.is_file():
-        raise RuntimeError(f"Module RIM pair not found for {module}")
-
-    runtime_configuration = load_runtime_configuration(runtime_configuration_path)
     installation = Installation(game_root)
+    base_filename, story_filename = resolve_module_rim_filenames(
+        installation, module)
+    base_rim = installation.module_path() / base_filename
+    story_rim = installation.module_path() / story_filename
+    runtime_configuration = load_runtime_configuration(runtime_configuration_path)
+    ifo_resource = find_module_resource(installation, module, "IFO")
+    git_resource = find_module_resource(installation, module, "GIT")
+    are_resource = find_module_resource(installation, module, "ARE")
+    ifo_bytes = resource_data(ifo_resource)
+    git_bytes = resource_data(git_resource)
+    are_bytes = resource_data(are_resource)
+    ifo = read_ifo(ifo_bytes)
+    git = read_git(git_bytes)
+    are = read_are(are_bytes)
+    camera_style_resource = installation.resource("camerastyle", ResourceType.TwoDA)
+    if camera_style_resource is None:
+        raise RuntimeError("camerastyle.2da could not be resolved")
+    camera_style_bytes = resource_data(camera_style_resource)
+    camera_styles = read_2da(camera_style_bytes)
+    camera_style_id = int(are.camera_style)
+    dialogue_view_angle = float(camera_styles.get_cell(camera_style_id, "viewangle"))
+    area_resref = canonical_resref(ifo.area_name)
+    lyt_resource = installation.resource(area_resref, ResourceType.LYT)
+    if lyt_resource is None:
+        raise RuntimeError(f"Layout {area_resref}.lyt could not be resolved")
+    lyt_bytes = resource_data(lyt_resource)
+    layout = read_lyt(lyt_bytes)
+
+    rooms_root = output_root / "rooms"
+    textures = TextureCache(installation)
+    room_records: list[dict[str, Any]] = []
+    for index, room in enumerate(layout.rooms, start=1):
+        model_name = str(room.model)
+        print(f"[{index:02d}/{len(layout.rooms):02d}] exporting {model_name}")
+        if is_source_room_placeholder(model_name):
+            record = source_room_placeholder_record(model_name)
+        else:
+            filename = f"{model_name.lower()}.glb"
+            record = export_room(
+                installation, model_name, rooms_root / filename, textures)
+            if record["glb"] is not None:
+                record["glb"] = f"rooms/{filename}"
+        record["position"] = vector3(room.position)
+        room_records.append(record)
+
+    player_actor = export_generic_player_actor(
+        installation,
+        output_root / "actors" / "player.glb",
+        textures,
+        mdlops,
+        output_root / "_cache" / "animations",
+        appearance_id=player_appearance_id,
+        portrait_id=player_portrait_id,
+    )
+    ui_contract = export_kotor_ui(
+        installation,
+        module,
+        area_resref,
+        are,
+        output_root,
+        textures,
+        player_actor["portraitResref"],
+        [],
+        runtime_configuration,
+        include_endar_party=False,
+    )
+    creatures = export_source_creature_records(
+        installation, module, git, output_root, textures, mdlops)
+    doors = [
+        {
+            "template": canonical_resref(door.resref),
+            "tag": str(door.tag),
+            "position": vector3(door.position),
+            "bearing": float(door.bearing),
+            "linkedToModule": canonical_resref(door.linked_to_module),
+        }
+        for door in git.doors
+    ]
+    placeables = [
+        {
+            "template": canonical_resref(placeable.resref),
+            "tag": str(placeable.tag),
+            "position": vector3(placeable.position),
+            "bearing": float(placeable.bearing),
+        }
+        for placeable in git.placeables
+    ]
+    triggers = export_triggers(installation, git.triggers)
+    waypoints = [
+        {
+            "template": canonical_resref(waypoint.resref),
+            "tag": str(waypoint.tag),
+            "position": vector3(waypoint.position),
+            "bearing": float(waypoint.bearing),
+        }
+        for waypoint in git.waypoints
+    ]
+    cameras = []
+    for source_camera in git.cameras:
+        forward, up = camera_vectors(source_camera)
+        cameras.append({
+            "id": int(source_camera.camera_id),
+            "position": vector3(source_camera.position),
+            "height": float(source_camera.height),
+            "fov": float(source_camera.fov),
+            "pitchDegrees": float(source_camera.pitch),
+            "orientationWxyz": [
+                float(source_camera.orientation.x),
+                float(source_camera.orientation.y),
+                float(source_camera.orientation.z),
+                float(source_camera.orientation.w),
+            ],
+            "forward": forward,
+            "up": up,
+        })
+
+    environment_maps = [
+        export_environment_map(installation, resref, output_root)
+        for resref in sorted(textures.environment_maps, key=str.lower)
+    ]
+    unresolved_texture_references = [
+        {
+            "room": room["model"],
+            "diffuseTexture": contract["diffuseTexture"],
+            "lightmapTexture": contract["lightmapTexture"],
+            "bumpMapTexture": contract["bumpMapTexture"],
+            "missingDiffuse": contract["missingDiffuse"],
+            "missingLightmap": contract["missingLightmap"],
+            "missingBumpMap": contract["missingBumpMap"],
+            "meshCount": contract["meshCount"],
+        }
+        for room in room_records
+        for contract in room["materialContracts"]
+        if (contract["missingDiffuse"] or contract["missingLightmap"] or
+            contract["missingBumpMap"])
+    ]
+    fatal_texture_references = [
+        item for item in unresolved_texture_references
+        if item["missingDiffuse"] or item["missingBumpMap"]
+    ]
+    if fatal_texture_references:
+        missing = sorted({
+            str(value).lower()
+            for item in fatal_texture_references
+            for value, absent in (
+                (item["diffuseTexture"], item["missingDiffuse"]),
+                (item["bumpMapTexture"], item["missingBumpMap"]),
+            )
+            if absent
+        })
+        raise RuntimeError(
+            f"Generic module has unresolved source texture semantics: {module} missing={missing}")
+
+    material_surface_count = sum(
+        int(contract["meshCount"])
+        for room in room_records
+        for contract in room["materialContracts"]
+    )
+    authored_bump_scale_surface_count = sum(
+        int(contract["meshCount"])
+        for room in room_records
+        for contract in room["materialContracts"]
+        if contract["bumpMapScaleAuthored"]
+    )
+    source_decal_surface_count = sum(
+        int(contract["meshCount"])
+        for room in room_records
+        for contract in room["materialContracts"]
+        if contract["sourceDecal"]
+    )
+    additive_environment_surface_count, additive_lightmapped_surface_count = (
+        mixed_source_material_counts(room_records))
+    resolved_diffuse = {
+        str(contract["diffuseTexture"]).lower()
+        for room in room_records
+        for contract in room["materialContracts"]
+        if contract["diffuseTexture"] and not contract["missingDiffuse"]
+    }
+    resolved_lightmaps = {
+        str(contract["lightmapTexture"]).lower()
+        for room in room_records
+        for contract in room["materialContracts"]
+        if contract["lightmapTexture"] and not contract["missingLightmap"]
+    }
+    resolved_bump_maps = {
+        str(contract["bumpMapTexture"]).lower()
+        for room in room_records
+        for contract in room["materialContracts"]
+        if contract["bumpMapTexture"] and not contract["missingBumpMap"]
+    }
+    manifest = {
+        "schema": SCHEMA,
+        "profileId": "kotor",
+        "engineFamily": "Odyssey",
+        "module": module,
+        "contentMode": GENERIC_WORLD_MODE,
+        "missingSourceAssetPolicy": "source-absence-report-no-fabrication-v1",
+        "areaResRef": area_resref,
+        "target": {
+            "executableSha256": sha256_file(executable),
+            "moduleRimSha256": sha256_file(base_rim),
+            "storyRimSha256": sha256_file(story_rim),
+            "layoutSha256": sha256_bytes(lyt_bytes),
+            "gitSha256": sha256_bytes(git_bytes),
+            "ifoSha256": sha256_bytes(ifo_bytes),
+        },
+        "entry": {
+            "position": vector3(ifo.entry_position),
+            "directionRadians": float(ifo.entry_direction),
+        },
+        "lighting": {
+            "dynamicAmbient": color3(are.dynamic_light),
+            "shadows": bool(are.shadows),
+            "shadowOpacity": int(are.shadow_opacity),
+            "sourceSha256": sha256_bytes(are_bytes),
+        },
+        "cameraStyle": {
+            "id": camera_style_id,
+            "viewAngle": dialogue_view_angle,
+            "distance": float(camera_styles.get_cell(camera_style_id, "distance")),
+            "pitchDegrees": float(camera_styles.get_cell(camera_style_id, "pitch")),
+            "height": float(camera_styles.get_cell(camera_style_id, "height")),
+            "sourceSha256": sha256_bytes(camera_style_bytes),
+        },
+        "runtimeConfiguration": runtime_configuration,
+        "ui": ui_contract,
+        "player": player_actor,
+        "rooms": room_records,
+        "environmentMaps": environment_maps,
+        "unresolvedTextureReferences": unresolved_texture_references,
+        "creatures": creatures,
+        "doors": doors,
+        "placeables": placeables,
+        "triggers": triggers,
+        "waypoints": waypoints,
+        "cameras": cameras,
+        "firstEncounter": None,
+        "scriptContracts": [],
+        "counts": {
+            "rooms": len(room_records),
+            "sourceRoomPlaceholders": sum(
+                1 for room in room_records if room.get("sourcePlaceholder", False)),
+            "creatures": len(creatures),
+            "uniqueCreatureTemplates": len({
+                creature["template"].casefold() for creature in creatures}),
+            "renderReadyCreatures": sum(
+                creature["renderStatus"] == "ready" for creature in creatures),
+            "unsupportedCreatures": sum(
+                creature["renderStatus"] != "ready" for creature in creatures),
+            "doors": len(doors),
+            "waypoints": len(waypoints),
+            "cameras": len(cameras),
+            "placeables": len(placeables),
+            "triggers": len(triggers),
+            "walkmeshTriangles": sum(len(room["walkmeshTriangles"]) for room in room_records),
+            "authoredLights": sum(len(room["lights"]) for room in room_records),
+            "authoredEmitters": sum(len(room["emitters"]) for room in room_records),
+            "materialSurfaces": material_surface_count,
+            "resolvedDiffuseTextures": len(resolved_diffuse),
+            "resolvedLightmaps": len(resolved_lightmaps),
+            "resolvedBumpMaps": len(resolved_bump_maps),
+            "authoredBumpMapScaleSurfaces": authored_bump_scale_surface_count,
+            "sourceDecalSurfaces": source_decal_surface_count,
+            "additiveEnvironmentSurfaces": additive_environment_surface_count,
+            "additiveLightmappedSurfaces": additive_lightmapped_surface_count,
+            "environmentMaps": len(environment_maps),
+            "unresolvedTextureReferences": len(unresolved_texture_references),
+        },
+        "limitations": [
+            "Generic module import materializes available player, creature, door, and placeable models; behavioral assembly, scripts, dialogue traversal, pathfinding, and retail camera-state parity remain incomplete.",
+            "Missing diffuse or TXI-declared bump textures and unsupported emitter semantics fail the import instead of receiving fabricated replacements.",
+            "Missing source lightmaps remain reported by exact identity and are not fabricated; affected surfaces retain their resolved diffuse source only.",
+            "Source and enhanced tiers share source identity; enhanced PBR is an explicit non-parity presentation policy.",
+        ],
+    }
+    output_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_root / "module-manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(
+        f"Imported {module}: mode={GENERIC_WORLD_MODE} rooms={len(room_records)} "
+        f"creatures={len(creatures)} triangles="
+        f"{sum(room['triangleCount'] for room in room_records)} "
+        f"emitters={manifest['counts']['authoredEmitters']} "
+        f"renderReadyCreatures={manifest['counts']['renderReadyCreatures']} "
+        f"unsupportedCreatures={manifest['counts']['unsupportedCreatures']}"
+    )
+    print(f"Manifest: {manifest_path}")
+    return manifest_path
+
+
+def _import_endar_module(
+    game_root: Path,
+    module: str,
+    output_root: Path,
+    mdlops: Path,
+    runtime_configuration_path: Path,
+    player_appearance_id: int = 137,
+    player_portrait_id: int = 18,
+) -> Path:
+    module = normalize_module_id(module)
+    if module != ENDAR_MODULE:
+        raise RuntimeError(
+            f"Endar story importer cannot process generic module {module}")
+    executable = game_root / "swkotor.exe"
+    if not executable.is_file():
+        raise RuntimeError(f"KOTOR executable not found: {executable}")
+    installation = Installation(game_root)
+    base_filename, story_filename = resolve_module_rim_filenames(
+        installation, module)
+    base_rim = installation.module_path() / base_filename
+    story_rim = installation.module_path() / story_filename
+    runtime_configuration = load_runtime_configuration(runtime_configuration_path)
     ifo_resource = find_module_resource(installation, module, "IFO")
     git_resource = find_module_resource(installation, module, "GIT")
     are_resource = find_module_resource(installation, module, "ARE")
@@ -2805,15 +4344,19 @@ def import_module(
     room_records: list[dict[str, Any]] = []
     for index, room in enumerate(layout.rooms, start=1):
         model_name = str(room.model)
-        filename = f"{model_name.lower()}.glb"
         print(f"[{index:02d}/{len(layout.rooms):02d}] exporting {model_name}")
-        record = export_room(installation, model_name, rooms_root / filename, textures)
-        if record["glb"] is not None:
-            record["glb"] = f"rooms/{filename}"
+        if is_source_room_placeholder(model_name):
+            record = source_room_placeholder_record(model_name)
+        else:
+            filename = f"{model_name.lower()}.glb"
+            record = export_room(
+                installation, model_name, rooms_root / filename, textures)
+            if record["glb"] is not None:
+                record["glb"] = f"rooms/{filename}"
         record["position"] = vector3(room.position)
         room_records.append(record)
 
-    if module == "end_m01aa":
+    if module == ENDAR_MODULE:
         room_emitters = [
             (room["model"], emitter)
             for room in room_records
@@ -2842,6 +4385,7 @@ def import_module(
                     [-0.1933298110961914, -26.34709930419922, 1.6498400568962097])) or
                 abs(damaged_end[0]["birthRate"] - 40.0) > 0.0001 or
                 abs(damaged_end[0]["lifeExpectancy"] - 6.0) > 0.0001 or
+                abs(damaged_end[0]["gravity"]) > 0.0001 or
                 [damaged_end[0][key] for key in
                  ("sizeStart", "sizeMid", "sizeEnd")] != [2.0, 4.0, 5.0]):
             raise RuntimeError("Endar Spire damaged-end smoke contract drifted")
@@ -2906,6 +4450,8 @@ def import_module(
         textures,
         mdlops,
         output_root / "_cache" / "animations",
+        appearance_id=player_appearance_id,
+        portrait_id=player_portrait_id,
     )
     ui_contract = export_kotor_ui(
         installation,
@@ -2937,19 +4483,21 @@ def import_module(
         installation, module, "end_door02",
         output_root / "doors" / "end_door02.glb", textures)
     creatures = []
-    for creature in git.creatures:
-        record = {
-            "template": canonical_resref(creature.resref),
-            "tag": str(getattr(creature, "tag", "")),
-            "position": vector3(creature.position),
-            "bearing": float(creature.bearing),
-        }
+    source_creatures = export_source_creature_records(
+        installation, module, git, output_root, textures, mdlops)
+    for creature, source_record in zip(git.creatures, source_creatures, strict=True):
+        record = dict(source_record)
         if record["template"].lower() == "end_trask":
             record.update(trask_actor)
         elif record["template"].lower() == "p_carth001":
             record.update(carth_actor)
         elif record["template"].lower() in encounter_actors:
             record.update(encounter_actors[record["template"].lower()])
+        if record.get("glb"):
+            record["renderImportSchema"] = (
+                "nikami-aurora-kotor-source-creature-v1")
+            record["renderStatus"] = "ready"
+            record.pop("renderBlocker", None)
         creatures.append(record)
     doors = []
     for door in git.doors:
@@ -3220,11 +4768,92 @@ def import_module(
         "audio": encounter_audio,
         "scripts": encounter_scripts,
     }
+    environment_maps = [
+        export_environment_map(installation, resref, output_root)
+        for resref in sorted(textures.environment_maps, key=str.lower)
+    ]
+    unresolved_texture_references = [
+        {
+            "room": room["model"],
+            "diffuseTexture": contract["diffuseTexture"],
+            "lightmapTexture": contract["lightmapTexture"],
+            "bumpMapTexture": contract["bumpMapTexture"],
+            "missingDiffuse": contract["missingDiffuse"],
+            "missingLightmap": contract["missingLightmap"],
+            "missingBumpMap": contract["missingBumpMap"],
+            "meshCount": contract["meshCount"],
+        }
+        for room in room_records
+        for contract in room["materialContracts"]
+        if (contract["missingDiffuse"] or contract["missingLightmap"] or
+            contract["missingBumpMap"])
+    ]
+    if module == ENDAR_MODULE:
+        actual_environment_maps = {
+            item["resref"].lower() for item in environment_maps
+        }
+        expected_environment_maps = {"cm_endar", "cm_baremetal"}
+        if actual_environment_maps != expected_environment_maps:
+            raise RuntimeError(
+                "Endar Spire environment-map identity drifted: "
+                f"expected={sorted(expected_environment_maps)} "
+                f"actual={sorted(actual_environment_maps)}")
+        unresolved = {
+            str(value).lower()
+            for item in unresolved_texture_references
+            for value, absent in (
+                (item["diffuseTexture"], item["missingDiffuse"]),
+                (item["lightmapTexture"], item["missingLightmap"]),
+                (item["bumpMapTexture"], item["missingBumpMap"]),
+            )
+            if absent
+        }
+        if unresolved != {"m01aa_04a_a0002t"}:
+            raise RuntimeError("Endar Spire unresolved-texture inventory drifted")
+    material_surface_count = sum(
+        int(contract["meshCount"])
+        for room in room_records
+        for contract in room["materialContracts"]
+    )
+    authored_bump_scale_surface_count = sum(
+        int(contract["meshCount"])
+        for room in room_records
+        for contract in room["materialContracts"]
+        if contract["bumpMapScaleAuthored"]
+    )
+    source_decal_surface_count = sum(
+        int(contract["meshCount"])
+        for room in room_records
+        for contract in room["materialContracts"]
+        if contract["sourceDecal"]
+    )
+    additive_environment_surface_count, additive_lightmapped_surface_count = (
+        mixed_source_material_counts(room_records))
+    resolved_diffuse = {
+        str(contract["diffuseTexture"]).lower()
+        for room in room_records
+        for contract in room["materialContracts"]
+        if contract["diffuseTexture"] and not contract["missingDiffuse"]
+    }
+    resolved_lightmaps = {
+        str(contract["lightmapTexture"]).lower()
+        for room in room_records
+        for contract in room["materialContracts"]
+        if contract["lightmapTexture"] and not contract["missingLightmap"]
+    }
+    resolved_bump_maps = {
+        str(contract["bumpMapTexture"]).lower()
+        for room in room_records
+        for contract in room["materialContracts"]
+        if contract["bumpMapTexture"] and not contract["missingBumpMap"]
+    }
     manifest = {
         "schema": SCHEMA,
         "profileId": "kotor",
         "engineFamily": "Odyssey",
         "module": module,
+        "contentMode": ENDAR_OPENING_MODE,
+        "missingSourceAssetPolicy": "source-absence-report-no-fabrication-v1",
         "areaResRef": area_resref,
         "target": {
             "executableSha256": sha256_file(executable),
@@ -3256,6 +4885,8 @@ def import_module(
         "ui": ui_contract,
         "player": player_actor,
         "rooms": room_records,
+        "environmentMaps": environment_maps,
+        "unresolvedTextureReferences": unresolved_texture_references,
         "creatures": creatures,
         "doors": doors,
         "placeables": placeables,
@@ -3266,7 +4897,15 @@ def import_module(
         "scriptContracts": script_contracts,
         "counts": {
             "rooms": len(room_records),
+            "sourceRoomPlaceholders": sum(
+                1 for room in room_records if room.get("sourcePlaceholder", False)),
             "creatures": len(creatures),
+            "uniqueCreatureTemplates": len({
+                creature["template"].casefold() for creature in creatures}),
+            "renderReadyCreatures": sum(
+                creature["renderStatus"] == "ready" for creature in creatures),
+            "unsupportedCreatures": sum(
+                creature["renderStatus"] != "ready" for creature in creatures),
             "doors": len(doors),
             "waypoints": len(waypoints),
             "cameras": len(git.cameras),
@@ -3275,11 +4914,22 @@ def import_module(
             "walkmeshTriangles": sum(len(room["walkmeshTriangles"]) for room in room_records),
             "authoredLights": sum(len(room["lights"]) for room in room_records),
             "authoredEmitters": sum(len(room["emitters"]) for room in room_records),
+            "materialSurfaces": material_surface_count,
+            "resolvedDiffuseTextures": len(resolved_diffuse),
+            "resolvedLightmaps": len(resolved_lightmaps),
+            "resolvedBumpMaps": len(resolved_bump_maps),
+            "authoredBumpMapScaleSurfaces": authored_bump_scale_surface_count,
+            "sourceDecalSurfaces": source_decal_surface_count,
+            "additiveEnvironmentSurfaces": additive_environment_surface_count,
+            "additiveLightmappedSurfaces": additive_lightmapped_surface_count,
+            "environmentMaps": len(environment_maps),
+            "unresolvedTextureReferences": len(unresolved_texture_references),
         },
         "limitations": [
-            "Only Trask, Carth, the player, and the opening door have assembled render models; other creature and door records remain placements.",
+            "Every placed creature has an exact UTC-bound render import attempt; unsupported source assemblies remain explicit and block runtime/gallery coverage.",
             "Dialogue traversal is partial; unsupported scripts, per-node gestures, animated cameras, and shot obstruction remain.",
             "Room lightmaps and light nodes are source-authored; renderer transfer-function parity remains under test.",
+            "The retail Endar Spire model M01aa_04a references absent lightmap M01aa_04a_a0002t; the unresolved source identity is reported and no replacement texture is fabricated.",
         ],
     }
     output_root.mkdir(parents=True, exist_ok=True)
@@ -3294,12 +4944,40 @@ def import_module(
     return manifest_path
 
 
+def import_module(
+    game_root: Path,
+    module: str,
+    output_root: Path,
+    mdlops: Path,
+    runtime_configuration_path: Path,
+    player_appearance_id: int = 137,
+    player_portrait_id: int = 18,
+) -> Path:
+    normalized_module = normalize_module_id(module)
+    importer = (
+        _import_endar_module
+        if normalized_module == ENDAR_MODULE
+        else _import_generic_module
+    )
+    return importer(
+        game_root,
+        normalized_module,
+        output_root,
+        mdlops,
+        runtime_configuration_path,
+        player_appearance_id,
+        player_portrait_id,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--game-root", type=Path, required=True)
     parser.add_argument("--module", default="end_m01aa")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mdlops", type=Path, required=True)
+    parser.add_argument("--player-appearance-id", type=int, default=137)
+    parser.add_argument("--player-portrait-id", type=int, default=18)
     parser.add_argument(
         "--runtime-config",
         type=Path,
@@ -3317,6 +4995,8 @@ def main() -> int:
             args.output.resolve(),
             args.mdlops.resolve(),
             args.runtime_config.resolve(),
+            args.player_appearance_id,
+            args.player_portrait_id,
         )
     except Exception as exc:
         print(f"KOTOR_IMPORT_FAIL: {exc}", file=sys.stderr)

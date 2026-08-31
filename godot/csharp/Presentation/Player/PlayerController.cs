@@ -1,12 +1,27 @@
 using Godot;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.World;
-using OpenDAO.Presentation;
-using OpenDAO.Presentation.Rigging;
-using OpenDAO.Infrastructure.Configuration;
-using OpenDAO.Infrastructure.World;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.World;
+using Nikami.Aurora.GodotRuntime.Presentation;
+using Nikami.Aurora.GodotRuntime.Presentation.Rigging;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
-namespace OpenDAO.Presentation.Player;
+namespace Nikami.Aurora.GodotRuntime.Presentation.Player;
+
+public sealed record DaoGameplayCameraAcceptance(
+    bool ActiveCamera,
+    bool SubjectProjected,
+    bool SubjectLineOfSight,
+    float ActualArmLength,
+    float PredictedArmLength,
+    float MinimumArmLength,
+    float SelectedYawDegrees,
+    Vector2 SubjectScreenPosition)
+{
+    public bool Passed => ActiveCamera && SubjectProjected && SubjectLineOfSight &&
+                          ActualArmLength >= MinimumArmLength &&
+                          PredictedArmLength >= MinimumArmLength;
+}
 
 public partial class PlayerController : CharacterBody3D
 {
@@ -50,8 +65,28 @@ public partial class PlayerController : CharacterBody3D
     private bool scriptedMotion;
     private bool grounded = true;
     private bool inWater;
+    private bool enhancedCameraClearance;
+    private bool avatarFadedForCameraClearance;
+    private bool cameraClearanceCaptureOverride;
+    private float minimumAvatarCameraClearance;
+    private float avatarCameraClearanceHysteresis;
+    private float enhancedPivotHeight;
+    private float compressedPivotHeight;
+    private float compressedPivotLateral;
+    private float cameraProbeRadius;
+    private float avatarBodyTransparency;
+    private float avatarHeadTransparency;
+    private float selectedObstructionYaw;
+    private float authoredCameraArmLength = 2.7f;
+    private const float ObstructionSearchSwitchHysteresis = .25f;
+    private const float ObstructionSearchYawPenaltyPerDegree = .03f;
+    private static readonly float[] ObstructionSearchYawDegrees =
+        [0, 35, -35, 70, -70, 90, -90];
+    private readonly Dictionary<MeshInstance3D, float> avatarBaseTransparency = [];
+    private readonly Dictionary<MeshInstance3D, bool> avatarBaseVisibility = [];
     private float waterSurfaceY;
     private Vector2? movementInputOverride;
+    private Vector3? movementWorldDirectionOverride;
     private AuthoredNavigationGrid? authoredNavigation;
 
     public int GroundRecoveryCount { get; private set; }
@@ -80,6 +115,64 @@ public partial class PlayerController : CharacterBody3D
     }
 
     public Camera3D LocomotionCamera => locomotionCamera;
+    public float AuthoredGameplayCameraArmLength => authoredCameraArmLength;
+
+    public void SetGameplayCameraArmForAcceptance(float requestedArmLength)
+    {
+        var head = GetNode<SpringArm3D>("Head");
+        var minimum = enhancedCameraClearance ? minimumAvatarCameraClearance : 0;
+        head.SpringLength = Math.Clamp(requestedArmLength, minimum,
+            authoredCameraArmLength);
+        selectedObstructionYaw = 0;
+        head.Rotation = head.Rotation with { Y = 0 };
+    }
+
+    /// <summary>
+    /// Makes the authored gameplay camera current after cinematic release and
+    /// advances the same collision-safe orbit policy used during live play.
+    /// Call on neighboring physics/process frames before accepting a capture.
+    /// </summary>
+    public DaoGameplayCameraAcceptance SettleGameplayCameraForAcceptance()
+        => EvaluateGameplayCameraForAcceptance(true);
+
+    public DaoGameplayCameraAcceptance SampleGameplayCameraForAcceptance()
+        => EvaluateGameplayCameraForAcceptance(false);
+
+    private DaoGameplayCameraAcceptance EvaluateGameplayCameraForAcceptance(
+        bool advanceObstructionSearch)
+    {
+        if (!IsInsideTree() || !IsInstanceValid(locomotionCamera))
+            return new DaoGameplayCameraAcceptance(false, false, false,
+                0, 0, minimumAvatarCameraClearance, 0, Vector2.Zero);
+        locomotionCamera.MakeCurrent();
+        var head = GetNode<SpringArm3D>("Head");
+        var actualArmLength = head.GlobalPosition.DistanceTo(
+            locomotionCamera.GlobalPosition);
+        if (enhancedCameraClearance && advanceObstructionSearch)
+            UpdateObstructionSearch(head, actualArmLength);
+        actualArmLength = head.GlobalPosition.DistanceTo(locomotionCamera.GlobalPosition);
+        var predictedArmLength = enhancedCameraClearance
+            ? PredictCameraClearance(head.Rotation.Y, head.SpringLength)
+            : actualArmLength;
+        var subject = GlobalPosition + GlobalBasis * new Vector3(0, 1.05f, 0);
+        var viewportSize = GetViewport().GetVisibleRect().Size;
+        var behind = locomotionCamera.IsPositionBehind(subject);
+        var screen = behind ? new Vector2(-1, -1) :
+            locomotionCamera.UnprojectPosition(subject);
+        var margin = viewportSize * .04f;
+        var projected = !behind && screen.X >= margin.X && screen.Y >= margin.Y &&
+                        screen.X <= viewportSize.X - margin.X &&
+                        screen.Y <= viewportSize.Y - margin.Y;
+        var ray = PhysicsRayQueryParameters3D.Create(
+            locomotionCamera.GlobalPosition, subject, WorldCollisionMask, [GetRid()]);
+        ray.HitFromInside = true;
+        var lineOfSight = GetWorld3D().DirectSpaceState.IntersectRay(ray).Count == 0;
+        var active = GetViewport().GetCamera3D() == locomotionCamera;
+        return new DaoGameplayCameraAcceptance(active, projected, lineOfSight,
+            actualArmLength, predictedArmLength,
+            enhancedCameraClearance ? minimumAvatarCameraClearance : 0,
+            Mathf.RadToDeg(head.Rotation.Y), screen);
+    }
 
     public Node3D? DuplicateAvatarForPortrait() =>
         avatarTemplate?.Instantiate<Node3D>() ?? avatar?.Duplicate() as Node3D;
@@ -104,7 +197,7 @@ public partial class PlayerController : CharacterBody3D
             GD.PushWarning("OPENDAO_PLAYER_AVATAR status=import-failed path=" + modelPath);
             return;
         }
-        modelPostprocessor.Process(imported, state);
+        modelPostprocessor.Process(imported, state, modelPath);
 
         locomotionAnimations = null;
         if (animationSet is not null && TryLoadModel(animationSet.BankPath) is { } animationBank)
@@ -119,6 +212,8 @@ public partial class PlayerController : CharacterBody3D
         avatarTemplate = packed.Pack(imported) == Error.Ok ? packed : null;
         avatar?.QueueFree();
         avatar = imported;
+        avatarBaseTransparency.Clear();
+        avatarBaseVisibility.Clear();
         avatarRoot.AddChild(imported);
         var bounds = SceneBounds.Calculate(imported);
         if (!bounds.Size.IsZeroApprox())
@@ -150,10 +245,13 @@ public partial class PlayerController : CharacterBody3D
     }
 
     public void SetMovementInputOverride(Vector2? input) => movementInputOverride = input;
+    public void SetWorldMovementDirectionOverride(Vector3? direction) =>
+        movementWorldDirectionOverride = direction;
 
     public void ResetLocomotionState()
     {
         movementInputOverride = null;
+        movementWorldDirectionOverride = null;
         scriptedMotion = false;
         Velocity = Vector3.Zero;
         PlayAvatarAnimation(LocomotionState.Idle);
@@ -164,23 +262,370 @@ public partial class PlayerController : CharacterBody3D
     public void SetAuthoredNavigation(AuthoredNavigationGrid? navigation) =>
         authoredNavigation = navigation;
 
-    public void ConfigureThirdPersonView(DaoGameplayCameraConfiguration configuration)
+    public IReadOnlyList<Vector3> BuildAuthoredNavigationPath(Vector3 target)
+    {
+        if (authoredNavigation is null) return [];
+        var navigation = authoredNavigation;
+        var start = ClosestWalkableCell(navigation, GlobalPosition);
+        var goal = ClosestWalkableCell(navigation, target);
+        if (start < 0 || goal < 0) return [];
+
+        var frontier = new PriorityQueue<int, float>();
+        var costs = new float[navigation.Accessibility.Length];
+        Array.Fill(costs, float.PositiveInfinity);
+        var previous = new Dictionary<int, int>();
+        costs[start] = 0;
+        frontier.Enqueue(start, 0);
+        (int Column, int Row)[] offsets = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+        while (frontier.TryDequeue(out var current, out _))
+        {
+            if (current == goal) break;
+            var column = current % navigation.Columns;
+            var row = current / navigation.Columns;
+            foreach (var offset in offsets)
+            {
+                var nextColumn = column + offset.Column;
+                var nextRow = row + offset.Row;
+                if (!navigation.IsWalkable(nextColumn, nextRow)) continue;
+                var next = nextRow * navigation.Columns + nextColumn;
+                var nextCost = costs[current] + 1;
+                if (nextCost >= costs[next]) continue;
+                costs[next] = nextCost;
+                previous[next] = current;
+                var goalColumn = goal % navigation.Columns;
+                var goalRow = goal / navigation.Columns;
+                var heuristic = Math.Abs(nextColumn - goalColumn) +
+                                Math.Abs(nextRow - goalRow);
+                frontier.Enqueue(next, nextCost + heuristic);
+            }
+        }
+        if (start != goal && !previous.ContainsKey(goal)) return [];
+
+        var cells = new List<int> { goal };
+        while (cells[^1] != start) cells.Add(previous[cells[^1]]);
+        cells.Reverse();
+        var points = new List<Vector3>();
+        var previousDirection = (Column: 0, Row: 0);
+        for (var index = 1; index < cells.Count; index++)
+        {
+            var previousCell = cells[index - 1];
+            var cell = cells[index];
+            var direction = (Column: cell % navigation.Columns -
+                                     previousCell % navigation.Columns,
+                Row: cell / navigation.Columns - previousCell / navigation.Columns);
+            if (index > 1 && direction != previousDirection)
+                points.Add(NavigationCellPosition(navigation, previousCell));
+            previousDirection = direction;
+        }
+        points.Add(NavigationCellPosition(navigation, goal));
+        return points;
+    }
+
+    public void FaceGameplayTarget(Vector3 target)
+    {
+        var direction = target - GlobalPosition;
+        direction.Y = 0;
+        if (direction.LengthSquared() < .0001f) return;
+        direction = direction.Normalized();
+        Rotation = Rotation with { Y = Mathf.Atan2(-direction.X, -direction.Z) };
+    }
+
+    public bool PrepareGameplayCameraForMovement(Vector3 worldDirection,
+        float lookaheadMeters = .65f)
+    {
+        if (!enhancedCameraClearance) return true;
+        worldDirection.Y = 0;
+        if (worldDirection.LengthSquared() < .0001f) return true;
+        var forecastPosition = GlobalPosition +
+                               worldDirection.Normalized() * lookaheadMeters;
+        var head = GetNode<SpringArm3D>("Head");
+        var clearances = ObstructionSearchYawDegrees
+            .Select(degrees =>
+            {
+                var yaw = Mathf.DegToRad(degrees);
+                return (Yaw: yaw, Length: Math.Min(
+                    PredictCameraClearanceAt(GlobalPosition, yaw, head.SpringLength),
+                    PredictCameraClearanceAt(forecastPosition, yaw, head.SpringLength)));
+            })
+            .Where(candidate => candidate.Length >= minimumAvatarCameraClearance)
+            .OrderByDescending(candidate => ObstructionScore(candidate,
+                minimumAvatarCameraClearance + .35f))
+            .ThenBy(candidate => Math.Abs(candidate.Yaw))
+            .ToArray();
+        if (clearances.Length == 0) return false;
+        selectedObstructionYaw = clearances[0].Yaw;
+        head.Rotation = head.Rotation with { Y = selectedObstructionYaw };
+        return true;
+    }
+
+    private static int ClosestWalkableCell(AuthoredNavigationGrid navigation,
+        Vector3 point)
+    {
+        var closest = -1;
+        var closestDistance = float.PositiveInfinity;
+        for (var row = 0; row < navigation.Rows; row++)
+            for (var column = 0; column < navigation.Columns; column++)
+            {
+                if (!navigation.IsWalkable(column, row)) continue;
+                var candidate = NavigationCellPosition(navigation,
+                    row * navigation.Columns + column);
+                var distance = new Vector2(candidate.X - point.X,
+                    candidate.Z - point.Z).LengthSquared();
+                if (distance >= closestDistance) continue;
+                closest = row * navigation.Columns + column;
+                closestDistance = distance;
+            }
+        return closest;
+    }
+
+    private static Vector3 NavigationCellPosition(AuthoredNavigationGrid navigation,
+        int cell)
+    {
+        var column = cell % navigation.Columns;
+        var row = cell / navigation.Columns;
+        return new Vector3(navigation.BaseX + column * navigation.CellSize, 0,
+            -(navigation.BaseY + row * navigation.CellSize));
+    }
+
+    public void ConfigureThirdPersonView(DaoGameplayCameraConfiguration configuration,
+        bool enhancedPresentation)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         var head = GetNode<SpringArm3D>("Head");
+        head.Position = head.Position with
+        {
+            Y = enhancedPresentation
+                ? configuration.EnhancedPivotHeightMeters
+                : configuration.PivotHeightMeters
+        };
         head.Rotation = new Vector3(Mathf.DegToRad(configuration.PitchDegrees), 0, 0);
         head.SpringLength = configuration.SpringLengthMeters;
+        authoredCameraArmLength = configuration.SpringLengthMeters;
         head.Margin = configuration.CollisionMarginMeters;
+        head.CollisionMask = WorldCollisionMask;
+        head.Shape = enhancedPresentation
+            ? new SphereShape3D { Radius = configuration.EnhancedCollisionProbeRadiusMeters }
+            : null;
+        enhancedCameraClearance = enhancedPresentation;
+        enhancedPivotHeight = configuration.EnhancedPivotHeightMeters;
+        compressedPivotHeight = configuration.EnhancedCompressedPivotHeightMeters;
+        compressedPivotLateral = configuration.EnhancedCompressedPivotLateralMeters;
+        cameraProbeRadius = configuration.EnhancedCollisionProbeRadiusMeters;
+        minimumAvatarCameraClearance = configuration.EnhancedMinimumAvatarClearanceMeters;
+        avatarCameraClearanceHysteresis =
+            configuration.EnhancedAvatarClearanceHysteresisMeters;
+        avatarBodyTransparency = configuration.EnhancedAvatarBodyTransparency;
+        avatarHeadTransparency = configuration.EnhancedAvatarHeadTransparency;
+        avatarFadedForCameraClearance = false;
+        cameraClearanceCaptureOverride = false;
+        selectedObstructionYaw = 0;
         locomotionCamera.Rotation = Vector3.Zero;
         locomotionCamera.Fov = configuration.FieldOfViewDegrees;
         locomotionCamera.Near = configuration.NearPlaneMeters;
         locomotionCamera.Far = configuration.FarPlaneMeters;
         GD.Print($"OPENDAO_GAMEPLAY_CAMERA_PROFILE status=ready " +
                  $"calibration={configuration.CalibrationStatus} " +
+                 $"evidence={(configuration.CalibrationStatus == DaoGameplayCameraConfiguration.RetailAccepted ? "matched-retail-player-camera-telemetry" : "blocked-matched-retail-player-camera-telemetry-required")} " +
                  $"fov={configuration.FieldOfViewDegrees:0.###} " +
                  $"pitch={configuration.PitchDegrees:0.###} " +
+                 $"pivot_y={head.Position.Y:0.###} " +
                  $"spring={configuration.SpringLengthMeters:0.###} " +
-                 $"margin={configuration.CollisionMarginMeters:0.###}");
+                 $"margin={configuration.CollisionMarginMeters:0.###} " +
+                 $"collision_probe={(enhancedPresentation ? "sphere" : "ray")} " +
+                 $"probe_radius={(enhancedPresentation ? configuration.EnhancedCollisionProbeRadiusMeters : 0):0.###} " +
+                 $"avatar_clearance={(enhancedPresentation ? configuration.EnhancedMinimumAvatarClearanceMeters : 0):0.###} " +
+                 $"compressed_pivot=({(enhancedPresentation ? configuration.EnhancedCompressedPivotLateralMeters : 0):0.###}," +
+                 $"{(enhancedPresentation ? configuration.EnhancedCompressedPivotHeightMeters : 0):0.###}) " +
+                 $"adaptation={(enhancedPresentation ? "enhanced-over-shoulder-near-fade-non-parity" : "source-disabled")}");
+    }
+
+    public override void _Process(double delta)
+    {
+        if (!enhancedCameraClearance || cameraClearanceCaptureOverride || xrActive ||
+            !IsPhysicsProcessing() || scriptedMotion ||
+            avatar is null || !IsInstanceValid(avatar)) return;
+        var head = GetNode<SpringArm3D>("Head");
+        var actualArmLength = head.GlobalPosition.DistanceTo(locomotionCamera.GlobalPosition);
+        var orbitClear = UpdateObstructionSearch(head, actualArmLength);
+        var fadeThreshold = avatarFadedForCameraClearance
+            ? minimumAvatarCameraClearance + avatarCameraClearanceHysteresis
+            : minimumAvatarCameraClearance;
+        var shouldFade = !orbitClear && actualArmLength < fadeThreshold;
+        if (shouldFade == avatarFadedForCameraClearance) return;
+        avatarFadedForCameraClearance = shouldFade;
+        ApplyCameraClearancePresentation(shouldFade);
+        GD.Print("OPENDAO_GAMEPLAY_CAMERA_CLEARANCE status=ready " +
+                 $"avatar={(shouldFade ? "visible-near-faded" : "visible-opaque")} " +
+                 $"actual_arm={actualArmLength:0.###} " +
+                 $"threshold={minimumAvatarCameraClearance:0.###} " +
+                 $"hysteresis={avatarCameraClearanceHysteresis:0.###} " +
+                 $"pivot=({head.Position.X:0.###},{head.Position.Y:0.###}) " +
+                 "collision_probe=sphere body_preserved=1 scope=application " +
+                 "tier=enhanced parity_claim=none");
+    }
+
+    private bool UpdateObstructionSearch(SpringArm3D head, float actualArmLength)
+    {
+        if (selectedObstructionYaw == 0 &&
+            actualArmLength >= minimumAvatarCameraClearance &&
+            PredictCameraClearance(0, head.SpringLength) >= minimumAvatarCameraClearance)
+            return false;
+
+        var clearances = new List<(float Yaw, float Length)>(
+            ObstructionSearchYawDegrees.Length);
+        foreach (var degrees in ObstructionSearchYawDegrees)
+        {
+            var yaw = Mathf.DegToRad(degrees);
+            clearances.Add((yaw, PredictCameraClearance(yaw, head.SpringLength)));
+        }
+        var baseline = clearances[0].Length;
+        var current = clearances.MinBy(value =>
+            Math.Abs(Mathf.AngleDifference(value.Yaw, selectedObstructionYaw)));
+        // The configured safe-framing threshold is the minimum usable arm.
+        // Once a candidate clears it, additional distance is capped in the
+        // score so a small authored-yaw departure beats an unnecessary 90°
+        // orbit while still rejecting near-first-person candidates.
+        var minimumUsableArm = minimumAvatarCameraClearance;
+        var lengthScoreCap = minimumUsableArm + .35f;
+        var usable = clearances.Where(value => value.Length >= minimumUsableArm).ToArray();
+        var best = usable
+            .OrderByDescending(value =>
+                ObstructionScore(value, lengthScoreCap))
+            .ThenBy(value => Math.Abs(value.Yaw))
+            .FirstOrDefault();
+
+        if (selectedObstructionYaw != 0 &&
+            baseline >= minimumAvatarCameraClearance + avatarCameraClearanceHysteresis &&
+            baseline + ObstructionSearchSwitchHysteresis >= current.Length)
+        {
+            selectedObstructionYaw = 0;
+            head.Rotation = head.Rotation with { Y = 0 };
+            GD.Print("OPENDAO_GAMEPLAY_CAMERA_OBSTRUCTION_SEARCH status=ready " +
+                     $"mode=authored-yaw-restored predicted_arm={baseline:0.###} " +
+                     "sphere_casts=7 scope=application tier=enhanced parity_claim=none");
+            return false;
+        }
+
+        if (usable.Length == 0)
+        {
+            if (selectedObstructionYaw != 0)
+            {
+                selectedObstructionYaw = 0;
+                head.Rotation = head.Rotation with { Y = 0 };
+            }
+            GD.Print("OPENDAO_GAMEPLAY_CAMERA_OBSTRUCTION_SEARCH status=partial " +
+                     $"mode=close-shoulder-fallback best_arm={clearances.Max(value => value.Length):0.###} " +
+                     $"minimum_usable_arm={minimumUsableArm:0.###} sphere_casts=7 " +
+                     "scope=application tier=enhanced parity_claim=none");
+            return false;
+        }
+
+        if (selectedObstructionYaw == 0 ||
+            current.Length < minimumUsableArm ||
+            ObstructionScore(best, lengthScoreCap) >
+            ObstructionScore(current, lengthScoreCap) + ObstructionSearchSwitchHysteresis)
+        {
+            selectedObstructionYaw = best.Yaw;
+            head.Rotation = head.Rotation with { Y = selectedObstructionYaw };
+            ApplyCameraClearancePresentation(false);
+            GD.Print("OPENDAO_GAMEPLAY_CAMERA_OBSTRUCTION_SEARCH status=ready " +
+                     $"mode=clear-orbit yaw_degrees={Mathf.RadToDeg(best.Yaw):0.###} " +
+                     $"predicted_arm={best.Length:0.###} authored_arm={baseline:0.###} " +
+                     $"minimum_usable_arm={minimumUsableArm:0.###} " +
+                     $"score={ObstructionScore(best, lengthScoreCap):0.###} " +
+                     "yaw_penalty_per_degree=0.03 sphere_casts=7 hysteresis=0.25 scope=application " +
+                     "tier=enhanced parity_claim=none");
+        }
+        return true;
+    }
+
+    private static float ObstructionScore((float Yaw, float Length) candidate,
+        float lengthScoreCap) =>
+        Math.Min(candidate.Length, lengthScoreCap) -
+        Math.Abs(Mathf.RadToDeg(candidate.Yaw)) * ObstructionSearchYawPenaltyPerDegree;
+
+    private float PredictCameraClearance(float yaw, float springLength)
+        => PredictCameraClearanceAt(GlobalPosition, yaw, springLength);
+
+    private float PredictCameraClearanceAt(Vector3 playerPosition, float yaw,
+        float springLength)
+    {
+        var pivot = playerPosition + GlobalBasis * new Vector3(0, enhancedPivotHeight, 0);
+        var playerBack = GlobalBasis.Z;
+        playerBack.Y = 0;
+        if (playerBack.LengthSquared() < .001f) playerBack = Vector3.Back;
+        playerBack = playerBack.Normalized();
+        var direction = new Basis(Vector3.Up, yaw) * playerBack;
+        var query = new PhysicsShapeQueryParameters3D
+        {
+            Shape = new SphereShape3D { Radius = cameraProbeRadius },
+            Transform = new Transform3D(Basis.Identity, pivot),
+            Motion = direction * springLength,
+            CollisionMask = WorldCollisionMask,
+            CollideWithAreas = false,
+            CollideWithBodies = true,
+            Exclude = [GetRid()]
+        };
+        var motion = GetWorld3D().DirectSpaceState.CastMotion(query);
+        var safeFraction = motion.Length > 0 ? Math.Clamp(motion[0], 0, 1) : 0;
+        return Math.Max(0, springLength * safeFraction - cameraProbeRadius);
+    }
+
+    public void SetCameraClearanceCaptureOverride(bool enabled)
+    {
+        cameraClearanceCaptureOverride = enabled;
+        if (enabled)
+        {
+            ApplyCameraClearancePresentation(false);
+            return;
+        }
+        avatarFadedForCameraClearance = false;
+    }
+
+    private void ApplyCameraClearancePresentation(bool compressed)
+    {
+        var head = GetNode<SpringArm3D>("Head");
+        head.Position = new Vector3(
+            compressed ? compressedPivotLateral : 0,
+            compressed ? compressedPivotHeight : enhancedPivotHeight,
+            head.Position.Z);
+        foreach (var mesh in avatarRoot.FindChildren("*", "MeshInstance3D", true, false)
+                     .OfType<MeshInstance3D>())
+        {
+            if (!avatarBaseTransparency.TryGetValue(mesh, out var baseline))
+            {
+                baseline = mesh.Transparency;
+                avatarBaseTransparency[mesh] = baseline;
+                avatarBaseVisibility[mesh] = mesh.Visible;
+            }
+            if (!compressed)
+            {
+                mesh.Transparency = baseline;
+                mesh.Visible = avatarBaseVisibility[mesh];
+                continue;
+            }
+            var headSurface = false;
+            if (mesh.Mesh is not null)
+                for (var surface = 0; surface < mesh.Mesh.GetSurfaceCount(); surface++)
+                {
+                    var name = mesh.GetActiveMaterial(surface)?.ResourceName ?? string.Empty;
+                    if (name.EndsWith("_Nikami.Aurora.GodotRuntimeHair", StringComparison.Ordinal) ||
+                        name.EndsWith("_Nikami.Aurora.GodotRuntimeFace0", StringComparison.Ordinal) ||
+                        name.EndsWith("_Nikami.Aurora.GodotRuntimeEyelash0", StringComparison.Ordinal))
+                    {
+                        headSurface = true;
+                        break;
+                    }
+                }
+            // Custom hair/face shaders do not consistently honor
+            // GeometryInstance transparency. Suppress only those separate
+            // head meshes when the camera is inside their bounds; retain the
+            // partially faded clothing/body mesh as the third-person anchor.
+            mesh.Visible = headSurface ? false : avatarBaseVisibility[mesh];
+            mesh.Transparency = Math.Max(baseline,
+                headSurface ? avatarHeadTransparency : avatarBodyTransparency);
+        }
+        avatarRoot.Visible = true;
     }
 
     public void SetWaterState(bool enabled, float surfaceY) =>
@@ -272,7 +717,9 @@ public partial class PlayerController : CharacterBody3D
         forward.Y = right.Y = 0;
         forward = forward.Normalized();
         right = right.Normalized();
-        var direction = (right * input.X + forward * -input.Y).Normalized();
+        var direction = movementWorldDirectionOverride is { } worldDirection
+            ? new Vector3(worldDirection.X, 0, worldDirection.Z).Normalized()
+            : (right * input.X + forward * -input.Y).Normalized();
         if (inWater)
         {
             var buoyancy = Mathf.Clamp((waterSurfaceY - 0.22f - GlobalPosition.Y) * 3.6f, -2.2f, 2.2f);

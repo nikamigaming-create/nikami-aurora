@@ -36,16 +36,16 @@ varying vec3 dao_world_binormal;
 // FaceFX contributes only the authored emotion-normal layer; it must not swap
 // in a different skin-lighting model or change the actor's diffuse response.
 uniform vec4 albedo : source_color = vec4(1.0);
-uniform sampler2D texture_albedo : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D texture_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float roughness : hint_range(0.0, 1.0) = 0.5;
 uniform float specular : hint_range(0.0, 1.0) = 0.5;
 uniform float metallic : hint_range(0.0, 1.0) = 0.0;
 uniform bool use_roughness_texture = false;
-uniform sampler2D texture_roughness : hint_roughness_g, filter_linear_mipmap, repeat_enable;
+uniform sampler2D texture_roughness : hint_roughness_g, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool use_metallic_texture = false;
-uniform sampler2D texture_metallic : hint_default_white, filter_linear_mipmap, repeat_enable;
+uniform sampler2D texture_metallic : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool use_normal_texture = true;
-uniform sampler2D texture_normal : hint_normal, filter_linear_mipmap, repeat_enable;
+uniform sampler2D texture_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float normal_strength : hint_range(0.0, 16.0) = 1.0;
 
 // Installed Face0.psh tint-mask contract. R/G/B select lips, eyeshadow and

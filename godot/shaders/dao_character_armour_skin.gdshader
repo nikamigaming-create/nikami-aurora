@@ -24,14 +24,14 @@ uniform vec4 dao_point_color_1 = vec4(0.0);
 uniform vec4 dao_point_color_2 = vec4(0.0);
 
 uniform vec4 albedo : source_color = vec4(1.0);
-uniform sampler2D texture_albedo : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D texture_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 // Character.mat treats this RGBA texture as data. ArmourSkinTint reserves
 // alpha for exposed skin while RGB remains the three equipment tint zones.
 uniform sampler2D texture_tint_mask : filter_linear_mipmap, repeat_enable;
 uniform vec3 skin_diffuse = vec3(1.0);
 uniform float skin_opacity : hint_range(0.0, 2.0) = 1.0;
 uniform bool use_normal_texture = true;
-uniform sampler2D texture_normal : hint_normal, filter_linear_mipmap, repeat_enable;
+uniform sampler2D texture_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float normal_strength : hint_range(0.0, 16.0) = 1.0;
 uniform float roughness : hint_range(0.0, 1.0) = 0.5;
 uniform float specular : hint_range(0.0, 1.0) = 0.5;

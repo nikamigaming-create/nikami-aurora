@@ -1,6 +1,6 @@
 using Godot;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 internal sealed partial class AuthoredPointLight : OmniLight3D
 {

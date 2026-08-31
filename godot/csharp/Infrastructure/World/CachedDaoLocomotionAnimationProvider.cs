@@ -1,9 +1,9 @@
 using Godot;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.Characters;
-using OpenDAO.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.Characters;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 public sealed class CachedDaoLocomotionAnimationProvider : ILocomotionAnimationProvider
 {

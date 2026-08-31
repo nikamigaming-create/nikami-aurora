@@ -1,6 +1,6 @@
 using System.Collections.ObjectModel;
 
-namespace OpenDAO.Domain.Common;
+namespace Nikami.Aurora.GodotRuntime.Domain.Common;
 
 public sealed record OperationResult(
     bool Succeeded,

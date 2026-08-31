@@ -2,7 +2,7 @@
 
 using Godot;
 
-namespace OpenDAO.MainMenu;
+namespace Nikami.Aurora.GodotRuntime.MainMenu;
 
 /// <summary>
 /// Clickable presentation of the original DAO MAP pin coordinates.  It is a
@@ -272,7 +272,7 @@ public partial class WorldMapCanvas : Control
         }
 
         error = "Map artwork missing: " + map + " (import the catalog sidecar)";
-        GD.PushWarning("OpenDAO: " + error + " path=" + sidecarPath);
+        GD.PushWarning("Nikami.Aurora.GodotRuntime: " + error + " path=" + sidecarPath);
         return null;
     }
 

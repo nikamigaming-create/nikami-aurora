@@ -68,8 +68,17 @@ The independently written runtime performs this observable sequence:
    soldier through `die` to `dead`;
 4. traverse the two voiced Trask entries only after each voice finishes, apply
    their LIP tracks and authored gestures, and set `END_TRASK_DLG=1`; and
-5. enter combat-ready staging with both Sith active, then restore gameplay and
-   standard area music after the hold.
+5. release cinematic camera/input authority immediately after the voiced
+   staging, enter `encounter:gameplay-ready` behind the player, and retain
+   battle music while both Sith remain active.
+
+Each required static cut has a source-event subject gate at the stable sample
+where that cut becomes active: camera 26 contains the player entering the
+staged room; camera 19 contains `end_soldier2` for the first attacks; and camera
+20 contains the same attack target from the opposite corridor end. Each gate
+requires full sphere containment, a camera-specific projected-size band, and a
+clear ray through the source-room visibility mesh. This proves the 26/19/20
+beats as presented shots, not merely method-call order.
 
 ## Audio contract
 
@@ -117,6 +126,13 @@ camera. The source Lighten blend is represented by the unshaded additive
 texture itself. Exact five-emitter topology remains required before this row
 can be parity-accepted.
 
+Runtime also fails closed when port-side presentation could turn those tiny
+sources back into a projected white slab: projectile length is capped at eight
+times the bound 0.09 source width, muzzle flare scale cannot exceed the 0.30
+source quad, impact size cannot exceed 0.30, and impact lifetime cannot exceed
+0.25 seconds. A passing boot emits `NIKAMI_AURORA_EFFECT_BOUNDS` with exact
+physical dimensions and `signal=ldr-single-pass` before combat presentation.
+
 Port-side fallback muzzle/target heights, projectile length/speed, minimum
 travel time, effect colors, flare scale, impact size/lifetime, and shot/impact
 levels are explicit validated fields in `config/kotor-runtime.json`; none
@@ -147,12 +163,19 @@ port-side lighting contract, not a claim of retail photometric parity.
 ## Deterministic verification and limits
 
 The owned-runtime gate is launched with `-TestFirstEncounter`. At
-`encounter:combat-ready` it requires:
+`encounter:gameplay-ready` it requires:
 
 - `END_TRASK_DLG=1`, door 02 open, and dialogue hidden;
 - cameras 26, 19, and 20 reached in order;
 - both voice resrefs played to completion;
 - battle music active;
+- the gameplay camera current, cinematic authority released, and movement no
+  longer blocked by the encounter sequence;
+- the player torso/head envelope objectively contained at a meaningful
+  projected size in the desktop third-person camera;
+- rendered player and Trask forward bases restored from their source party
+  waypoints after dialogue-facing ownership ends, with the camera objectively
+  behind the rendered player rather than merely behind an unrelated body yaw;
 - four shot/projectile/muzzle events and at least three impacts;
 - nine smoke and three spark room emitters, including the damaged-end binding;
 - the Republic soldier in `dead` and both Sith in active staging; and
@@ -172,7 +195,8 @@ Known limits:
   maximum size/lifetime but does not yet reproduce all five emitter nodes;
 - impact presentation is an independently written flare approximation because
   this ammunition row does not identify a separate authored impact emitter;
-- retail camera, placement, lighting, animation, and sub-frame timing telemetry
-  has not yet been captured, so visual parity is not claimed; and
+- the authored 26/19/20 staging order is source-confirmed and the final
+  third-person handoff is matched to retail visual evidence, but sub-frame
+  retail timing telemetry remains unknown; and
 - the final showcase MP4 remains gated on a clean merged-main full route and
   successful one-output movie finalization.

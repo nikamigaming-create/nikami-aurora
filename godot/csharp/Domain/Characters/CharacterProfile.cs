@@ -1,4 +1,4 @@
-namespace OpenDAO.Domain.Characters;
+namespace Nikami.Aurora.GodotRuntime.Domain.Characters;
 
 public sealed record CharacterProfile(string Name, string Origin, string Race, string Gender,
     string Class, string Appearance)

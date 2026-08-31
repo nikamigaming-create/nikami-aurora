@@ -1,9 +1,9 @@
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.Abilities;
-using OpenDAO.Domain.Characters;
-using OpenDAO.Domain.Common;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.Abilities;
+using Nikami.Aurora.GodotRuntime.Domain.Characters;
+using Nikami.Aurora.GodotRuntime.Domain.Common;
 
-namespace OpenDAO.Application.Characters;
+namespace Nikami.Aurora.GodotRuntime.Application.Characters;
 
 public sealed class CharacterAbilityInitializer(
     ICharacterAbilityLoadoutProvider loadouts,

@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
-using OpenDAO.Application.Abstractions;
-using OpenDAO.Domain.World;
+using Nikami.Aurora.GodotRuntime.Application.Abstractions;
+using Nikami.Aurora.GodotRuntime.Domain.World;
 
-namespace OpenDAO.Infrastructure.Configuration;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
 public sealed class WorldProfileProvider(IJsonStore store, IRuntimeEnvironment environment) : IWorldProfileProvider
 {
@@ -40,8 +40,8 @@ public sealed class WorldProfileProvider(IJsonStore store, IRuntimeEnvironment e
     {
         foreach (var candidate in new[]
         {
-            Path.Combine(environment.ExecutableDirectory, "OpenDAOData", "cache", "dao-world"),
-            Path.Combine(environment.ExecutableDirectory, "OpenDAOData", "dao-world")
+            Path.Combine(environment.ExecutableDirectory, "Nikami.Aurora.GodotRuntimeData", "cache", "dao-world"),
+            Path.Combine(environment.ExecutableDirectory, "Nikami.Aurora.GodotRuntimeData", "dao-world")
         }) if (Directory.Exists(candidate)) return candidate;
         return string.Empty;
     }

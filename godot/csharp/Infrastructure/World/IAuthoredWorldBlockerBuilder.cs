@@ -1,7 +1,7 @@
 using Godot;
-using OpenDAO.Domain.World;
+using Nikami.Aurora.GodotRuntime.Domain.World;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 public interface IAuthoredWorldBlockerBuilder
 {

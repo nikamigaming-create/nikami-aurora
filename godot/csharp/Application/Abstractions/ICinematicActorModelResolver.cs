@@ -1,4 +1,4 @@
-namespace OpenDAO.Application.Abstractions;
+namespace Nikami.Aurora.GodotRuntime.Application.Abstractions;
 
 public interface ICinematicActorModelResolver
 {

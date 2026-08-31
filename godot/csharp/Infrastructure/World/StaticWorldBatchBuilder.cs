@@ -1,8 +1,10 @@
 using Godot;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
-public sealed class StaticWorldBatchBuilder(IWorldLoadScheduler scheduler) : IStaticWorldBatchBuilder
+public sealed class StaticWorldBatchBuilder(
+    IWorldLoadScheduler scheduler,
+    IGodotModelPostprocessor modelPostprocessor) : IStaticWorldBatchBuilder
 {
     public async Task<StaticBatchResult> BuildAsync(PackedScene packed, string name,
         IReadOnlyList<Transform3D> transforms, Node3D destination,
@@ -12,6 +14,7 @@ public sealed class StaticWorldBatchBuilder(IWorldLoadScheduler scheduler) : ISt
     {
         if (transforms.Count == 0) return default;
         using var prototype = packed.Instantiate<Node3D>();
+        modelPostprocessor.Prepare(prototype);
         if (!CanBatch(prototype))
             return await BuildIndividualAsync(packed, transforms, destination, renderGeometry,
                 renderLayers, createCollision, collisionLayer, materialFactory, cancellationToken);
@@ -115,6 +118,7 @@ public sealed class StaticWorldBatchBuilder(IWorldLoadScheduler scheduler) : ISt
         foreach (var transform in transforms)
         {
             var node = packed.Instantiate<Node3D>();
+            modelPostprocessor.Prepare(node);
             node.Transform = transform;
             destination.AddChild(node);
             ApplyRenderPolicy(node, renderGeometry, renderLayers, materialFactory);
@@ -135,6 +139,8 @@ public sealed class StaticWorldBatchBuilder(IWorldLoadScheduler scheduler) : ISt
                      .OfType<GeometryInstance3D>())
         {
             geometry.Visible = renderGeometry && geometry.Visible;
+            if (WorldCollisionPolicy.IsCollisionProxy(geometry.Name))
+                geometry.Visible = false;
             geometry.Layers = renderLayers;
             if (geometry is MeshInstance3D { Mesh: not null } mesh)
                 mesh.MaterialOverride = materialFactory?.Invoke(mesh.Mesh);
@@ -173,7 +179,11 @@ public sealed class StaticWorldBatchBuilder(IWorldLoadScheduler scheduler) : ISt
     private static void CollectMeshes(Node node, Transform3D accumulated, ICollection<MeshRecord> records)
     {
         if (node is MeshInstance3D { Mesh: not null, Skin: null } mesh)
-            records.Add(new MeshRecord(mesh.Mesh, accumulated, mesh.Visible, mesh.CastShadow));
+        {
+            var visible = mesh.Visible && !WorldCollisionPolicy.IsCollisionProxy(mesh.Name);
+            var batchMesh = visible ? SnapshotDrawMesh(mesh) : mesh.Mesh;
+            records.Add(new MeshRecord(batchMesh, accumulated, visible, mesh.CastShadow));
+        }
         foreach (var child in node.GetChildren())
         {
             var childTransform = child is Node3D child3D
@@ -181,6 +191,37 @@ public sealed class StaticWorldBatchBuilder(IWorldLoadScheduler scheduler) : ISt
                 : accumulated;
             CollectMeshes(child, childTransform, records);
         }
+    }
+
+    private static Mesh SnapshotDrawMesh(MeshInstance3D source)
+    {
+        if (source.Mesh?.Duplicate() is not Mesh snapshot)
+            throw new InvalidDataException(
+                $"Visible static mesh could not be isolated for batching: {source.Name}");
+        for (var surface = 0; surface < snapshot.GetSurfaceCount(); surface++)
+        {
+            var material = source.GetActiveMaterial(surface) ??
+                           throw new InvalidDataException(
+                               $"Visible static mesh surface has no bound material: " +
+                               $"mesh={source.Name} surface={surface}");
+            if (!material.HasMeta(DaoCharacterMaterialPostprocessor.WorldMaterialIdentityMeta))
+                throw new InvalidDataException(
+                    $"Visible static mesh surface lost its source identity before batching: " +
+                    $"mesh={source.Name} surface={surface} material={material.ResourceName} " +
+                    $"material_type={material.GetType().Name} " +
+                    $"stored_mesh_identity=" +
+                    $"{(DaoCharacterMaterialPostprocessor.HasStoredWorldMaterialIdentity(source, surface) ? 1 : 0)}");
+            // MeshInstance overrides carry the verified source identity. A
+            // MultiMesh retains only its Mesh resource, so publish every
+            // active material onto an isolated snapshot before batching.
+            snapshot.SurfaceSetMaterial(surface, material);
+            if (snapshot.SurfaceGetMaterial(surface) is not { } published ||
+                !published.HasMeta(DaoCharacterMaterialPostprocessor.WorldMaterialIdentityMeta))
+                throw new InvalidDataException(
+                    $"Visible static mesh surface identity did not publish to the batch snapshot: " +
+                    $"mesh={source.Name} surface={surface} material={material.ResourceName}");
+        }
+        return snapshot;
     }
 
     private static void PlayDefaultAnimation(Node root)

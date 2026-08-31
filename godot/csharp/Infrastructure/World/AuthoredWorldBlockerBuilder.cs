@@ -1,9 +1,9 @@
 using Godot;
-using OpenDAO.Domain.World;
+using Nikami.Aurora.GodotRuntime.Domain.World;
 using NumericsQuaternion = System.Numerics.Quaternion;
 using NumericsVector3 = System.Numerics.Vector3;
 
-namespace OpenDAO.Infrastructure.World;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.World;
 
 public sealed class AuthoredWorldBlockerBuilder : IAuthoredWorldBlockerBuilder
 {

@@ -1,6 +1,6 @@
-using OpenDAO.Domain.Common;
+using Nikami.Aurora.GodotRuntime.Domain.Common;
 
-namespace OpenDAO.Domain.Party;
+namespace Nikami.Aurora.GodotRuntime.Domain.Party;
 
 public sealed record PartyMember(string CharacterId, int StoryHandle, string DisplayName,
     bool Available, bool Active, bool Leader);

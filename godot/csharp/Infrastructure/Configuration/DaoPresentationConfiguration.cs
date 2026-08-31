@@ -1,13 +1,14 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Serialization;
 
-namespace OpenDAO.Infrastructure.Configuration;
+namespace Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
 
 public sealed record DaoPresentationConfiguration(
     int SchemaVersion,
     DaoGameplayCameraConfiguration GameplayCamera)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     private const string DefaultPath = "res://config/dao/presentation.json";
 
     public static DaoPresentationConfiguration Load(string path = DefaultPath)
@@ -19,11 +20,7 @@ public sealed record DaoPresentationConfiguration(
 
         var configuration = JsonSerializer.Deserialize<DaoPresentationConfiguration>(
                 File.ReadAllBytes(resolved),
-                new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
-                })
+                RuntimeJsonOptions.StrictCaseInsensitive)
             ?? throw new InvalidDataException(
                 "DAO presentation configuration is empty");
         return configuration.Validate();
@@ -45,8 +42,17 @@ public sealed record DaoGameplayCameraConfiguration(
     float NearPlaneMeters,
     float FarPlaneMeters,
     float PitchDegrees,
+    float PivotHeightMeters,
     float SpringLengthMeters,
     float CollisionMarginMeters,
+    float EnhancedPivotHeightMeters,
+    float EnhancedCompressedPivotHeightMeters,
+    float EnhancedCompressedPivotLateralMeters,
+    float EnhancedCollisionProbeRadiusMeters,
+    float EnhancedMinimumAvatarClearanceMeters,
+    float EnhancedAvatarClearanceHysteresisMeters,
+    float EnhancedAvatarBodyTransparency,
+    float EnhancedAvatarHeadTransparency,
     string CalibrationStatus)
 {
     public const string PendingRetailMatch = "pending-retail-match";
@@ -66,12 +72,48 @@ public sealed record DaoGameplayCameraConfiguration(
         if (!float.IsFinite(PitchDegrees) || PitchDegrees is < -85 or > 0)
             throw new InvalidDataException(
                 "Configured DAO gameplay-camera pitch must be in [-85, 0] degrees");
+        if (!float.IsFinite(PivotHeightMeters) || PivotHeightMeters is < 0.2f or > 3)
+            throw new InvalidDataException(
+                "Configured DAO gameplay-camera pivot height must be in [0.2, 3] meters");
         if (!float.IsFinite(SpringLengthMeters) || SpringLengthMeters is < 0.8f or > 20)
             throw new InvalidDataException(
                 "Configured DAO gameplay-camera spring length must be in [0.8, 20] meters");
         if (!float.IsFinite(CollisionMarginMeters) || CollisionMarginMeters is < 0 or > 1)
             throw new InvalidDataException(
                 "Configured DAO gameplay-camera collision margin must be in [0, 1] meters");
+        if (!float.IsFinite(EnhancedPivotHeightMeters) ||
+            EnhancedPivotHeightMeters is < 0.2f or > 3)
+            throw new InvalidDataException(
+                "Configured enhanced DAO gameplay-camera pivot height must be in [0.2, 3] meters");
+        if (!float.IsFinite(EnhancedCompressedPivotHeightMeters) ||
+            EnhancedCompressedPivotHeightMeters is < 0.2f or > 3)
+            throw new InvalidDataException(
+                "Configured enhanced compressed-pivot height must be in [0.2, 3] meters");
+        if (!float.IsFinite(EnhancedCompressedPivotLateralMeters) ||
+            EnhancedCompressedPivotLateralMeters is < -2 or > 2)
+            throw new InvalidDataException(
+                "Configured enhanced compressed-pivot lateral offset must be in [-2, 2] meters");
+        if (!float.IsFinite(EnhancedCollisionProbeRadiusMeters) ||
+            EnhancedCollisionProbeRadiusMeters is < 0.05f or > 1)
+            throw new InvalidDataException(
+                "Configured enhanced DAO camera probe radius must be in [0.05, 1] meters");
+        if (!float.IsFinite(EnhancedMinimumAvatarClearanceMeters) ||
+            EnhancedMinimumAvatarClearanceMeters < 0.2f ||
+            EnhancedMinimumAvatarClearanceMeters > SpringLengthMeters)
+            throw new InvalidDataException(
+                "Configured enhanced DAO avatar clearance must be in [0.2, spring length] meters");
+        if (!float.IsFinite(EnhancedAvatarClearanceHysteresisMeters) ||
+            EnhancedAvatarClearanceHysteresisMeters is < 0 or > 1)
+            throw new InvalidDataException(
+                "Configured enhanced DAO avatar-clearance hysteresis must be in [0, 1] meters");
+        if (!float.IsFinite(EnhancedAvatarBodyTransparency) ||
+            EnhancedAvatarBodyTransparency is < 0 or > 0.85f)
+            throw new InvalidDataException(
+                "Configured enhanced DAO body transparency must be in [0, 0.85]");
+        if (!float.IsFinite(EnhancedAvatarHeadTransparency) ||
+            EnhancedAvatarHeadTransparency is < 0 or > 1)
+            throw new InvalidDataException(
+                "Configured enhanced DAO head transparency must be in [0, 1]");
         if (CalibrationStatus is not (PendingRetailMatch or RetailAccepted))
             throw new InvalidDataException(
                 $"Unsupported DAO gameplay-camera calibration status: {CalibrationStatus}");
