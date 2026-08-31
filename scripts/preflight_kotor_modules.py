@@ -589,6 +589,19 @@ def fresh_manifest_evidence(manifest_root: Path | None) -> tuple[
                 model for model in creature_models
                 if model.get("role") in {"rightWeapon", "leftWeapon"}
             ]
+            creature_emitters = [
+                emitter for creature in creatures
+                for emitter in creature.get("effects", {}).get("emitters", [])
+            ]
+            creature_lights = [
+                light for creature in creatures
+                for light in creature.get("effects", {}).get("lights", [])
+            ]
+            creature_effect_animations = [
+                animation for creature in creatures
+                for animation in creature.get("effects", {}).get(
+                    "animations", [])
+            ]
             current_contract = (
                 manifest.get("schema") == "nikami-aurora-kotor-module-v1" and
                 all(emitter.get("schema") ==
@@ -614,10 +627,24 @@ def fresh_manifest_evidence(manifest_root: Path | None) -> tuple[
                 all(
                     model.get("renderSurfaces", 0) > 0 and
                     0 <= model.get("additiveSurfaces", -1) <=
-                    model.get("renderSurfaces", 0) and
-                    model.get("emitterNodes") == 0 and
-                    model.get("lightNodes") == 0
+                    model.get("renderSurfaces", 0)
                     for model in creature_models) and
+                all(
+                    creature.get("effects", {}).get("schema") ==
+                    "nikami-aurora-kotor-actor-effects-v1" and
+                    len(creature.get("effects", {}).get("emitters", [])) ==
+                    sum(int(model.get("emitterNodes", 0))
+                        for model in creature.get("models", [])) and
+                    len(creature.get("effects", {}).get("lights", [])) ==
+                    sum(int(model.get("lightNodes", 0))
+                        for model in creature.get("models", []))
+                    for creature in creatures) and
+                all(emitter.get("schema") ==
+                    "nikami-aurora-kotor-actor-emitter-v1"
+                    for emitter in creature_emitters) and
+                all(light.get("schema") ==
+                    "nikami-aurora-kotor-actor-light-v1"
+                    for light in creature_lights) and
                 int(manifest.get("counts", {}).get("renderReadyCreatures", -1)) ==
                 sum(creature.get("renderStatus") == "ready"
                     for creature in creatures) and
@@ -631,7 +658,15 @@ def fresh_manifest_evidence(manifest_root: Path | None) -> tuple[
                 int(manifest.get("counts", {}).get(
                     "equippedWeaponAdditiveSurfaces", -1)) == sum(
                         int(model["additiveSurfaces"])
-                        for model in weapon_models)
+                        for model in weapon_models) and
+                int(manifest.get("counts", {}).get(
+                    "authoredCreatureEmitters", -1)) ==
+                    len(creature_emitters) and
+                int(manifest.get("counts", {}).get(
+                    "authoredCreatureLights", -1)) == len(creature_lights) and
+                int(manifest.get("counts", {}).get(
+                    "authoredCreatureEffectAnimations", -1)) ==
+                    len(creature_effect_animations)
             )
             encounter = manifest.get("firstEncounter")
             if encounter is not None:
@@ -657,6 +692,9 @@ def fresh_manifest_evidence(manifest_root: Path | None) -> tuple[
                     "weaponAdditiveSurfaces": sum(
                         int(model.get("additiveSurfaces", 0))
                         for model in weapon_models),
+                    "effectEmitters": len(creature_emitters),
+                    "effectLights": len(creature_lights),
+                    "effectAnimations": len(creature_effect_animations),
                 },
             }
         except Exception as exc:

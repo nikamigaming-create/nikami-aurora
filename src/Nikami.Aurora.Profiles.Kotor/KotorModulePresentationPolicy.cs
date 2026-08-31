@@ -38,7 +38,13 @@ public readonly record struct KotorCreaturePresentationInventory(
     int MaterializedEquippedWeapons,
     int WeaponAdditiveSurfaces,
     int ConfiguredWeaponAdditiveSurfaces,
-    int UnsupportedEffectNodes);
+    int SourceEmitters,
+    int MaterializedEmitters,
+    int SourceLights,
+    int MaterializedLights,
+    int SourceEffectAnimations,
+    int MaterializedEffectAnimations,
+    int UnsupportedEffectSemantics);
 
 /// <summary>
 /// Profile-owned boundary between reusable Odyssey module presentation and the
@@ -162,9 +168,18 @@ public static class KotorModulePresentationPolicy
                 inventory.WeaponAdditiveSurfaces)
             throw new InvalidDataException(
                 "KOTOR equipped-weapon additive coverage is incomplete");
-        if (inventory.UnsupportedEffectNodes != 0)
+        if (inventory.SourceEmitters < 0 ||
+            inventory.MaterializedEmitters != inventory.SourceEmitters ||
+            inventory.SourceLights < 0 ||
+            inventory.MaterializedLights != inventory.SourceLights ||
+            inventory.SourceEffectAnimations < 0 ||
+            inventory.MaterializedEffectAnimations !=
+                inventory.SourceEffectAnimations)
             throw new InvalidDataException(
-                "KOTOR creature assembly contains unsupported effect nodes");
+                "KOTOR creature effect coverage is incomplete");
+        if (inventory.UnsupportedEffectSemantics != 0)
+            throw new InvalidDataException(
+                "KOTOR creature assembly contains unsupported effect semantics");
     }
 
     public static void RequireEndarAutomation(

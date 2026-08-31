@@ -1491,7 +1491,13 @@ internal static partial class Program
             MaterializedEquippedWeapons: 6,
             WeaponAdditiveSurfaces: 8,
             ConfiguredWeaponAdditiveSurfaces: 8,
-            UnsupportedEffectNodes: 0);
+            SourceEmitters: 3,
+            MaterializedEmitters: 3,
+            SourceLights: 1,
+            MaterializedLights: 1,
+            SourceEffectAnimations: 7,
+            MaterializedEffectAnimations: 7,
+            UnsupportedEffectSemantics: 0);
         KotorModulePresentationPolicy.RequireCreaturePresentation(complete);
         Expect(KotorModulePresentationPolicy.AdditiveGlowMultiplier(false) == 1.0f &&
                KotorModulePresentationPolicy.AdditiveGlowMultiplier(true) ==
@@ -1516,8 +1522,20 @@ internal static partial class Program
             "KOTOR presentation flattened a weapon additive surface");
         ExpectThrows<InvalidDataException>(
             () => KotorModulePresentationPolicy.RequireCreaturePresentation(
-                complete with { UnsupportedEffectNodes = 1 }),
-            "KOTOR presentation ignored an actor effect node");
+                complete with { MaterializedEmitters = 2 }),
+            "KOTOR presentation ignored an actor emitter");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireCreaturePresentation(
+                complete with { MaterializedLights = 0 }),
+            "KOTOR presentation ignored an actor light");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireCreaturePresentation(
+                complete with { MaterializedEffectAnimations = 6 }),
+            "KOTOR presentation ignored an actor effect animation");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireCreaturePresentation(
+                complete with { UnsupportedEffectSemantics = 1 }),
+            "KOTOR presentation accepted unsupported actor effect semantics");
     }
 
     private static void KotorRigIdentityRecognizesSourceBodyFamilies()

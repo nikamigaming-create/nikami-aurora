@@ -61,6 +61,7 @@ public sealed partial class KotorModuleBoot
                 ? Animation.LoopModeEnum.Linear
                 : Animation.LoopModeEnum.None;
         player.Play(match);
+        PlayActorEffects(actor, requested, loop);
         GD.Print($"NIKAMI_AURORA_ACTOR_ANIMATION status=playing actor={actor} animation={match}");
     }
 

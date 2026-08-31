@@ -452,6 +452,10 @@ public sealed partial class KotorModuleBoot : Node3D
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CreatureRecord> actorRecords =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CreatureEffectRig> actorEffectRigs =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Texture2D> actorEffectTextures =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Vector3> actorTalkOffsets =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, LipRig> actorLipRigs =
@@ -471,6 +475,9 @@ public sealed partial class KotorModuleBoot : Node3D
     private int enhancedDynamicNormalSurfaces;
     private int authoredDynamicNormalScaleSurfaces;
     private int transparentDynamicSurfaces;
+    private int materializedCreatureEmitters;
+    private int materializedCreatureLights;
+    private int materializedCreatureEffectAnimations;
     private int additiveDynamicSurfaces;
     private int configuredAdditiveDynamicSurfaces;
     private KotorLightmapTransfer lightmapTransfer =
@@ -1708,7 +1715,6 @@ public sealed partial class KotorModuleBoot : Node3D
                     string.IsNullOrWhiteSpace(model.Model) ||
                     model.RenderSurfaces <= 0 || model.AdditiveSurfaces < 0 ||
                     model.AdditiveSurfaces > model.RenderSurfaces ||
-                    model.EmitterNodes != 0 || model.LightNodes != 0 ||
                     model.MdlSha256.Length != 64 || model.MdxSha256.Length != 64 ||
                     !model.MdlSha256.All(Uri.IsHexDigit) ||
                     !model.MdxSha256.All(Uri.IsHexDigit)) ||
@@ -1751,15 +1757,23 @@ public sealed partial class KotorModuleBoot : Node3D
                     equippedWeaponRecords.Length,
                     manifest.Counts.EquippedWeaponAdditiveSurfaces,
                     equippedWeaponAdditiveSurfaces,
-                    creatureModelRecords.Sum(model =>
-                        model.EmitterNodes + model.LightNodes)));
+                    manifest.Counts.AuthoredCreatureEmitters,
+                    materializedCreatureEmitters,
+                    manifest.Counts.AuthoredCreatureLights,
+                    materializedCreatureLights,
+                    manifest.Counts.AuthoredCreatureEffectAnimations,
+                    materializedCreatureEffectAnimations,
+                    0));
             GD.Print($"NIKAMI_AURORA_CREATURES status=ready module={loadedModuleId} " +
                      $"expected={manifest.Counts.Creatures} " +
                      $"rendered={materializedActors} missing=0 unsupported=0 " +
                      $"models={creatureModelRecords.Length} " +
                      $"weapons={equippedWeaponRecords.Length} " +
                      $"weapon_additive_surfaces={equippedWeaponAdditiveSurfaces} " +
-                     "effect_nodes=0 standins=0 environment=module-world " +
+                     $"effect_emitters={materializedCreatureEmitters} " +
+                     $"effect_lights={materializedCreatureLights} " +
+                     $"effect_animations={materializedCreatureEffectAnimations} " +
+                     "unsupported_effect_semantics=0 standins=0 environment=module-world " +
                      "pbr=global-enhanced");
             if (launchEnvironment.Get(
                     "NIKAMI_AURORA_DEBUG_CREATURE_MARKERS") == "1")
