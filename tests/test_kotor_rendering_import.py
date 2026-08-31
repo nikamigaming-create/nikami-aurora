@@ -20,6 +20,73 @@ except (ImportError, SystemExit) as exc:
 
 
 class KotorRenderingImportTests(unittest.TestCase):
+    def test_actor_model_inventory_keeps_weapon_glow_and_effect_nodes_explicit(
+        self,
+    ) -> None:
+        meshes = [
+            SimpleNamespace(
+                render=True,
+                vertex_positions=[object()],
+                faces=[object()],
+                texture_1="w_lsabreblue01",
+                texture_2="",
+            ),
+            SimpleNamespace(
+                render=True,
+                vertex_positions=[object()],
+                faces=[object()],
+                texture_1="w_lghtsbr_001",
+                texture_2="",
+            ),
+        ]
+        nodes = [
+            SimpleNamespace(
+                name="blade",
+                mesh=meshes[0],
+                aabb=None,
+                emitter=None,
+                light=None,
+            ),
+            SimpleNamespace(
+                name="handle",
+                mesh=meshes[1],
+                aabb=None,
+                emitter=object(),
+                light=None,
+            ),
+        ]
+
+        class FakeTextures:
+            def source_environment_map(self, _name: str) -> None:
+                return None
+
+            def source_bump_map(self, _name: str) -> tuple[None, None]:
+                return None, None
+
+            def validate_material_txi(self, name: str, role: str) -> None:
+                self.validated.append((role, name))
+
+            def is_source_additive(self, name: str) -> bool:
+                return name == "w_lsabreblue01"
+
+            def __init__(self) -> None:
+                self.validated = []
+
+        textures = FakeTextures()
+        report = importer.model_presentation_inventory(
+            SimpleNamespace(all_nodes=lambda: nodes), textures)
+
+        self.assertEqual(2, report["renderSurfaces"])
+        self.assertEqual(1, report["additiveSurfaces"])
+        self.assertEqual(1, report["emitterNodes"])
+        self.assertEqual(0, report["lightNodes"])
+        self.assertIn(("diffuse", "w_lsabreblue01"), textures.validated)
+        with self.assertRaisesRegex(RuntimeError, "effect nodes"):
+            importer.actor_model_records((
+                ("rightWeapon", "w_lghtsbr_001", None,
+                 SimpleNamespace(all_nodes=lambda: nodes), b"mdl", b"mdx"),
+            ), textures)
+
     def test_actor_animation_position_keys_preserve_authored_rest_height(self) -> None:
         # C_DrdProt's source RootDummy stands at 1.07443 m and cpause1 adds a
         # small downward offset.  Replacing the rest pose with that delta is
@@ -309,10 +376,10 @@ class KotorRenderingImportTests(unittest.TestCase):
         cache.missing = set()
         cache.environment_maps = set()
 
-        self.assertEqual("CM_Endar", cache.source_environment_map("LHR_flr01"))
+        self.assertEqual("cm_endar", cache.source_environment_map("LHR_flr01"))
         self.assertFalse(cache.is_source_additive("LHR_flr01"))
         self.assertTrue(cache.is_source_additive("LHR_dust01"))
-        self.assertEqual({"CM_Endar"}, cache.environment_maps)
+        self.assertEqual({"cm_endar"}, cache.environment_maps)
         self.assertEqual(
             "LHR_dust01__aurora_envmap_CM_Endar__aurora_additive",
             importer.material_name("LHR_dust01", True, "CM_Endar"),
@@ -337,9 +404,9 @@ class KotorRenderingImportTests(unittest.TestCase):
             ("bumpmaptexture", "LTS_Bwall04B"),
             cache.source_bump_map("LTS_Pwall01i"),
         )
-        self.assertEqual("CM_m02aa", cache.source_environment_map("LTS_Pwall01i"))
+        self.assertEqual("cm_m02aa", cache.source_environment_map("LTS_Pwall01i"))
         self.assertEqual((1.3, True), cache.source_bump_scale("LTS_Pwall01i"))
-        self.assertEqual({"CM_m02aa"}, cache.environment_maps)
+        self.assertEqual({"cm_m02aa"}, cache.environment_maps)
         self.assertEqual(
             "LTS_Pwall01i__aurora_envmap_CM_m02aa__aurora_normal_scale_1.3",
             importer.material_name("LTS_Pwall01i", False, "CM_m02aa", 1.3),

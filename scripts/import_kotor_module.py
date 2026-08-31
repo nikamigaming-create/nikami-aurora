@@ -685,7 +685,10 @@ class TextureCache:
                 f"Conflicting KOTOR environment-map semantics for {name}: {candidates}")
         if not candidates:
             return None
-        environment_map = candidates[-1][1]
+        # Odyssey resrefs are case-insensitive. Normalize at the identity
+        # boundary so actor and room references cannot export duplicate
+        # cubemaps that the runtime's case-insensitive dictionary must reject.
+        environment_map = candidates[-1][1].lower()
         self.environment_maps.add(environment_map)
         return environment_map
 
@@ -1636,6 +1639,13 @@ def material_for(mesh: Any, textures: TextureCache, override_texture: str | None
     _, bump_map_name = textures.source_bump_map(texture_name)
     bump_scale, bump_scale_authored = textures.source_bump_scale(texture_name)
     bump_map = textures.image(bump_map_name or "")
+    for role, name in (
+        ("diffuse", texture_name),
+        ("lightmap", lightmap_name),
+        ("bump-map", bump_map_name or ""),
+        ("environment-map", environment_map or ""),
+    ):
+        textures.validate_material_txi(name, role)
     diffuse = mesh.diffuse
     color = [
         max(0, min(255, round(float(diffuse.r) * 255))),
@@ -1663,6 +1673,82 @@ def material_for(mesh: Any, textures: TextureCache, override_texture: str | None
         alphaMode="BLEND" if source_transparent else "OPAQUE",
         doubleSided=source_transparent,
     )
+
+
+def model_presentation_inventory(
+    model: Any,
+    textures: TextureCache,
+    override_texture: str | None = None,
+) -> dict[str, int]:
+    """Inventory every render/effect node before a model crosses into glTF.
+
+    glTF can carry the mesh materials used by current actor assemblies, but it
+    cannot silently stand in for Odyssey emitter or light nodes.  Keeping this
+    check next to the material boundary makes body, head, and equipped-weapon
+    imports obey the same source-completeness rule.
+    """
+    surfaces = 0
+    additive_surfaces = 0
+    emitter_nodes = 0
+    light_nodes = 0
+    for node in model.all_nodes():
+        emitter_nodes += node.emitter is not None
+        light_nodes += node.light is not None
+        mesh = node.mesh
+        if (mesh is None or not bool(mesh.render) or not mesh.vertex_positions or
+                not mesh.faces or node.aabb is not None or
+                str(node.name).lower().startswith("walkmesh")):
+            continue
+        surfaces += 1
+        texture_name = str(override_texture or mesh.texture_1 or "").strip()
+        lightmap_name = str(mesh.texture_2 or "").strip()
+        environment_map = textures.source_environment_map(texture_name)
+        _, bump_map_name = textures.source_bump_map(texture_name)
+        for role, name in (
+            ("diffuse", texture_name),
+            ("lightmap", lightmap_name),
+            ("bump-map", bump_map_name or ""),
+            ("environment-map", environment_map or ""),
+        ):
+            textures.validate_material_txi(name, role)
+        additive_surfaces += textures.is_source_additive(texture_name)
+    return {
+        "renderSurfaces": surfaces,
+        "additiveSurfaces": additive_surfaces,
+        "emitterNodes": emitter_nodes,
+        "lightNodes": light_nodes,
+    }
+
+
+def actor_model_records(
+    source_models: Iterable[tuple[
+        str, str | None, str | None, Any | None, bytes | None, bytes | None]],
+    textures: TextureCache,
+) -> list[dict[str, Any]]:
+    records = []
+    for role, name, override, source_model, mdl_bytes, mdx_bytes in source_models:
+        if (not name or source_model is None or mdl_bytes is None or
+                mdx_bytes is None):
+            continue
+        records.append({
+            "role": role,
+            "model": name,
+            "overrideTexture": override,
+            "mdlSha256": sha256_bytes(mdl_bytes),
+            "mdxSha256": sha256_bytes(mdx_bytes),
+            **model_presentation_inventory(source_model, textures, override),
+        })
+    unsupported = [
+        f"{record['role']}:{record['model']}:emitters={record['emitterNodes']}:"
+        f"lights={record['lightNodes']}"
+        for record in records
+        if record["emitterNodes"] or record["lightNodes"]
+    ]
+    if unsupported:
+        raise RuntimeError(
+            "Actor model contains effect nodes not carried by the glTF path: " +
+            ",".join(unsupported))
+    return records
 
 
 def room_emitter_controller_values(node: Any) -> dict[str, Any]:
@@ -2450,6 +2536,11 @@ def export_humanoid_actor(
         for animation in model.anims:
             animations_by_name.setdefault(animation.name.lower(), animation)
     animation_model = SimpleNamespace(anims=list(animations_by_name.values()))
+    model_records = actor_model_records((
+        ("body", body_model, body_texture, body, body_mdl, body_mdx),
+        ("head", head_model, head_texture, head, head_mdl, head_mdx),
+        ("rightWeapon", right_model, None, right, right_mdl, right_mdx),
+    ), textures)
     animation_report = export_actor(
         output_path,
         body_model=body,
@@ -2464,26 +2555,6 @@ def export_humanoid_actor(
         animation_names=animation_names,
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
     )
-    model_records = [{
-        "model": body_model,
-        "overrideTexture": body_texture,
-        "mdlSha256": sha256_bytes(body_mdl),
-        "mdxSha256": sha256_bytes(body_mdx),
-    }]
-    if head_model and head_mdl is not None and head_mdx is not None:
-        model_records.append({
-            "model": head_model,
-            "overrideTexture": head_texture,
-            "mdlSha256": sha256_bytes(head_mdl),
-            "mdxSha256": sha256_bytes(head_mdx),
-        })
-    if right_model and right_mdl is not None and right_mdx is not None:
-        model_records.append({
-            "model": right_model,
-            "overrideTexture": None,
-            "mdlSha256": sha256_bytes(right_mdl),
-            "mdxSha256": sha256_bytes(right_mdx),
-        })
     return {
         "glb": f"actors/{output_path.name}",
         "tag": str(utc.tag),
@@ -2621,6 +2692,13 @@ def export_source_creature_actor(
     )
     idle_origin = animation_origins.get(
         idle_animation.casefold() if idle_animation else "")
+    source_models = (
+        ("body", body_name, body_texture, body, body_mdl, body_mdx),
+        ("head", head_name, head_texture, head, head_mdl, head_mdx),
+        ("rightWeapon", right_name, None, right, right_mdl, right_mdx),
+        ("leftWeapon", left_name, None, left, left_mdl, left_mdx),
+    )
+    model_records = actor_model_records(source_models, textures)
     animation_report = export_actor(
         output_path,
         body_model=body,
@@ -2646,26 +2724,6 @@ def export_source_creature_actor(
             talk_offset = [
                 float(item) for item in (head_hook @ talk_dummy)[:3, 3]]
 
-    model_records = [{
-        "role": "body",
-        "model": body_name,
-        "overrideTexture": body_texture,
-        "mdlSha256": sha256_bytes(body_mdl),
-        "mdxSha256": sha256_bytes(body_mdx),
-    }]
-    for role, name, override, mdl_bytes, mdx_bytes in (
-        ("head", head_name, head_texture, head_mdl, head_mdx),
-        ("rightWeapon", right_name, None, right_mdl, right_mdx),
-        ("leftWeapon", left_name, None, left_mdl, left_mdx),
-    ):
-        if name and mdl_bytes is not None and mdx_bytes is not None:
-            model_records.append({
-                "role": role,
-                "model": name,
-                "overrideTexture": override,
-                "mdlSha256": sha256_bytes(mdl_bytes),
-                "mdxSha256": sha256_bytes(mdx_bytes),
-            })
     return {
         "renderImportSchema": "nikami-aurora-kotor-source-creature-v1",
         "renderStatus": "ready",
@@ -2728,6 +2786,27 @@ def export_source_creature_records(
             **exports[key],
         })
     return records
+
+
+def creature_presentation_counts(
+    creatures: Iterable[dict[str, Any]],
+) -> dict[str, int]:
+    records = list(creatures)
+    models = [
+        model
+        for creature in records
+        for model in creature.get("models", [])
+    ]
+    weapons = [
+        model for model in models
+        if model["role"] in {"rightWeapon", "leftWeapon"}
+    ]
+    return {
+        "authoredCreatureModels": len(models),
+        "equippedWeaponModels": len(weapons),
+        "equippedWeaponAdditiveSurfaces": sum(
+            int(model["additiveSurfaces"]) for model in weapons),
+    }
 
 
 def export_trask_actor(
@@ -4251,6 +4330,7 @@ def _import_generic_module(
                 creature["renderStatus"] == "ready" for creature in creatures),
             "unsupportedCreatures": sum(
                 creature["renderStatus"] != "ready" for creature in creatures),
+            **creature_presentation_counts(creatures),
             "doors": len(doors),
             "waypoints": len(waypoints),
             "cameras": len(cameras),
@@ -4792,11 +4872,11 @@ def _import_endar_module(
         actual_environment_maps = {
             item["resref"].lower() for item in environment_maps
         }
-        expected_environment_maps = {"cm_endar", "cm_baremetal"}
-        if actual_environment_maps != expected_environment_maps:
+        required_environment_maps = {"cm_endar", "cm_baremetal", "mycube"}
+        if not required_environment_maps.issubset(actual_environment_maps):
             raise RuntimeError(
                 "Endar Spire environment-map identity drifted: "
-                f"expected={sorted(expected_environment_maps)} "
+                f"required={sorted(required_environment_maps)} "
                 f"actual={sorted(actual_environment_maps)}")
         unresolved = {
             str(value).lower()
@@ -4906,6 +4986,7 @@ def _import_endar_module(
                 creature["renderStatus"] == "ready" for creature in creatures),
             "unsupportedCreatures": sum(
                 creature["renderStatus"] != "ready" for creature in creatures),
+            **creature_presentation_counts(creatures),
             "doors": len(doors),
             "waypoints": len(waypoints),
             "cameras": len(git.cameras),

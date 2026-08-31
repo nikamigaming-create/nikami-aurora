@@ -579,6 +579,16 @@ def fresh_manifest_evidence(manifest_root: Path | None) -> tuple[
                 for room in manifest.get("rooms", [])
                 for emitter in room.get("emitters", [])
             ]
+            creatures = manifest.get("creatures", [])
+            creature_models = [
+                model
+                for creature in creatures
+                for model in creature.get("models", [])
+            ]
+            weapon_models = [
+                model for model in creature_models
+                if model.get("role") in {"rightWeapon", "leftWeapon"}
+            ]
             current_contract = (
                 manifest.get("schema") == "nikami-aurora-kotor-module-v1" and
                 all(emitter.get("schema") ==
@@ -594,13 +604,34 @@ def fresh_manifest_evidence(manifest_root: Path | None) -> tuple[
                      len(creature.get("animation", {}).get(
                          "boundsMinimum", [])) == 3 and
                      len(creature.get("animation", {}).get("extent", [])) == 3)
-                    for creature in manifest.get("creatures", [])) and
+                    for creature in creatures) and
+                all(
+                    len(creature.get("models", [])) > 0 and
+                    sum(model.get("role") == "body"
+                        for model in creature.get("models", [])) == 1
+                    for creature in creatures
+                    if creature.get("renderStatus") == "ready") and
+                all(
+                    model.get("renderSurfaces", 0) > 0 and
+                    0 <= model.get("additiveSurfaces", -1) <=
+                    model.get("renderSurfaces", 0) and
+                    model.get("emitterNodes") == 0 and
+                    model.get("lightNodes") == 0
+                    for model in creature_models) and
                 int(manifest.get("counts", {}).get("renderReadyCreatures", -1)) ==
                 sum(creature.get("renderStatus") == "ready"
-                    for creature in manifest.get("creatures", [])) and
+                    for creature in creatures) and
                 int(manifest.get("counts", {}).get("unsupportedCreatures", -1)) ==
                 sum(creature.get("renderStatus") != "ready"
-                    for creature in manifest.get("creatures", []))
+                    for creature in creatures) and
+                int(manifest.get("counts", {}).get(
+                    "authoredCreatureModels", -1)) == len(creature_models) and
+                int(manifest.get("counts", {}).get(
+                    "equippedWeaponModels", -1)) == len(weapon_models) and
+                int(manifest.get("counts", {}).get(
+                    "equippedWeaponAdditiveSurfaces", -1)) == sum(
+                        int(model["additiveSurfaces"])
+                        for model in weapon_models)
             )
             encounter = manifest.get("firstEncounter")
             if encounter is not None:
@@ -621,6 +652,11 @@ def fresh_manifest_evidence(manifest_root: Path | None) -> tuple[
                         "unsupportedCreatures", 0)),
                     "uniqueTemplates": int(manifest.get("counts", {}).get(
                         "uniqueCreatureTemplates", 0)),
+                    "modelParts": len(creature_models),
+                    "equippedWeapons": len(weapon_models),
+                    "weaponAdditiveSurfaces": sum(
+                        int(model.get("additiveSurfaces", 0))
+                        for model in weapon_models),
                 },
             }
         except Exception as exc:

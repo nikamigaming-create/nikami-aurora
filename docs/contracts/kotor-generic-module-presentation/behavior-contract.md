@@ -126,6 +126,44 @@ profile dielectric specular/roughness and exact normal texture when present;
 source transparency, blend, culling, texture, and environment-map identity are
 preserved. Source presentation is not modified by this postprocess.
 
+Actor assemblies inventory body, head, right-weapon, and left-weapon model
+parts independently with MDL/MDX hashes, render-surface counts, additive-surface
+counts, and emitter/light-node counts. Every ready creature requires exactly
+one body part; manifest, imported assembly, equipped-weapon, and weapon-additive
+counts must join exactly at runtime. The generic glTF actor lane fails closed
+when any constituent source model owns an emitter or light node because that
+node would otherwise be silently discarded.
+
+Odyssey additive identity on actor and weapon materials crosses glTF through
+the existing deterministic material marker because glTF has no additive alpha
+mode. Dynamic-object publication must restore unshaded additive blending,
+depth testing, and disabled depth writes from that marker. Enhanced mode raises
+the same source texture to a bounded 1.8 HDR multiplier so emissive weapon
+surfaces, including lightsaber blade planes, participate in the existing glow
+pipeline; this is an explicit presentation enhancement with
+`parity_claim=none`, not a claim about the retail bloom kernel. Actor material
+import applies the same TXI classifier as rooms, so procedural water/arturo/
+cycle semantics cannot be flattened merely because the texture belongs to a
+character or weapon.
+
+Owned-target validation on 2026-08-31 resolved `w_Dblsbr_002` as one exact
+equipped part with nine rendered surfaces, eight additive blade surfaces, and
+zero emitter/light nodes. Its MDL/MDX SHA-256 pair is
+`87FA76FE10A6BFFAD21198878233F5127568191F0C45BE8E21F36B562B3D1995` /
+`8975B9CE36D7CEB51D9773D6F574A547D6CDEBB97DE177DDAFE2FDFB4A036C15`.
+The exported blade material retains `w_lsabrered01__aurora_additive` and the
+source decal identity. The exact `w_DsrptRfl_001` rifle assembly independently
+resolved one rendered weapon surface with no additive or omitted effect node;
+this validates weapon-model publication only, not a generic combat-projectile
+mapping.
+
+The same complete-assembly traversal exposed the Endar actor cubemap `mycube`
+in addition to room maps `cm_baremetal` and `cm_endar`. Environment resrefs are
+now normalized case-insensitively before export, preventing differently cased
+room/actor references from becoming duplicate runtime dictionary entries. All
+three exact cubemaps are required to bind through material markers; none is inferred
+from a character or module allowlist.
+
 ## Non-Endar acceptance fixture
 
 The owned `tar_m02aa` proof imports 17 rooms, 41,216 triangles, 574 material

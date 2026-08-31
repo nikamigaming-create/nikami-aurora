@@ -95,6 +95,8 @@ internal static partial class Program
             passed++;
             KotorGenericVisualInventoryFailsClosed();
             passed++;
+            KotorCreaturePresentationRequiresEveryModelAndWeaponEffect();
+            passed++;
             KotorGlobalPbrCoverageRequiresEveryEligibleSurface();
             passed++;
             KotorRigIdentityRecognizesSourceBodyFamilies();
@@ -1475,6 +1477,47 @@ internal static partial class Program
             () => KotorModulePresentationPolicy.RequirePbrCoverage(
                 enhanced with { EnhancedPresentation = false }),
             "KOTOR source tier accepted enhanced PBR surface counts");
+    }
+
+    private static void KotorCreaturePresentationRequiresEveryModelAndWeaponEffect()
+    {
+        var complete = new KotorCreaturePresentationInventory(
+            SourceCreatures: 8,
+            RenderedCreatures: 8,
+            UnsupportedCreatures: 0,
+            SourceModelParts: 21,
+            MaterializedModelParts: 21,
+            EquippedWeapons: 6,
+            MaterializedEquippedWeapons: 6,
+            WeaponAdditiveSurfaces: 8,
+            ConfiguredWeaponAdditiveSurfaces: 8,
+            UnsupportedEffectNodes: 0);
+        KotorModulePresentationPolicy.RequireCreaturePresentation(complete);
+        Expect(KotorModulePresentationPolicy.AdditiveGlowMultiplier(false) == 1.0f &&
+               KotorModulePresentationPolicy.AdditiveGlowMultiplier(true) ==
+               KotorModulePresentationPolicy.EnhancedAdditiveGlowMultiplier,
+            "KOTOR source/enhanced additive glow policy collapsed");
+
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireCreaturePresentation(
+                complete with { RenderedCreatures = 7, UnsupportedCreatures = 1 }),
+            "KOTOR presentation accepted an unsupported creature");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireCreaturePresentation(
+                complete with { MaterializedModelParts = 20 }),
+            "KOTOR presentation dropped a source model part");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireCreaturePresentation(
+                complete with { MaterializedEquippedWeapons = 5 }),
+            "KOTOR presentation dropped an equipped weapon");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireCreaturePresentation(
+                complete with { ConfiguredWeaponAdditiveSurfaces = 7 }),
+            "KOTOR presentation flattened a weapon additive surface");
+        ExpectThrows<InvalidDataException>(
+            () => KotorModulePresentationPolicy.RequireCreaturePresentation(
+                complete with { UnsupportedEffectNodes = 1 }),
+            "KOTOR presentation ignored an actor effect node");
     }
 
     private static void KotorRigIdentityRecognizesSourceBodyFamilies()

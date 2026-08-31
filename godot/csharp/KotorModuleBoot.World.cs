@@ -1032,6 +1032,7 @@ public sealed partial class KotorModuleBoot
         authoredDynamicNormalScaleSurfaces += report.AuthoredNormalScale;
         transparentDynamicSurfaces += report.Transparent;
         additiveDynamicSurfaces += report.Additive;
+        configuredAdditiveDynamicSurfaces += report.ConfiguredAdditive;
     }
 
     private static DynamicMaterialReport ConfigureDynamicObjectMaterials(
@@ -1043,6 +1044,7 @@ public sealed partial class KotorModuleBoot
         var normalMapped = 0;
         var transparent = 0;
         var additive = 0;
+        var configuredAdditive = 0;
         var authoredNormalScale = 0;
         if (node is MeshInstance3D instance && instance.Mesh is not null)
         {
@@ -1064,10 +1066,34 @@ public sealed partial class KotorModuleBoot
                 additive += sourceAdditive ? 1 : 0;
                 var sourceNormalScale = ResolveNormalScale(source, out var hasAuthoredNormalScale);
                 authoredNormalScale += hasAuthoredNormalScale ? 1 : 0;
-                if ((!enhanced || sourceAdditive) && !sourceDecal)
+                if (!enhanced && !sourceAdditive && !sourceDecal)
                     continue;
 
                 var material = (BaseMaterial3D)source.Duplicate();
+                if (sourceAdditive)
+                {
+                    // glTF has no additive alpha mode. The importer therefore
+                    // carries Odyssey's TXI identity in the material name and
+                    // this runtime boundary restores the actual blend/depth
+                    // contract for actor and equipped-weapon surfaces.
+                    material.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
+                    material.Transparency = BaseMaterial3D.TransparencyEnum.Alpha;
+                    material.BlendMode = BaseMaterial3D.BlendModeEnum.Add;
+                    material.DepthDrawMode = BaseMaterial3D.DepthDrawModeEnum.Disabled;
+                    material.NoDepthTest = false;
+                    if (enhanced)
+                    {
+                        var color = material.AlbedoColor;
+                        var glow = KotorModulePresentationPolicy
+                            .AdditiveGlowMultiplier(enhancedPresentation: true);
+                        material.AlbedoColor = new Color(
+                            color.R * glow,
+                            color.G * glow,
+                            color.B * glow,
+                            color.A);
+                    }
+                    configuredAdditive++;
+                }
                 if (sourceDecal)
                 {
                     material.Transparency = BaseMaterial3D.TransparencyEnum.Alpha;
@@ -1100,10 +1126,12 @@ public sealed partial class KotorModuleBoot
             normalMapped += childReport.NormalMapped;
             transparent += childReport.Transparent;
             additive += childReport.Additive;
+            configuredAdditive += childReport.ConfiguredAdditive;
             authoredNormalScale += childReport.AuthoredNormalScale;
         }
         return new DynamicMaterialReport(
             surfaces, enhancedPbr, normalMapped, transparent, additive,
+            configuredAdditive,
             authoredNormalScale);
     }
 

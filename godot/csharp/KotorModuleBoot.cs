@@ -472,6 +472,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private int authoredDynamicNormalScaleSurfaces;
     private int transparentDynamicSurfaces;
     private int additiveDynamicSurfaces;
+    private int configuredAdditiveDynamicSurfaces;
     private KotorLightmapTransfer lightmapTransfer =
         KotorEnvironmentMaterialPolicy.LightmapTransfer(enhanced: false);
     private RenderingQualityDecision renderingQualityDecision = null!;
@@ -1689,27 +1690,77 @@ public sealed partial class KotorModuleBoot : Node3D
             authoredDynamicNormalScaleSurfaces = 0;
             transparentDynamicSurfaces = 0;
             additiveDynamicSurfaces = 0;
+            configuredAdditiveDynamicSurfaces = 0;
             var materializedPlayer = LoadPlayerModel(
                 manifest.Player, manifest.CameraStyle, manifestDirectory);
+            var creatureModelRecords = manifest.Creatures
+                .SelectMany(creature => creature.Models ?? [])
+                .ToArray();
+            var equippedWeaponRecords = creatureModelRecords.Where(model =>
+                    model.Role.Equals("rightWeapon", StringComparison.Ordinal) ||
+                    model.Role.Equals("leftWeapon", StringComparison.Ordinal))
+                .ToArray();
+            var equippedWeaponAdditiveSurfaces = equippedWeaponRecords.Sum(
+                model => model.AdditiveSurfaces);
+            var creatureAdditiveSurfaces = creatureModelRecords.Sum(
+                model => model.AdditiveSurfaces);
+            if (creatureModelRecords.Any(model =>
+                    string.IsNullOrWhiteSpace(model.Model) ||
+                    model.RenderSurfaces <= 0 || model.AdditiveSurfaces < 0 ||
+                    model.AdditiveSurfaces > model.RenderSurfaces ||
+                    model.EmitterNodes != 0 || model.LightNodes != 0 ||
+                    model.MdlSha256.Length != 64 || model.MdxSha256.Length != 64 ||
+                    !model.MdlSha256.All(Uri.IsHexDigit) ||
+                    !model.MdxSha256.All(Uri.IsHexDigit)) ||
+                manifest.Creatures.Where(creature =>
+                        string.Equals(creature.RenderStatus, "ready",
+                            StringComparison.OrdinalIgnoreCase))
+                    .Any(creature => creature.Models is not { Count: > 0 } ||
+                                     creature.Models.Count(model =>
+                                         model.Role.Equals("body",
+                                             StringComparison.Ordinal)) != 1) ||
+                manifest.Counts.AuthoredCreatureModels != creatureModelRecords.Length ||
+                manifest.Counts.EquippedWeaponModels != equippedWeaponRecords.Length ||
+                manifest.Counts.EquippedWeaponAdditiveSurfaces !=
+                    equippedWeaponAdditiveSurfaces)
+                throw new InvalidDataException(
+                    "KOTOR source-creature model/effect inventory is incomplete");
+            var configuredAdditiveBeforeActors = configuredAdditiveDynamicSurfaces;
             var materializedActors = LoadActorModels(manifest.Creatures, manifestDirectory);
+            var configuredCreatureAdditiveSurfaces =
+                configuredAdditiveDynamicSurfaces - configuredAdditiveBeforeActors;
+            if (configuredCreatureAdditiveSurfaces != creatureAdditiveSurfaces)
+                throw new InvalidDataException(
+                    "KOTOR source-creature additive-material coverage is incomplete");
             var unsupportedCreatureRecords = manifest.Creatures.Count(creature =>
                 !string.Equals(creature.RenderStatus, "ready",
                     StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrWhiteSpace(creature.Glb));
             if (manifest.Counts.RenderReadyCreatures != materializedActors ||
-                manifest.Counts.UnsupportedCreatures != unsupportedCreatureRecords ||
-                materializedActors + unsupportedCreatureRecords !=
-                manifest.Counts.Creatures ||
-                materializedActors != manifest.Counts.Creatures)
+                manifest.Counts.UnsupportedCreatures != unsupportedCreatureRecords)
                 throw new InvalidDataException(
-                    "KOTOR source-creature render coverage is incomplete: " +
-                    $"expected={manifest.Counts.Creatures} " +
-                    $"materialized={materializedActors} " +
-                    $"unsupported={unsupportedCreatureRecords}");
+                    "KOTOR source-creature manifest inventory drifted");
+            KotorModulePresentationPolicy.RequireCreaturePresentation(
+                new KotorCreaturePresentationInventory(
+                    manifest.Counts.Creatures,
+                    materializedActors,
+                    unsupportedCreatureRecords,
+                    manifest.Counts.AuthoredCreatureModels,
+                    creatureModelRecords.Length,
+                    manifest.Counts.EquippedWeaponModels,
+                    equippedWeaponRecords.Length,
+                    manifest.Counts.EquippedWeaponAdditiveSurfaces,
+                    equippedWeaponAdditiveSurfaces,
+                    creatureModelRecords.Sum(model =>
+                        model.EmitterNodes + model.LightNodes)));
             GD.Print($"NIKAMI_AURORA_CREATURES status=ready module={loadedModuleId} " +
                      $"expected={manifest.Counts.Creatures} " +
                      $"rendered={materializedActors} missing=0 unsupported=0 " +
-                     "standins=0 environment=module-world pbr=global-enhanced");
+                     $"models={creatureModelRecords.Length} " +
+                     $"weapons={equippedWeaponRecords.Length} " +
+                     $"weapon_additive_surfaces={equippedWeaponAdditiveSurfaces} " +
+                     "effect_nodes=0 standins=0 environment=module-world " +
+                     "pbr=global-enhanced");
             if (launchEnvironment.Get(
                     "NIKAMI_AURORA_DEBUG_CREATURE_MARKERS") == "1")
                 AddCreatureMarkers(manifest.Creatures);
@@ -1721,6 +1772,9 @@ public sealed partial class KotorModuleBoot : Node3D
                 enhancedDynamicPbrSurfaces,
                 enhancedPresentation);
             KotorModulePresentationPolicy.RequirePbrCoverage(dynamicPbrCoverage);
+            if (configuredAdditiveDynamicSurfaces != additiveDynamicSurfaces)
+                throw new InvalidDataException(
+                    "KOTOR dynamic additive-material coverage is incomplete");
             if (!enhancedPresentation && enhancedDynamicNormalSurfaces != 0)
                 throw new InvalidDataException(
                     "KOTOR dynamic-object material coverage is incomplete");
@@ -1735,6 +1789,7 @@ public sealed partial class KotorModuleBoot : Node3D
                      $"{authoredDynamicNormalScaleSurfaces} " +
                      $"transparent={transparentDynamicSurfaces} " +
                      $"additive={additiveDynamicSurfaces} " +
+                     $"configured_additive={configuredAdditiveDynamicSurfaces} " +
                      $"dielectric_specular=" +
                      $"{KotorEnvironmentMaterialPolicy.DielectricSpecular(enhancedPresentation):F2} " +
                      $"fallback_roughness=" +

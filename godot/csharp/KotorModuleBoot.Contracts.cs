@@ -306,7 +306,18 @@ public sealed partial class KotorModuleBoot
         string? UtcSha256 = null,
         string? IdleAnimation = null,
         IReadOnlyList<float>? RenderExtent = null,
-        PlayerAnimationRecord? Animation = null);
+        PlayerAnimationRecord? Animation = null,
+        IReadOnlyList<CreatureModelRecord>? Models = null);
+    private sealed record CreatureModelRecord(
+        string Role,
+        string Model,
+        string? OverrideTexture,
+        string MdlSha256,
+        string MdxSha256,
+        int RenderSurfaces,
+        int AdditiveSurfaces,
+        int EmitterNodes,
+        int LightNodes);
     private sealed record DoorRecord(string Template, string Tag, IReadOnlyList<float> Position, float Bearing,
         string LinkedToModule, string? Glb, string? Model, string? Conversation, string? OnOpen,
         bool Locked, bool KeyRequired);
@@ -395,7 +406,10 @@ public sealed partial class KotorModuleBoot
         int AdditiveLightmappedSurfaces = 0,
         int UniqueCreatureTemplates = 0,
         int RenderReadyCreatures = 0,
-        int UnsupportedCreatures = 0);
+        int UnsupportedCreatures = 0,
+        int AuthoredCreatureModels = 0,
+        int EquippedWeaponModels = 0,
+        int EquippedWeaponAdditiveSurfaces = 0);
     private readonly record struct NavigationTriangle(Vector3 A, Vector3 B, Vector3 C);
     private readonly record struct StaticMaterialReport(
         int LightmappedOpaque,
@@ -437,6 +451,7 @@ public sealed partial class KotorModuleBoot
         int NormalMapped,
         int Transparent,
         int Additive,
+        int ConfiguredAdditive,
         int AuthoredNormalScale);
     private sealed class InteractiveDoor(
         string instanceId,
