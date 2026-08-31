@@ -28,6 +28,18 @@ public readonly record struct KotorPbrCoverage(
     public int PbrEligibleSurfaces => RenderableSurfaces - SourceUnshadedSurfaces;
 }
 
+public readonly record struct KotorCreaturePresentationInventory(
+    int SourceCreatures,
+    int RenderedCreatures,
+    int UnsupportedCreatures,
+    int SourceModelParts,
+    int MaterializedModelParts,
+    int EquippedWeapons,
+    int MaterializedEquippedWeapons,
+    int WeaponAdditiveSurfaces,
+    int ConfiguredWeaponAdditiveSurfaces,
+    int UnsupportedEffectNodes);
+
 /// <summary>
 /// Profile-owned boundary between reusable Odyssey module presentation and the
 /// source-specific Endar Spire opening route. Generic modules receive the same
@@ -41,6 +53,10 @@ public static class KotorModulePresentationPolicy
     public const string EndarOpeningMode = "endar-opening";
     public const string MissingSourceAssetPolicy =
         "source-absence-report-no-fabrication-v1";
+    public const float EnhancedAdditiveGlowMultiplier = 1.8f;
+
+    public static float AdditiveGlowMultiplier(bool enhancedPresentation) =>
+        enhancedPresentation ? EnhancedAdditiveGlowMultiplier : 1.0f;
 
     public static string RequireModuleId(string moduleId)
     {
@@ -121,6 +137,34 @@ public static class KotorModulePresentationPolicy
                 $"eligible={coverage.PbrEligibleSurfaces} " +
                 $"pbr={coverage.PbrSurfaces} " +
                 $"tier={(coverage.EnhancedPresentation ? "enhanced" : "source")}");
+    }
+
+    public static void RequireCreaturePresentation(
+        KotorCreaturePresentationInventory inventory)
+    {
+        if (inventory.SourceCreatures < 0 || inventory.RenderedCreatures < 0 ||
+            inventory.UnsupportedCreatures < 0 ||
+            inventory.RenderedCreatures + inventory.UnsupportedCreatures !=
+                inventory.SourceCreatures ||
+            inventory.UnsupportedCreatures != 0)
+            throw new InvalidDataException(
+                "KOTOR source-creature render coverage is incomplete");
+        if (inventory.SourceModelParts < inventory.SourceCreatures ||
+            inventory.MaterializedModelParts != inventory.SourceModelParts)
+            throw new InvalidDataException(
+                "KOTOR source-creature model-part coverage is incomplete");
+        if (inventory.EquippedWeapons < 0 ||
+            inventory.MaterializedEquippedWeapons != inventory.EquippedWeapons)
+            throw new InvalidDataException(
+                "KOTOR equipped-weapon model coverage is incomplete");
+        if (inventory.WeaponAdditiveSurfaces < 0 ||
+            inventory.ConfiguredWeaponAdditiveSurfaces !=
+                inventory.WeaponAdditiveSurfaces)
+            throw new InvalidDataException(
+                "KOTOR equipped-weapon additive coverage is incomplete");
+        if (inventory.UnsupportedEffectNodes != 0)
+            throw new InvalidDataException(
+                "KOTOR creature assembly contains unsupported effect nodes");
     }
 
     public static void RequireEndarAutomation(
