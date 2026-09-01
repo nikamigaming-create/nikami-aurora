@@ -19,6 +19,7 @@ public sealed partial class KotorModuleBoot
         CameraStyleRecord CameraStyle,
         KotorRuntimeConfiguration RuntimeConfiguration,
         ExperienceTableRecord ExperienceTable,
+        VideoEffectTableRecord? VideoEffects,
         CombatExperienceTableRecord CombatExperienceTable,
         KotorUiRecord Ui,
         PlayerRecord Player,
@@ -44,6 +45,11 @@ public sealed partial class KotorModuleBoot
     private sealed record CombatExperienceTableRecord(
         string SourceSha256,
         IReadOnlyList<KotorCombatExperienceRow> Rows);
+    private sealed record VideoEffectTableRecord(
+        string Schema, string SourceSha256, IReadOnlyList<VideoEffectRecord> Effects);
+    private sealed record VideoEffectRecord(
+        int Id, string Label, bool EnableSaturation, IReadOnlyList<float> Modulation,
+        float Saturation, bool EnableScanNoise);
 
     private sealed record UnresolvedTextureReferenceRecord(
         string Room,
@@ -369,10 +375,25 @@ public sealed partial class KotorModuleBoot
         float MaxDistance,
         float PitchVariation,
         string UtsSha256,
-        FirstEncounterAudioSource Audio);
-    private sealed record MaterializedSoundObject(
-        SoundObjectRecord Source,
-        Node Player);
+        FirstEncounterAudioSource? Audio = null,
+        IReadOnlyList<FirstEncounterAudioSource>? AudioSources = null,
+        int VolumeVariation = 0,
+        bool RandomPick = false,
+        int IntervalMilliseconds = 0,
+        int IntervalVariationMilliseconds = 0);
+    private sealed class MaterializedSoundObject(
+        SoundObjectRecord source,
+        Node player,
+        IReadOnlyList<AudioStream> streams,
+        float sourceVolumeDb)
+    {
+        public SoundObjectRecord Source { get; } = source;
+        public Node Player { get; } = player;
+        public IReadOnlyList<AudioStream> Streams { get; } = streams;
+        public float SourceVolumeDb { get; } = sourceVolumeDb;
+        public int NextIndex { get; set; }
+        public int Generation { get; set; }
+    }
     private sealed record FirstEncounterScript(
         string Resref,
         string SourceSha256,
@@ -530,7 +551,8 @@ public sealed partial class KotorModuleBoot
     private sealed record DialogueReference(string Path, string SourceSha256, int StarterCount,
         int NodeCount, int OpeningStarter);
     private sealed record OpeningDialogueRecord(
-        string Schema, string ActorTag, string Conversation, DialogueReference Dialogue);
+        string Schema, string ActorTag, string Conversation, DialogueReference Dialogue,
+        string EventSource = "trigger-enter", string? ScriptResref = null);
     private sealed record DialogueGraph(string Schema, int OpeningStarter,
         IReadOnlyList<DialogueLink> Starters, IReadOnlyDictionary<string, DialogueNode> Nodes);
     private sealed record DialogueNode(string Kind, string Text, string Speaker, string Sound,

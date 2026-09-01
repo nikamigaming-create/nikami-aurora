@@ -11,6 +11,10 @@ public enum KotorScriptContractKind
     MovePlayerToWaypoint,
     ModuleStartPresentation,
     PlaySoundObjectFromParameters,
+    SoundObjectPlayDelayedFromParameters,
+    SoundObjectStopFromParameters,
+    VideoEffectFromParameters,
+    LocalBooleanSetFromParameters,
     NoOp,
     RoomAnimationFromParameters,
     GlobalNumberAdd,
@@ -109,6 +113,14 @@ public sealed record KotorScriptContract(
         KotorScriptContractKind.ModuleStartPresentation => "module-start-presentation",
         KotorScriptContractKind.PlaySoundObjectFromParameters =>
             "play-sound-object-from-parameters",
+        KotorScriptContractKind.SoundObjectPlayDelayedFromParameters =>
+            "sound-object-play-delayed-from-parameters",
+        KotorScriptContractKind.SoundObjectStopFromParameters =>
+            "sound-object-stop-from-parameters",
+        KotorScriptContractKind.VideoEffectFromParameters =>
+            "video-effect-from-parameters",
+        KotorScriptContractKind.LocalBooleanSetFromParameters =>
+            "local-boolean-set-from-parameters",
         KotorScriptContractKind.NoOp => "no-op",
         KotorScriptContractKind.RoomAnimationFromParameters =>
             "room-animation-from-parameters",
@@ -171,6 +183,10 @@ public sealed record KotorScriptContract(
                 ValidateDuration(MusicRestartDelaySeconds, nameof(MusicRestartDelaySeconds));
                 break;
             case KotorScriptContractKind.PlaySoundObjectFromParameters:
+            case KotorScriptContractKind.SoundObjectPlayDelayedFromParameters:
+            case KotorScriptContractKind.SoundObjectStopFromParameters:
+            case KotorScriptContractKind.VideoEffectFromParameters:
+            case KotorScriptContractKind.LocalBooleanSetFromParameters:
             case KotorScriptContractKind.NoOp:
                 break;
             case KotorScriptContractKind.RoomAnimationFromParameters:
@@ -375,7 +391,8 @@ public sealed record KotorGameplaySnapshot(
     bool MapRevealed,
     string PlayerPartyMemberId,
     string SelectedPartyMemberId,
-    IReadOnlyDictionary<string, KotorPartyMemberSnapshot> PartyMembers);
+    IReadOnlyDictionary<string, KotorPartyMemberSnapshot> PartyMembers,
+    IReadOnlyDictionary<string, bool>? LocalBooleans = null);
 
 public abstract record KotorGameplayEvent;
 
@@ -446,6 +463,21 @@ public sealed record KotorSoundObjectPlayRequested(
     string Tag,
     float DelaySeconds) : KotorGameplayEvent;
 
+public sealed record KotorSoundObjectStopRequested(
+    string Tag,
+    float DelaySeconds,
+    float FadeSeconds) : KotorGameplayEvent;
+
+public sealed record KotorVideoEffectRequested(
+    bool Enabled,
+    int EffectId) : KotorGameplayEvent;
+
+public sealed record KotorLocalBooleanChanged(
+    string ObjectTag,
+    int Index,
+    bool Before,
+    bool After) : KotorGameplayEvent;
+
 public sealed record KotorScriptInvocation(
     int Int1,
     int Int2,
@@ -511,6 +543,8 @@ public sealed class KotorGameplaySimulation
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<KotorEquipmentSlot, string> equipment = [];
     private readonly Dictionary<string, int> globalNumbers =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, bool> localBooleans =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, KotorPartyMemberSnapshot> partyMembers;
     private readonly KotorExperienceTable experienceTable;
@@ -612,7 +646,8 @@ public sealed class KotorGameplaySimulation
             selectedPartyMemberId,
             new ReadOnlyDictionary<string, KotorPartyMemberSnapshot>(
                 new Dictionary<string, KotorPartyMemberSnapshot>(
-                    partyMembers, StringComparer.OrdinalIgnoreCase)));
+                    partyMembers, StringComparer.OrdinalIgnoreCase)),
+            ReadOnlyCopy(localBooleans));
     }
 
     public bool IsDoorOpen(string instanceId) =>
@@ -919,6 +954,46 @@ public sealed class KotorGameplaySimulation
                             "a non-negative delay and sound-object tag");
                     events.Add(new KotorSoundObjectPlayRequested(
                         invocation.String6, invocation.Int1));
+                    events.Add(new KotorScriptExecuted(contract));
+                    break;
+                case KotorScriptContractKind.SoundObjectPlayDelayedFromParameters:
+                    if (invocation is null || invocation.Int2 < 0 ||
+                        string.IsNullOrWhiteSpace(invocation.String6))
+                        throw new InvalidOperationException(
+                            $"Sound-object script {contract.Resref} requires " +
+                            "a non-negative delay and sound-object tag");
+                    events.Add(new KotorSoundObjectPlayRequested(
+                        invocation.String6, invocation.Int2));
+                    events.Add(new KotorScriptExecuted(contract));
+                    break;
+                case KotorScriptContractKind.SoundObjectStopFromParameters:
+                    if (invocation is null || invocation.Int1 < 0 || invocation.Int2 < 0 ||
+                        string.IsNullOrWhiteSpace(invocation.String6))
+                        throw new InvalidOperationException(
+                            $"Sound-object stop script {contract.Resref} requires " +
+                            "non-negative fade/delay values and a sound-object tag");
+                    events.Add(new KotorSoundObjectStopRequested(
+                        invocation.String6, invocation.Int2, invocation.Int1));
+                    events.Add(new KotorScriptExecuted(contract));
+                    break;
+                case KotorScriptContractKind.VideoEffectFromParameters:
+                    if (invocation is null)
+                        throw new InvalidOperationException(
+                            $"Video-effect script {contract.Resref} requires parameters");
+                    events.Add(new KotorVideoEffectRequested(invocation.Int1 != 0, 1));
+                    events.Add(new KotorScriptExecuted(contract));
+                    break;
+                case KotorScriptContractKind.LocalBooleanSetFromParameters:
+                    if (invocation is null || invocation.Int1 is < 20 or > 63 ||
+                        string.IsNullOrWhiteSpace(invocation.String6))
+                        throw new InvalidOperationException(
+                            $"Local-boolean script {contract.Resref} requires " +
+                            "an index from 20 through 63 and an object tag");
+                    var localKey = $"{invocation.String6}:{invocation.Int1}";
+                    localBooleans.TryGetValue(localKey, out var localBefore);
+                    localBooleans[localKey] = true;
+                    events.Add(new KotorLocalBooleanChanged(
+                        invocation.String6, invocation.Int1, localBefore, true));
                     events.Add(new KotorScriptExecuted(contract));
                     break;
                 case KotorScriptContractKind.NoOp:

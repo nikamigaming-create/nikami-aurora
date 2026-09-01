@@ -1552,8 +1552,10 @@ public sealed partial class KotorModuleBoot
                 !float.IsFinite(source.MinDistance) || source.MinDistance <= 0 ||
                 !float.IsFinite(source.MaxDistance) ||
                 source.MaxDistance < source.MinDistance ||
-                !float.IsFinite(source.PitchVariation) ||
-                source.PitchVariation != 0 ||
+                !float.IsFinite(source.PitchVariation) || source.PitchVariation < 0 ||
+                source.PitchVariation > 1 || source.VolumeVariation is < 0 or > 127 ||
+                source.IntervalMilliseconds < 0 ||
+                source.IntervalVariationMilliseconds < 0 ||
                 source.UtsSha256.Length != 64 ||
                 !source.UtsSha256.All(Uri.IsHexDigit) ||
                 !moduleSoundObjects.TryAdd(
@@ -1570,17 +1572,27 @@ public sealed partial class KotorModuleBoot
         SoundObjectRecord source,
         string manifestDirectory)
     {
-        var stream = LoadOwnedAudio(source.Audio, manifestDirectory);
-        switch (stream)
+        var audioSources = source.AudioSources is { Count: > 0 }
+            ? source.AudioSources
+            : source.Audio is not null
+                ? [source.Audio]
+                : throw new InvalidDataException(
+                    $"Sound object has no audio sources: {source.Tag}");
+        var streams = audioSources.Select(item => LoadOwnedAudio(item, manifestDirectory))
+            .ToArray();
+        foreach (var stream in streams)
         {
-            case AudioStreamWav wav:
-                wav.LoopMode = source.Looping
-                    ? AudioStreamWav.LoopModeEnum.Forward
-                    : AudioStreamWav.LoopModeEnum.Disabled;
-                break;
-            case AudioStreamMP3 mp3:
-                mp3.Loop = source.Looping;
-                break;
+            switch (stream)
+            {
+                case AudioStreamWav wav:
+                    wav.LoopMode = source.Looping && streams.Length == 1
+                        ? AudioStreamWav.LoopModeEnum.Forward
+                        : AudioStreamWav.LoopModeEnum.Disabled;
+                    break;
+                case AudioStreamMP3 mp3:
+                    mp3.Loop = source.Looping && streams.Length == 1;
+                    break;
+            }
         }
         var volumeDb = source.Volume == 0
             ? -80.0f
@@ -1591,7 +1603,6 @@ public sealed partial class KotorModuleBoot
             var spatial = new AudioStreamPlayer3D
             {
                 Name = $"SoundObject_{source.Tag}",
-                Stream = stream,
                 VolumeDb = volumeDb,
                 Position = ToGodot(source.Position),
                 UnitSize = source.MinDistance,
@@ -1600,23 +1611,99 @@ public sealed partial class KotorModuleBoot
             };
             AddChild(spatial);
             player = spatial;
-            if (source.Active)
-                spatial.Play();
         }
         else
         {
             var flat = new AudioStreamPlayer
             {
                 Name = $"SoundObject_{source.Tag}",
-                Stream = stream,
                 VolumeDb = volumeDb
             };
             AddChild(flat);
             player = flat;
-            if (source.Active)
-                flat.Play();
         }
-        return new MaterializedSoundObject(source, player);
+        var materialized = new MaterializedSoundObject(source, player, streams, volumeDb);
+        player.Connect("finished", Callable.From(() =>
+            OnSoundObjectFinished(materialized)));
+        if (source.Active && (source.Continuous || source.Looping))
+            PlayMaterializedSoundObject(materialized);
+        return materialized;
+    }
+
+    private void PlayMaterializedSoundObject(MaterializedSoundObject sound)
+    {
+        if (sound.Streams.Count == 0)
+            throw new InvalidDataException(
+                $"Sound object has no playable streams: {sound.Source.Tag}");
+        var index = sound.Source.RandomPick
+            ? DeterministicAudioIndex(
+                sound.Source.Tag, sound.Generation, sound.Streams.Count)
+            : sound.NextIndex % sound.Streams.Count;
+        sound.NextIndex = (index + 1) % sound.Streams.Count;
+        var stream = sound.Streams[index];
+        var signedPitch = DeterministicSignedAudioVariation(
+            sound.Source.Tag, index, sound.Generation, 17);
+        var signedVolume = DeterministicSignedAudioVariation(
+            sound.Source.Tag, index, sound.Generation, 31);
+        var pitch = 1.0f + sound.Source.PitchVariation * signedPitch;
+        var variedLinearVolume = Mathf.Clamp(
+            sound.Source.Volume / 127.0f +
+            sound.Source.VolumeVariation / 127.0f * signedVolume,
+            0.0f,
+            1.0f);
+        var volumeDb = variedLinearVolume == 0 ? -80.0f : Mathf.LinearToDb(variedLinearVolume);
+        switch (sound.Player)
+        {
+            case AudioStreamPlayer3D spatial:
+                spatial.Stream = stream;
+                spatial.PitchScale = pitch;
+                spatial.VolumeDb = volumeDb;
+                spatial.Play();
+                break;
+            case AudioStreamPlayer flat:
+                flat.Stream = stream;
+                flat.PitchScale = pitch;
+                flat.VolumeDb = volumeDb;
+                flat.Play();
+                break;
+            default:
+                throw new InvalidDataException(
+                    $"Unsupported sound-object player: {sound.Source.Tag}");
+        }
+        sound.Generation++;
+    }
+
+    private async void OnSoundObjectFinished(MaterializedSoundObject sound)
+    {
+        if (!sound.Source.Continuous && !sound.Source.Looping)
+            return;
+        var generation = sound.Generation;
+        var signedInterval = DeterministicSignedAudioVariation(
+            sound.Source.Tag, sound.NextIndex, generation, 47);
+        var delayMilliseconds = Math.Max(0, sound.Source.IntervalMilliseconds +
+            (int)Math.Round(sound.Source.IntervalVariationMilliseconds * signedInterval));
+        if (delayMilliseconds > 0)
+        {
+            var timer = GetTree().CreateTimer(delayMilliseconds / 1000.0);
+            await ToSignal(timer, SceneTreeTimer.SignalName.Timeout);
+        }
+        if (generation == sound.Generation)
+            PlayMaterializedSoundObject(sound);
+    }
+
+    private static float DeterministicSignedAudioVariation(
+        string tag, int index, int generation, int salt)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes($"{tag}:{index}:{generation}:{salt}"));
+        return BitConverter.ToUInt32(hash, 0) / (float)uint.MaxValue * 2.0f - 1.0f;
+    }
+
+    private static int DeterministicAudioIndex(string tag, int generation, int count)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes($"{tag}:{generation}:source"));
+        return (int)(BitConverter.ToUInt32(hash, 0) % (uint)count);
     }
 
     private void PlaySpatialOneShot(

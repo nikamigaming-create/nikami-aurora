@@ -21,6 +21,26 @@ except (ImportError, SystemExit) as exc:
 
 
 class KotorRenderingImportTests(unittest.TestCase):
+    def test_mdlops_named_skin_weights_are_preserved_for_kotor2(self) -> None:
+        source = """node skin Torso
+  weights 3
+    torsoUpr_g 1
+    pelvis_g 0.85 torso_g 0.15
+    pelvis_g 0.25 torso_g 0.25 torsoUpr_g 0.25 neck_g 0.25
+endnode
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "actor.mdl.ascii"
+            path.write_text(source, encoding="ascii")
+            result = importer.parse_mdlops_skin_weights(path)
+
+        self.assertEqual(
+            [[("torsoUpr_g", 1.0)],
+             [("pelvis_g", 0.85), ("torso_g", 0.15)],
+             [("pelvis_g", 0.25), ("torso_g", 0.25),
+              ("torsoUpr_g", 0.25), ("neck_g", 0.25)]],
+            result["Torso"])
+
     def test_combat_xp_export_accepts_kotor2_numeric_challenge_columns(self) -> None:
         headers = ["level", *(str(value) for value in range(51))]
 

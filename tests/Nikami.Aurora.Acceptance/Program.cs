@@ -1239,6 +1239,26 @@ internal static partial class Program
                 new string('F', 64),
                 31),
             new KotorScriptContract(
+                "a_soundobject",
+                KotorScriptContractKind.SoundObjectPlayDelayedFromParameters,
+                new string('1', 64),
+                31),
+            new KotorScriptContract(
+                "a_stop_sound",
+                KotorScriptContractKind.SoundObjectStopFromParameters,
+                new string('2', 64),
+                31),
+            new KotorScriptContract(
+                "a_video_effect",
+                KotorScriptContractKind.VideoEffectFromParameters,
+                new string('3', 64),
+                31),
+            new KotorScriptContract(
+                "a_local_set",
+                KotorScriptContractKind.LocalBooleanSetFromParameters,
+                new string('4', 64),
+                31),
+            new KotorScriptContract(
                 "a_intro_autosave",
                 KotorScriptContractKind.NoOp,
                 new string('0', 64),
@@ -1515,6 +1535,37 @@ internal static partial class Program
                    Tag: "FloorMonitors", DelaySeconds: 1.0f } &&
                soundObject.Events[1] is KotorScriptExecuted,
             "parameterized sound-object script did not preserve tag and delay");
+
+        var delayedSoundObject = simulation.ExecuteScript(
+            "a_soundobject",
+            new KotorScriptInvocation(0, 3, 0, 0, 0, "ComputerVoice"));
+        Expect(delayedSoundObject.Events[0] is KotorSoundObjectPlayRequested {
+                   Tag: "ComputerVoice", DelaySeconds: 3.0f },
+            "KOTOR II delayed sound-object parameters drifted");
+        var stoppedSoundObject = simulation.ExecuteScript(
+            "a_stop_sound",
+            new KotorScriptInvocation(2, 4, 0, 0, 0, "ComputerVoice"));
+        Expect(stoppedSoundObject.Events[0] is KotorSoundObjectStopRequested {
+                   Tag: "ComputerVoice", DelaySeconds: 4.0f, FadeSeconds: 2.0f },
+            "KOTOR II sound-object stop parameters drifted");
+
+        var enabledVideoEffect = simulation.ExecuteScript(
+            "a_video_effect", new KotorScriptInvocation(1, 0, 0, 0, 0, ""));
+        var disabledVideoEffect = simulation.ExecuteScript(
+            "a_video_effect", new KotorScriptInvocation(0, 0, 0, 0, 0, ""));
+        Expect(enabledVideoEffect.Events[0] is KotorVideoEffectRequested {
+                   Enabled: true, EffectId: 1 } &&
+               disabledVideoEffect.Events[0] is KotorVideoEffectRequested {
+                   Enabled: false, EffectId: 1 },
+            "KOTOR II T3 video-effect transitions drifted");
+
+        var localSet = simulation.ExecuteScript(
+            "a_local_set", new KotorScriptInvocation(40, 0, 0, 0, 0, "tr_journal"));
+        Expect(localSet.Events[0] is KotorLocalBooleanChanged {
+                   ObjectTag: "tr_journal", Index: 40,
+                   Before: false, After: true } &&
+               localSet.After.LocalBooleans?["tr_journal:40"] == true,
+            "KOTOR II tutorial local-boolean transition drifted");
 
         var noOp = simulation.ExecuteScript("a_intro_autosave");
         Expect(noOp.Events.Single() is KotorScriptExecuted executedNoOp &&
