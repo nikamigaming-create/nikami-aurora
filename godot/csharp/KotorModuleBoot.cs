@@ -56,7 +56,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform sampler2D normal_texture : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
             uniform bool has_normal_texture = false;
             uniform float normal_scale = 1.0;
-            uniform vec3 dynamic_ambient;
+            uniform vec3 dynamic_ambient : source_color;
             uniform float dynamic_light_albedo_weight;
             uniform float baked_emission_weight;
             uniform float dynamic_ambient_emission_weight;
@@ -120,7 +120,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform sampler2D normal_texture : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
             uniform bool has_normal_texture = false;
             uniform float normal_scale = 1.0;
-            uniform vec3 dynamic_ambient;
+            uniform vec3 dynamic_ambient : source_color;
             uniform float dynamic_light_albedo_weight;
             uniform float baked_emission_weight;
             uniform float dynamic_ambient_emission_weight;
@@ -156,7 +156,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform bool has_normal_texture = false;
             uniform float normal_scale = 1.0;
             uniform samplerCube environment_map : source_color, filter_linear_mipmap_anisotropic;
-            uniform vec3 dynamic_ambient;
+            uniform vec3 dynamic_ambient : source_color;
             uniform float reflection_strength = 0.0;
             uniform float maximum_reflection_weight = 1.0;
             uniform float dynamic_light_albedo_weight;
@@ -203,7 +203,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform bool has_normal_texture = false;
             uniform float normal_scale = 1.0;
             uniform samplerCube environment_map : source_color, filter_linear_mipmap_anisotropic;
-            uniform vec3 dynamic_ambient;
+            uniform vec3 dynamic_ambient : source_color;
             uniform float reflection_strength = 0.0;
             uniform float maximum_reflection_weight = 1.0;
             uniform float dynamic_light_albedo_weight;
@@ -313,7 +313,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform sampler2D albedo_texture : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
             uniform vec4 albedo_tint : source_color = vec4(1.0);
             uniform sampler2D lightmap_texture : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
-            uniform vec3 dynamic_ambient;
+            uniform vec3 dynamic_ambient : source_color;
             uniform float dynamic_light_albedo_weight;
             uniform float baked_emission_weight;
             uniform float dynamic_ambient_emission_weight;
@@ -361,7 +361,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform vec4 albedo_tint : source_color = vec4(1.0);
             uniform sampler2D lightmap_texture : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
             uniform samplerCube environment_map : source_color, filter_linear_mipmap_anisotropic;
-            uniform vec3 dynamic_ambient;
+            uniform vec3 dynamic_ambient : source_color;
             uniform float reflection_strength = 0.0;
             uniform float maximum_reflection_weight = 1.0;
             uniform float dynamic_light_albedo_weight;
