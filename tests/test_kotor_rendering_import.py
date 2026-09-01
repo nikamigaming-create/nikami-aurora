@@ -407,6 +407,43 @@ endnode
         self.assertEqual("001EBO9_lm2", parsed_meshes[0].texture_2)
         self.assertEqual("", parsed_meshes[1].texture_2)
 
+    def test_mdlops_ascii_kotor2_light_metadata_is_restored(self) -> None:
+        parsed_light = SimpleNamespace(
+            dynamic_type=0,
+            affect_dynamic=True,
+            ambient_only=True,
+            shadow=False,
+            light_priority=0,
+        )
+        parsed_model = SimpleNamespace(all_nodes=lambda: [
+            SimpleNamespace(name="AuroraLight02", mesh=None, light=parsed_light),
+        ])
+        source = """\
+node light AuroraLight02
+  ambientonly 0
+  nDynamicType 2
+  affectDynamic 0
+  shadow 1
+  lightpriority 3
+endnode
+"""
+        original_reader = importer.read_mdl
+        importer.read_mdl = lambda _path: parsed_model
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "room.mdl.ascii"
+                path.write_text(source, encoding="ascii")
+                result = importer.read_mdl_ascii_preserving_lightmaps(path)
+        finally:
+            importer.read_mdl = original_reader
+
+        self.assertIs(parsed_model, result)
+        self.assertEqual(2, parsed_light.dynamic_type)
+        self.assertFalse(parsed_light.affect_dynamic)
+        self.assertFalse(parsed_light.ambient_only)
+        self.assertTrue(parsed_light.shadow)
+        self.assertEqual(3, parsed_light.light_priority)
+
     def test_odyssey_room_placeholder_is_preserved_without_fabricated_assets(self) -> None:
         record = importer.source_room_placeholder_record("****")
 

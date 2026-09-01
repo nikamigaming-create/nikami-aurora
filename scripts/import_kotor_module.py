@@ -508,15 +508,20 @@ def read_mdl_ascii_preserving_lightmaps(ascii_path: Path) -> Any:
     """Restore MDLOps fields omitted or misread by PyKotor's ASCII reader.
 
     PyKotor reads KOTOR II geometry and both UV sets from MDLOps ASCII, but its
-    ASCII grammar currently ignores the secondary texture declaration and
-    leaves static axis-angle orientations in a quaternion-shaped field.  Keep
-    the conversion boundary shared and source-driven by normalizing both here.
+    ASCII grammar currently ignores the secondary texture declaration, loses
+    KOTOR II's ``nDynamicType`` light value, and leaves static axis-angle
+    orientations in a quaternion-shaped field. Keep the conversion boundary
+    shared and source-driven by normalizing those fields here.
     """
     text = ascii_path.read_text(encoding="ascii", errors="strict")
     secondary_textures: list[str] = []
+    source_lights: list[dict[str, str]] = []
     in_node = False
+    node_type = ""
+    node_name = ""
     has_mesh_bitmap = False
     secondary_texture = ""
+    light_fields: dict[str, str] = {}
     for source_line in text.splitlines():
         line = source_line.strip()
         keyword, _, value = line.partition(" ")
@@ -525,15 +530,35 @@ def read_mdl_ascii_preserving_lightmaps(ascii_path: Path) -> Any:
             if in_node:
                 raise RuntimeError(f"Nested MDLOps ASCII node in {ascii_path}")
             in_node = True
+            declaration = value.split(maxsplit=1)
+            if len(declaration) != 2:
+                raise RuntimeError(
+                    f"Invalid MDLOps ASCII node declaration in {ascii_path}: {line}")
+            node_type, node_name = declaration[0].casefold(), declaration[1]
             has_mesh_bitmap = False
             secondary_texture = ""
+            light_fields = {}
         elif in_node and keyword == "bitmap":
             has_mesh_bitmap = True
         elif in_node and keyword == "bitmap2":
             secondary_texture = value.strip()
+        elif in_node and node_type == "light" and keyword in {
+                "ndynamictype", "affectdynamic", "ambientonly", "shadow",
+                "lightpriority"}:
+            light_fields[keyword] = value.strip()
         elif keyword == "endnode" and in_node:
             if has_mesh_bitmap:
                 secondary_textures.append(secondary_texture)
+            if node_type == "light":
+                required = {
+                    "ndynamictype", "affectdynamic", "ambientonly", "shadow",
+                    "lightpriority"}
+                missing = sorted(required - light_fields.keys())
+                if missing:
+                    raise RuntimeError(
+                        f"Incomplete MDLOps ASCII light {node_name} in {ascii_path}: "
+                        f"missing={missing}")
+                source_lights.append({"name": node_name, **light_fields})
             in_node = False
     if in_node:
         raise RuntimeError(f"Unterminated MDLOps ASCII node in {ascii_path}")
@@ -549,6 +574,24 @@ def read_mdl_ascii_preserving_lightmaps(ascii_path: Path) -> Any:
             f"meshes={len(mesh_nodes)} declarations={len(secondary_textures)}")
     for node, texture in zip(mesh_nodes, secondary_textures, strict=True):
         node.mesh.texture_2 = texture
+    light_nodes = [
+        node for node in model.all_nodes()
+        if getattr(node, "light", None) is not None
+    ]
+    if len(light_nodes) != len(source_lights):
+        raise RuntimeError(
+            f"MDLOps ASCII light join drifted for {ascii_path}: "
+            f"lights={len(light_nodes)} declarations={len(source_lights)}")
+    for node, source in zip(light_nodes, source_lights, strict=True):
+        if str(node.name).casefold() != source["name"].casefold():
+            raise RuntimeError(
+                f"MDLOps ASCII light identity drifted for {ascii_path}: "
+                f"parsed={node.name} source={source['name']}")
+        node.light.dynamic_type = int(source["ndynamictype"])
+        node.light.affect_dynamic = bool(int(source["affectdynamic"]))
+        node.light.ambient_only = bool(int(source["ambientonly"]))
+        node.light.shadow = bool(int(source["shadow"]))
+        node.light.light_priority = int(source["lightpriority"])
     return model
 
 
