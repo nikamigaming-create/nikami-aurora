@@ -1717,10 +1717,10 @@ internal static partial class Program
     {
         var source = KotorEnvironmentMaterialPolicy.LightmapTransfer(enhanced: false);
         var enhanced = KotorEnvironmentMaterialPolicy.LightmapTransfer(enhanced: true);
-        Expect(source.Formula == "surface-times-max-clamped-lightmap-authored-ambient" &&
+        Expect(source.Formula == "surface-times-clamped-lightmap" &&
                source.DynamicLightAlbedoWeight == 0 &&
                source.BakedEmissionWeight == 1 &&
-               source.DynamicAmbientEmissionWeight == 1 &&
+               source.DynamicAmbientEmissionWeight == 0 &&
                !source.DynamicLightsEnabled,
             "KOTOR source lightmap transfer can double-light a baked surface");
 
@@ -1732,14 +1732,13 @@ internal static partial class Program
             surface, lightmap, new System.Numerics.Vector3(.7f, .7f, .7f));
         Expect(System.Numerics.Vector3.Distance(
                    sourceDark, new System.Numerics.Vector3(.8f, .2f, 0)) < .000001f &&
-               System.Numerics.Vector3.Distance(sourceBrightAmbient,
-                   new System.Numerics.Vector3(.8f, .28f, .84f)) < .000001f,
-            "KOTOR source transfer lost the authored ambient floor");
+               System.Numerics.Vector3.Distance(sourceBrightAmbient, sourceDark) < .000001f,
+            "KOTOR source transfer allowed area ambient to flatten a baked lightmap");
 
         Expect(enhanced.Formula == "baked-preserving-bounded-dynamic" &&
                enhanced.DynamicLightAlbedoWeight == .12f &&
                enhanced.BakedEmissionWeight == 1.0f &&
-               enhanced.DynamicAmbientEmissionWeight == 1.0f &&
+               enhanced.DynamicAmbientEmissionWeight == .15f &&
                enhanced.DynamicLightsEnabled,
             "KOTOR enhanced transfer no longer preserves its bounded dynamic response");
         var enhancedDark = enhanced.ComputeEmission(

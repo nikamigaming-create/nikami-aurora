@@ -544,8 +544,8 @@ try {
         }
         $requiredSourceTransfer =
             'NIKAMI_AURORA_LIGHTMAP_TRANSFER status=ready tier=source ' +
-            'formula=surface-times-max-clamped-lightmap-authored-ambient diffuse_weight=0.00 ' +
-            'baked_weight=1.00 dynamic_ambient_weight=1.00 dynamic_lights=0 ' +
+            'formula=surface-times-clamped-lightmap diffuse_weight=0.00 ' +
+            'baked_weight=1.00 dynamic_ambient_weight=0.00 dynamic_lights=0 ' +
             'double_light=0'
         if ($sourceEvidence.IndexOf(
                 $requiredSourceTransfer, [StringComparison]::Ordinal) -lt 0) {

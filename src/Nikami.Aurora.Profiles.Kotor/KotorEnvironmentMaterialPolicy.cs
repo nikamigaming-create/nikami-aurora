@@ -63,17 +63,16 @@ public static class KotorEnvironmentMaterialPolicy
 
     public const float SourceDynamicLightAlbedoWeight = 0.0f;
     public const float SourceBakedEmissionWeight = 1.0f;
-    // Odyssey applies the module's authored dynamic ambient as the floor under
-    // baked room lighting. This is especially visible aboard KOTOR II's damaged
-    // Ebon Hawk: the lightmap preserves red/blue fixtures while dynamic ambient
-    // keeps unlit hull panels from collapsing to black.
-    public const float SourceDynamicAmbientEmissionWeight = 1.0f;
+    // Lightmapped room surfaces already contain their complete authored light
+    // response. Area dynamic ambient belongs to unlightmapped/dynamic geometry;
+    // flooring every baked RGB channel here destroys colored K1/K2 lightmaps.
+    public const float SourceDynamicAmbientEmissionWeight = 0.0f;
     // Retain the authored baked contrast as the dominant signal. Dynamic
     // response is deliberately restrained: higher fill flattened the Taris
     // sign/window highlights and turned the source walls/floor uniform grey.
     public const float EnhancedDynamicLightAlbedoWeight = 0.12f;
     public const float EnhancedBakedEmissionWeight = 1.0f;
-    public const float EnhancedDynamicAmbientEmissionWeight = 1.0f;
+    public const float EnhancedDynamicAmbientEmissionWeight = 0.15f;
     public const float SourceDielectricSpecular = 0.0f;
     public const float EnhancedDielectricSpecular = 0.5f;
     public const float SourceFallbackRoughness = 1.0f;
@@ -82,7 +81,7 @@ public static class KotorEnvironmentMaterialPolicy
         SourceAuthorizedRenderFeature.Reflections;
 
     private static readonly KotorLightmapTransfer SourceLightmapTransfer = new(
-        "surface-times-max-clamped-lightmap-authored-ambient",
+        "surface-times-clamped-lightmap",
         SourceDynamicLightAlbedoWeight,
         SourceBakedEmissionWeight,
         SourceDynamicAmbientEmissionWeight);
