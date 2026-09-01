@@ -15,6 +15,9 @@ from pykotor.resource.formats.mdl.mdl_types import MDLControllerType
 
 
 KOTOR_TO_GODOT = trimesh.transformations.rotation_matrix(-math.pi / 2.0, [1.0, 0.0, 0.0])
+HOOK_BOUND_HEAD_PLACEMENT_NODES = frozenset({
+    "necklwr_g", "neck_g", "hturn_g", "head_g",
+})
 
 
 def _quaternion_matrix_xyzw(value: Any) -> np.ndarray:
@@ -369,9 +372,20 @@ def patch_actor_glb(
         samplers: list[dict[str, Any]] = []
         channels: list[dict[str, Any]] = []
         for animation_node in animation.all_nodes():
-            scene_name = builder.nodes_by_name.get(str(animation_node.name).lower())
+            animation_node_name = str(animation_node.name).lower()
+            scene_name = builder.nodes_by_name.get(animation_node_name)
             node_index = node_lookup.get(scene_name or "")
             if node_index is None:
+                continue
+            # Odyssey CUT clips animate a complete supermodel skeleton. Unique
+            # heads are instead hook-bound models with their own neck/head bind
+            # hierarchy. Replaying the supermodel's gross head placement inside
+            # that already-moving hook creates a visible detached head during
+            # full-body cinematic motion. The body headhook owns placement;
+            # face-specific descendants remain eligible for CUT channels.
+            if (requested.casefold().startswith("cut") and
+                    (scene_name or "").startswith("head::") and
+                    animation_node_name in HOOK_BOUND_HEAD_PLACEMENT_NODES):
                 continue
             for controller in animation_node.controllers:
                 if not controller.rows:

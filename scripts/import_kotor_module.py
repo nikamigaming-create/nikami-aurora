@@ -47,7 +47,7 @@ try:
     from pykotor.resource.type import ResourceType
     from pykotor.tools import creature as creature_tools
     from pykotor.tools import door as door_tools
-    from utility.common.geometry import SurfaceMaterial
+    from utility.common.geometry import SurfaceMaterial, Vector4
 except ImportError as exc:
     raise SystemExit(
         "Missing importer dependency. Install requirements-import.txt with Python 3.12."
@@ -474,13 +474,43 @@ def read_owned_mdl(mdl_bytes: bytes, mdx_bytes: bytes) -> Any:
     return reader.load()
 
 
+def mdlops_axis_angle_to_quaternion(orientation: Any) -> Any:
+    """Convert an MDLOps static-node orientation to PyKotor's XYZW quaternion.
+
+    MDLOps writes static ``orientation`` values as axis-angle even though
+    PyKotor's ASCII reader currently stores those four fields directly in the
+    quaternion-shaped ``MDLNode.orientation`` member.  Animation controller
+    rows are already converted by PyKotor and do not pass through this helper.
+    """
+    axis = np.asarray([
+        float(orientation.x),
+        float(orientation.y),
+        float(orientation.z),
+    ], dtype=np.float64)
+    angle = float(orientation.w)
+    magnitude = float(np.linalg.norm(axis))
+    if not math.isfinite(angle) or not math.isfinite(magnitude):
+        raise RuntimeError("MDLOps node orientation is not finite")
+    if magnitude <= 1e-12 or abs(angle) <= 1e-12:
+        values = [0.0, 0.0, 0.0, 1.0]
+    else:
+        scale = math.sin(angle * 0.5) / magnitude
+        values = [
+            float(axis[0] * scale),
+            float(axis[1] * scale),
+            float(axis[2] * scale),
+            math.cos(angle * 0.5),
+        ]
+    return Vector4(*values)
+
+
 def read_mdl_ascii_preserving_lightmaps(ascii_path: Path) -> Any:
-    """Restore MDLOps ``bitmap2`` data omitted by PyKotor's ASCII reader.
+    """Restore MDLOps fields omitted or misread by PyKotor's ASCII reader.
 
     PyKotor reads KOTOR II geometry and both UV sets from MDLOps ASCII, but its
-    ASCII grammar currently ignores the secondary texture declaration.  Keep
-    the conversion boundary shared and source-driven by joining each parsed
-    mesh to its declaration in the same ASCII node order.
+    ASCII grammar currently ignores the secondary texture declaration and
+    leaves static axis-angle orientations in a quaternion-shaped field.  Keep
+    the conversion boundary shared and source-driven by normalizing both here.
     """
     text = ascii_path.read_text(encoding="ascii", errors="strict")
     secondary_textures: list[str] = []
@@ -509,6 +539,9 @@ def read_mdl_ascii_preserving_lightmaps(ascii_path: Path) -> Any:
         raise RuntimeError(f"Unterminated MDLOps ASCII node in {ascii_path}")
 
     model = read_mdl(ascii_path)
+    for node in model.all_nodes():
+        if hasattr(node, "orientation"):
+            node.orientation = mdlops_axis_angle_to_quaternion(node.orientation)
     mesh_nodes = [node for node in model.all_nodes() if node.mesh is not None]
     if len(mesh_nodes) != len(secondary_textures):
         raise RuntimeError(
@@ -4324,12 +4357,27 @@ def export_generic_player_actor(
     head = repair_owned_skin_model_via_mdlops(
         head, head_mdl, head_mdx, head_name, mdlops, model_cache)
     animation_models = []
+    animation_source_names = []
     animation_source_hashes = []
-    for animation_supermodel in ("S_Male01", "S_Male02"):
+    animation_supermodel = str(getattr(body, "supermodel", "") or "").strip()
+    visited_supermodels = {body_name.casefold()}
+    while animation_supermodel and animation_supermodel.casefold() not in {"null", "****"}:
+        key = animation_supermodel.casefold()
+        if key in visited_supermodels:
+            raise RuntimeError(
+                f"Player supermodel cycle for {body_name}: {animation_supermodel}")
+        if len(visited_supermodels) >= 16:
+            raise RuntimeError(f"Player supermodel depth exceeded for {body_name}")
+        visited_supermodels.add(key)
         model, source_hash = load_animation_supermodel(
             installation, mdlops, animation_cache, animation_supermodel)
         animation_models.append(model)
+        animation_source_names.append(animation_supermodel)
         animation_source_hashes.append(source_hash)
+        animation_supermodel = str(
+            getattr(model, "supermodel", "") or "").strip()
+    if not animation_models:
+        raise RuntimeError(f"Player animation supermodel is missing for {body_name}")
     animations_by_name = {}
     for model in animation_models:
         for animation in model.anims:
@@ -4386,7 +4434,7 @@ def export_generic_player_actor(
             if camera_hook is not None else None
         ),
         "rigKind": "humanoid",
-        "animationSource": "S_Male01+S_Male02",
+        "animationSource": "+".join(animation_source_names),
         "animationSourceSha256": sha256_bytes(
             "".join(animation_source_hashes).encode("ascii")),
         "animation": animation_report,
@@ -4442,6 +4490,24 @@ def export_dialogue(
 
     def animation_record(animation: Any) -> dict[str, Any]:
         animation_id = int(animation.animation_id)
+        if bool(dialogue.animated_cut) and 1000 <= animation_id < 1400:
+            return {
+                "animationId": animation_id,
+                "animationName": f"cut{animation_id - 999:03d}",
+                "looping": True,
+                "fireForget": False,
+                "overlay": False,
+                "participant": str(animation.participant),
+            }
+        if bool(dialogue.animated_cut) and 1400 <= animation_id < 1500:
+            return {
+                "animationId": animation_id,
+                "animationName": f"cut{animation_id - 1399:03d}L",
+                "looping": True,
+                "fireForget": False,
+                "overlay": False,
+                "participant": str(animation.participant),
+            }
         animation_row = animation_id % 1000
         if animation_row < 0 or animation_row >= animations.get_height():
             raise RuntimeError(
@@ -4451,6 +4517,7 @@ def export_dialogue(
             "animationName": str(animations.get_cell(animation_row, "name")),
             "looping": bool(int(animations.get_cell(animation_row, "looping"))),
             "fireForget": bool(int(animations.get_cell(animation_row, "fireforget"))),
+            "overlay": bool(int(animations.get_cell(animation_row, "overlay"))),
             "participant": str(animation.participant),
         }
 
@@ -4736,6 +4803,7 @@ def export_dialogue(
         "schema": "nikami-aurora-kotor-dialogue-v1",
         "resref": dialogue_name,
         "sourceSha256": sha256_bytes(data),
+        "animatedCut": bool(dialogue.animated_cut),
         "openingStarter": 0 if starters else -1,
         "starters": starters,
         "nodes": nodes,
