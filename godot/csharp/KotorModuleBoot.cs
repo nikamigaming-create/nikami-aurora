@@ -461,6 +461,7 @@ public sealed partial class KotorModuleBoot : Node3D
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, RoomRecord> roomRecords =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<CycleTextureBinding> cycleTextures = [];
     private readonly Dictionary<string, Tween> roomAlphaTweens =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CreatureRecord> actorRecords =
@@ -623,6 +624,7 @@ public sealed partial class KotorModuleBoot : Node3D
 
     public override void _Process(double delta)
     {
+        AdvanceCycleTextures(delta);
         var basis = new Basis(Vector3.Up, yaw);
         var rightIntent = 0.0f;
         var forwardIntent = 0.0f;

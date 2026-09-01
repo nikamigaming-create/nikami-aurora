@@ -1640,6 +1640,11 @@ internal static partial class Program
                !KotorEnvironmentMaterialPolicy.IsSourceDecal("floor_mark") &&
                KotorEnvironmentMaterialPolicy.SourceDecalRenderPriority == 1,
             "TXI decal marker did not preserve no-depth-write render ordering");
+        var cycle = KotorEnvironmentMaterialPolicy.CycleTexture(
+            "EBO_AScrn__aurora_additive__aurora_decal__aurora_cycle_4_4_35");
+        Expect(cycle == new KotorCycleTexture(4, 4, 35) &&
+               KotorEnvironmentMaterialPolicy.CycleTexture("plain") is null,
+            "TXI cycle marker did not preserve atlas dimensions and timing");
         ExpectThrows<InvalidDataException>(
             () => KotorEnvironmentMaterialPolicy.AuthoredNormalScale(
                 "wall__aurora_normal_scale_nan"),

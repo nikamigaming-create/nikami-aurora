@@ -540,6 +540,30 @@ endnode
             importer.material_name("LHR_dust01", True, "CM_Endar"),
         )
 
+    def test_txi_cycle_exports_exact_atlas_timing_marker(self) -> None:
+        cache = importer.TextureCache.__new__(importer.TextureCache)
+        cache.images = {"ebo_ascrn": object()}
+        cache.alpha_tests = {"ebo_ascrn": 1.0}
+        cache.txi = {
+            "ebo_ascrn": (
+                "proceduretype cycle\nnumx 4\nnumy 4\nfps 35\n"
+                "blending additive\ndecal 1\n")
+        }
+        cache.raw_txi = {}
+        cache.missing = set()
+        cache.environment_maps = set()
+
+        self.assertEqual((4, 4, 35.0), cache.source_cycle("EBO_AScrn"))
+        self.assertEqual(
+            "EBO_AScrn__aurora_additive__aurora_decal__aurora_cycle_4_4_35",
+            importer.material_name(
+                "EBO_AScrn", True, None, None, True, False, (4, 4, 35.0)),
+        )
+        self.assertEqual(
+            "rendered", importer.txi_directive_class("proceduretype", ["cycle"]))
+        self.assertEqual(
+            "unsupported", importer.txi_directive_class("proceduretype", ["water"]))
+
     def test_txi_bump_map_and_bumpy_shiny_environment_map_remain_distinct(self) -> None:
         cache = importer.TextureCache.__new__(importer.TextureCache)
         cache.images = {"lts_pwall01i": object(), "lts_bwall04b": object()}

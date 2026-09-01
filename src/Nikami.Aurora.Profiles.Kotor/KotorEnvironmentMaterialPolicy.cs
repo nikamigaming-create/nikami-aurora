@@ -44,6 +44,7 @@ public static class KotorEnvironmentMaterialPolicy
     public const string NormalScaleMarker = "__aurora_normal_scale_";
     public const string AdditiveMarker = "__aurora_additive";
     public const string DecalMarker = "__aurora_decal";
+    public const string CycleMarker = "__aurora_cycle_";
     // Odyssey decals retain depth testing but never publish depth. Priority 1
     // draws them after ordinary priority-0 transparent room surfaces without
     // disabling occlusion by nearer geometry.
@@ -164,4 +165,33 @@ public static class KotorEnvironmentMaterialPolicy
                 $"Normal-scale material marker is invalid: {materialName}");
         return scale;
     }
+
+    public static KotorCycleTexture? CycleTexture(string materialName)
+    {
+        ArgumentNullException.ThrowIfNull(materialName);
+        var marker = materialName.IndexOf(
+            CycleMarker, StringComparison.OrdinalIgnoreCase);
+        if (marker < 0)
+            return null;
+        var start = marker + CycleMarker.Length;
+        var end = materialName.IndexOf("__aurora_", start,
+            StringComparison.OrdinalIgnoreCase);
+        var encoded = end < 0 ? materialName[start..] : materialName[start..end];
+        var parts = encoded.Split('_');
+        if (parts.Length != 3 ||
+            !int.TryParse(parts[0], out var columns) ||
+            !int.TryParse(parts[1], out var rows) ||
+            !float.TryParse(
+                parts[2],
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var fps) ||
+            columns <= 0 || rows <= 0 || columns * rows > 256 ||
+            !float.IsFinite(fps) || fps <= 0)
+            throw new InvalidDataException(
+                $"Cycle-texture material marker is invalid: {materialName}");
+        return new KotorCycleTexture(columns, rows, fps);
+    }
 }
+
+public readonly record struct KotorCycleTexture(int Columns, int Rows, float FramesPerSecond);
