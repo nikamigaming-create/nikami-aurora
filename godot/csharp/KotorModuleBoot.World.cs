@@ -78,7 +78,7 @@ public sealed partial class KotorModuleBoot
         {
             var animation = playerAnimationPlayer.GetAnimation(animationName);
             if (animation is not null)
-                animation.LoopMode = Animation.LoopModeEnum.Linear;
+                animation.LoopMode = Animation.LoopModeEnum.None;
         }
         var walkName = FindAnimationName(playerAnimationPlayer, "walk");
         var runName = FindAnimationName(playerAnimationPlayer, "run");
@@ -124,17 +124,28 @@ public sealed partial class KotorModuleBoot
         return match;
     }
 
-    private void PlayPlayerAnimation(string requested, bool immediate = false)
+    private void PlayPlayerAnimation(
+        string requested,
+        bool immediate = false,
+        bool loop = true,
+        bool restart = false)
     {
         if (playerAnimationPlayer is null ||
-            currentPlayerAnimation.Equals(requested, StringComparison.OrdinalIgnoreCase))
+            !restart && currentPlayerAnimation.Equals(
+                requested, StringComparison.OrdinalIgnoreCase))
             return;
         var match = FindAnimationName(playerAnimationPlayer, requested);
+        var animation = playerAnimationPlayer.GetAnimation(match)
+            ?? throw new InvalidDataException($"Animation is missing: {requested}");
+        animation.LoopMode = loop
+            ? Animation.LoopModeEnum.Linear
+            : Animation.LoopModeEnum.None;
         playerAnimationPlayer.Play(match, customBlend: immediate ? 0.0 : 0.12);
         if (immediate)
             playerAnimationPlayer.Advance(0.0);
         currentPlayerAnimation = requested;
-        GD.Print($"NIKAMI_AURORA_PLAYER_ANIMATION status=playing animation={match}");
+        GD.Print($"NIKAMI_AURORA_PLAYER_ANIMATION status=playing animation={match} " +
+                 $"loop={(loop ? 1 : 0)} restart={(restart ? 1 : 0)}");
     }
 
     private int LoadActorModels(IEnumerable<CreatureRecord> creatures, string manifestDirectory)
@@ -816,7 +827,7 @@ public sealed partial class KotorModuleBoot
         {
             var clip = animationPlayer.GetAnimation(animationName);
             if (clip is not null)
-                clip.LoopMode = Animation.LoopModeEnum.Linear;
+                clip.LoopMode = Animation.LoopModeEnum.None;
         }
         foreach (var expected in animationContract.Animations)
             _ = FindAnimationName(animationPlayer, expected);
