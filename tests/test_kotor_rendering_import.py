@@ -3,6 +3,7 @@ import json
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,72 @@ except (ImportError, SystemExit) as exc:
 
 
 class KotorRenderingImportTests(unittest.TestCase):
+    def test_shared_odyssey_combat_export_uses_source_class_and_weapon_rules(
+        self,
+    ) -> None:
+        tables = {
+            "classes": ({(7, "attackbonustable"): "cls_atk_1"}, b"classes"),
+            "cls_atk_1": ({(2, "bab"): "3"}, b"attack"),
+            "iprp_neg5cost": ({(1, "value"): "-2"}, b"negative"),
+            "iprp_damagecost": ({
+                (2, "numdice"): "1", (2, "rank"): "0", (2, "die"): "6",
+            }, b"damage"),
+        }
+
+        class Table:
+            def __init__(self, cells):
+                self.cells = cells
+
+            def get_cell(self, row, column):
+                return self.cells.get((row, column), "****")
+
+        baseitems = Table({
+            (12, "numdice"): "1", (12, "dietoroll"): "8",
+            (12, "critthreat"): "1", (12, "crithitmult"): "2",
+            (12, "rangedweapon"): "1", (12, "damageflags"): "4096",
+            (12, "weaponwield"): "4",
+        })
+        slot = type("Slot", (), {"value": 0x00010})()
+        utc = SimpleNamespace(
+            equipment={slot: SimpleNamespace(resref="laser")},
+            classes=[SimpleNamespace(class_id=7, class_level=3)],
+            challenge_rating=2.0,
+            strength=10,
+            dexterity=15,
+            natural_ac=0,
+        )
+        uti = SimpleNamespace(
+            base_item=12,
+            properties=[
+                SimpleNamespace(property_name=8, cost_value=1, subtype=0),
+                SimpleNamespace(property_name=11, cost_value=2, subtype=16),
+            ],
+        )
+
+        def source_table(_installation, name, _order):
+            cells, payload = tables[name]
+            return Table(cells), payload
+
+        with (
+            patch.object(importer, "source_table", side_effect=source_table),
+            patch.object(importer, "find_item_resource",
+                         return_value=SimpleNamespace(data=b"uti")),
+            patch.object(importer, "resource_data", return_value=b"uti"),
+            patch.object(importer, "read_uti", return_value=uti),
+        ):
+            result = importer.export_utc_combat(
+                SimpleNamespace(), "001ebo", utc, baseitems, b"baseitems", [])
+
+        self.assertEqual(12, result["defense"])
+        self.assertEqual(5, result["attackBonus"])
+        self.assertEqual(3, result["classLevels"][0]["baseAttackBonus"])
+        self.assertEqual(4, result["weapon"]["weaponWield"])
+        self.assertEqual(-2, result["weapon"]["attackModifier"])
+        self.assertEqual(
+            {"damageType": 16, "flat": 0, "diceCount": 1, "dieSides": 6},
+            result["weapon"]["bonusDamage"][0],
+        )
+
     def test_actor_effect_inventory_preserves_light_color_keys(
         self,
     ) -> None:

@@ -2911,6 +2911,132 @@ def add_actor_model(
     }
 
 
+def source_table(
+    installation: Installation,
+    name: str,
+    order: list[SearchLocation],
+) -> tuple[Any, bytes]:
+    resource = installation.resource(name, ResourceType.TwoDA, order)
+    if resource is None:
+        raise RuntimeError(f"{name}.2da could not be resolved")
+    payload = resource_data(resource)
+    return read_2da(payload), payload
+
+
+def source_int(table: Any, row: int, column: str, default: int = 0) -> int:
+    value = str(table.get_cell(row, column)).strip()
+    return default if value in {"", "****"} else int(value, 0)
+
+
+def find_item_resource(
+    installation: Installation,
+    module: str | None,
+    resref: str,
+) -> Any:
+    if module:
+        try:
+            return find_named_module_resource(installation, module, resref, "UTI")
+        except RuntimeError:
+            pass
+    return installation.resource(resref, ResourceType.UTI)
+
+
+def export_utc_combat(
+    installation: Installation,
+    module: str | None,
+    utc: Any,
+    baseitems: Any,
+    baseitems_bytes: bytes,
+    order: list[SearchLocation],
+) -> dict[str, Any]:
+    right_item = next(
+        (item for slot, item in utc.equipment.items() if int(slot.value) == 0x00010),
+        None)
+    weapon = None
+    if right_item is not None:
+        weapon_resref = canonical_resref(right_item.resref)
+        weapon_resource = find_item_resource(installation, module, weapon_resref)
+        if weapon_resource is None:
+            raise RuntimeError(f"Combat weapon could not be resolved: {weapon_resref}")
+        weapon_bytes = resource_data(weapon_resource)
+        weapon_uti = read_uti(weapon_bytes)
+        base_row = int(weapon_uti.base_item)
+        attack_modifier = 0
+        bonus_damage = []
+        suppress_base_damage = False
+        negative_modifiers, _ = source_table(installation, "iprp_neg5cost", order)
+        damage_cost, _ = source_table(installation, "iprp_damagecost", order)
+        for item_property in weapon_uti.properties:
+            if item_property.property_name == 8:
+                attack_modifier += source_int(
+                    negative_modifiers, int(item_property.cost_value), "value")
+            elif item_property.property_name == 11:
+                damage_row = int(item_property.cost_value)
+                dice_count = source_int(damage_cost, damage_row, "numdice")
+                bonus_damage.append({
+                    "damageType": int(item_property.subtype),
+                    "flat": source_int(damage_cost, damage_row, "rank")
+                    if dice_count == 0 else 0,
+                    "diceCount": dice_count,
+                    "dieSides": source_int(damage_cost, damage_row, "die"),
+                })
+            elif item_property.property_name == 31:
+                suppress_base_damage = True
+        weapon = {
+            "resref": weapon_resref,
+            "utiSha256": sha256_bytes(weapon_bytes),
+            "baseItem": base_row,
+            "baseItemsSha256": sha256_bytes(baseitems_bytes),
+            "baseDiceCount": 0 if suppress_base_damage else source_int(
+                baseitems, base_row, "numdice"),
+            "baseDieSides": 0 if suppress_base_damage else source_int(
+                baseitems, base_row, "dietoroll"),
+            "attackModifier": attack_modifier,
+            "criticalThreat": source_int(baseitems, base_row, "critthreat"),
+            "criticalMultiplier": source_int(baseitems, base_row, "crithitmult"),
+            "ranged": bool(source_int(baseitems, base_row, "rangedweapon")),
+            "damageFlags": source_int(baseitems, base_row, "damageflags"),
+            "weaponWield": source_int(baseitems, base_row, "weaponwield"),
+            "bonusDamage": bonus_damage,
+        }
+
+    classes, classes_bytes = source_table(installation, "classes", order)
+    class_levels = []
+    base_attack_bonus = 0
+    attack_hashes = []
+    for class_entry in utc.classes:
+        class_id = int(class_entry.class_id)
+        attack_table_name = str(classes.get_cell(class_id, "attackbonustable"))
+        attack_table, attack_bytes = source_table(
+            installation, attack_table_name, order)
+        level = int(class_entry.class_level)
+        class_bonus = source_int(attack_table, level - 1, "bab")
+        base_attack_bonus += class_bonus
+        attack_hash = sha256_bytes(attack_bytes)
+        attack_hashes.append(attack_hash)
+        class_levels.append({
+            "classId": class_id,
+            "level": level,
+            "baseAttackBonus": class_bonus,
+            "attackTableSha256": attack_hash,
+        })
+    dexterity_modifier = (int(utc.dexterity) - 10) // 2
+    strength_modifier = (int(utc.strength) - 10) // 2
+    return {
+        "challengeRating": float(utc.challenge_rating),
+        "strength": int(utc.strength),
+        "dexterity": int(utc.dexterity),
+        "naturalArmorClass": int(utc.natural_ac),
+        "defense": 10 + dexterity_modifier + int(utc.natural_ac),
+        "baseAttackBonus": base_attack_bonus,
+        "attackBonus": base_attack_bonus +
+        (dexterity_modifier if weapon and weapon["ranged"] else strength_modifier),
+        "classesSha256": sha256_bytes(classes_bytes),
+        "classLevels": class_levels,
+        "weapon": weapon,
+    }
+
+
 def export_humanoid_actor(
     installation: Installation,
     utc_resref: str,
@@ -3003,93 +3129,13 @@ def export_humanoid_actor(
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
     )
 
-    right_item = next(
-        (item for slot, item in utc.equipment.items() if int(slot.value) == 0x00010),
-        None)
-    weapon = None
-    if right_item is not None:
-        weapon_resref = canonical_resref(right_item.resref)
-        weapon_resource = None
-        if module:
-            try:
-                weapon_resource = find_named_module_resource(
-                    installation, module, weapon_resref, "UTI")
-            except RuntimeError:
-                weapon_resource = None
-        if weapon_resource is None:
-            weapon_resource = installation.resource(weapon_resref, ResourceType.UTI)
-        if weapon_resource is None:
-            raise RuntimeError(f"Combat weapon could not be resolved: {weapon_resref}")
-        weapon_bytes = resource_data(weapon_resource)
-        weapon_uti = read_uti(weapon_bytes)
-        base_row = int(weapon_uti.base_item)
-        base_dice_count = int(baseitems.get_cell(base_row, "numdice") or 0)
-        base_die_sides = int(baseitems.get_cell(base_row, "dietoroll") or 0)
-        attack_modifier = 0
-        bonus_damage = []
-        suppress_base_damage = False
-        negative_modifiers = table("iprp_neg5cost")
-        damage_cost = table("iprp_damagecost")
-        for item_property in weapon_uti.properties:
-            if item_property.property_name == 8:
-                attack_modifier += int(negative_modifiers.get_cell(
-                    int(item_property.cost_value), "value"))
-            elif item_property.property_name == 11:
-                damage_row = int(item_property.cost_value)
-                bonus_damage.append({
-                    "damageType": int(item_property.subtype),
-                    "flat": int(damage_cost.get_cell(damage_row, "rank") or 0)
-                    if not damage_cost.get_cell(damage_row, "numdice") else 0,
-                    "diceCount": int(damage_cost.get_cell(damage_row, "numdice") or 0),
-                    "dieSides": int(damage_cost.get_cell(damage_row, "die") or 0),
-                })
-            elif item_property.property_name == 31:
-                suppress_base_damage = True
-        weapon = {
-            "resref": weapon_resref,
-            "utiSha256": sha256_bytes(weapon_bytes),
-            "baseItem": base_row,
-            "baseItemsSha256": sha256_bytes(resource_data(
-                installation.resource("baseitems", ResourceType.TwoDA, order))),
-            "baseDiceCount": 0 if suppress_base_damage else base_dice_count,
-            "baseDieSides": 0 if suppress_base_damage else base_die_sides,
-            "attackModifier": attack_modifier,
-            "criticalThreat": int(baseitems.get_cell(base_row, "critthreat")),
-            "criticalMultiplier": int(baseitems.get_cell(base_row, "crithitmult")),
-            "ranged": bool(baseitems.get_cell(base_row, "rangedweapon")),
-            "damageFlags": int(baseitems.get_cell(base_row, "damageflags")),
-            "bonusDamage": bonus_damage,
-        }
-
-    classes = table("classes")
-    class_levels = []
-    base_attack_bonus = 0
-    for class_entry in utc.classes:
-        attack_table_name = str(classes.get_cell(
-            int(class_entry.class_id), "attackbonustable"))
-        attack_table = table(attack_table_name)
-        level = int(class_entry.class_level)
-        class_bonus = int(attack_table.get_cell(level - 1, "bab"))
-        base_attack_bonus += class_bonus
-        class_levels.append({
-            "classId": int(class_entry.class_id),
-            "level": level,
-            "baseAttackBonus": class_bonus,
-        })
-    dexterity_modifier = (int(utc.dexterity) - 10) // 2
-    strength_modifier = (int(utc.strength) - 10) // 2
-    combat = {
-        "challengeRating": float(utc.challenge_rating),
-        "strength": int(utc.strength),
-        "dexterity": int(utc.dexterity),
-        "naturalArmorClass": int(utc.natural_ac),
-        "defense": 10 + dexterity_modifier + int(utc.natural_ac),
-        "baseAttackBonus": base_attack_bonus,
-        "attackBonus": base_attack_bonus +
-        (dexterity_modifier if weapon and weapon["ranged"] else strength_modifier),
-        "classLevels": class_levels,
-        "weapon": weapon,
-    }
+    baseitems_resource = installation.resource(
+        "baseitems", ResourceType.TwoDA, order)
+    if baseitems_resource is None:
+        raise RuntimeError("baseitems.2da could not be resolved")
+    combat = export_utc_combat(
+        installation, module, utc, baseitems,
+        resource_data(baseitems_resource), order)
     return {
         "glb": f"actors/{output_path.name}",
         "tag": str(utc.tag),
@@ -3320,6 +3366,8 @@ def export_source_creature_actor(
         [float(item) for item in camera_hook[:3, 3]]
         if camera_hook is not None else None
     )
+    combat = export_utc_combat(
+        installation, module, utc, baseitems, baseitems_bytes, order)
 
     return {
         "renderImportSchema": "nikami-aurora-kotor-source-creature-v1",
@@ -3327,6 +3375,13 @@ def export_source_creature_actor(
         "glb": f"actors/{output_path.name}",
         "sourceTemplate": normalize_module_id(utc_resref),
         "utcSha256": sha256_bytes(utc_bytes),
+        "factionId": int(utc.faction_id),
+        "hitPoints": int(utc.hp),
+        "currentHitPoints": int(utc.current_hp),
+        "maxHitPoints": int(utc.max_hp),
+        "minimumOneHitPoint": bool(utc.min1_hp),
+        "noPermanentDeath": bool(utc.no_perm_death),
+        "combat": combat,
         "appearanceId": int(utc.appearance_id),
         "portraitId": int(utc.portrait_id),
         "portraitResref": str(portraits.get_cell(int(utc.portrait_id), "baseresref")),
@@ -3397,6 +3452,9 @@ def export_profile_player_actor(
         "utcSha256": source["utcSha256"],
         "models": source["models"],
         "effects": source["effects"],
+        "currentHitPoints": source["currentHitPoints"],
+        "maxHitPoints": source["maxHitPoints"],
+        "combat": source["combat"],
     }
 
 
@@ -5252,6 +5310,11 @@ def _import_generic_module(
             additional_animation_names=opening_animation_names,
         )
     )
+    if "combat" in player_actor:
+        player_party = runtime_configuration["gameplay"]["playerPartyMember"]
+        player_party["currentVitality"] = int(player_actor["currentHitPoints"])
+        player_party["maximumVitality"] = int(player_actor["maxHitPoints"])
+        player_party["defense"] = int(player_actor["combat"]["defense"])
     sound_objects = export_referenced_sound_objects(
         installation, git.sounds, referenced_sound_tags, output_root)
     ui_contract = export_kotor_ui(
