@@ -15,9 +15,10 @@ public sealed class KotorCombatExperienceTable
         if (sourceSha256?.Length != 64 || !sourceSha256.All(Uri.IsHexDigit))
             throw new ArgumentException("Combat XP table requires a source hash", nameof(sourceSha256));
         if (sourceRows is null || sourceRows.Count == 0 ||
-            sourceRows.Any(row => row.PlayerLevel < 1 || row.Rewards.Count != 21 ||
+            sourceRows.Any(row => row.PlayerLevel < 1 || row.Rewards.Count == 0 ||
                                   row.Rewards.Any(reward => reward < 0)) ||
-            sourceRows.Select(row => row.PlayerLevel).Distinct().Count() != sourceRows.Count)
+            sourceRows.Select(row => row.PlayerLevel).Distinct().Count() != sourceRows.Count ||
+            sourceRows.Select(row => row.Rewards.Count).Distinct().Count() != 1)
             throw new ArgumentException("Combat XP table rows are invalid", nameof(sourceRows));
         SourceSha256 = sourceSha256.ToUpperInvariant();
         rows = sourceRows.ToDictionary(row => row.PlayerLevel, row => row.Rewards);
@@ -30,7 +31,7 @@ public sealed class KotorCombatExperienceTable
         if (!rows.TryGetValue(playerLevel, out var rewards))
             throw new ArgumentOutOfRangeException(nameof(playerLevel));
         var challenge = checked((int)challengeRating);
-        if (challengeRating != challenge || challenge is < 0 or > 20)
+        if (challengeRating != challenge || challenge < 0 || challenge >= rewards.Count)
             throw new NotSupportedException(
                 $"Fractional or out-of-range challenge rating is not supported: {challengeRating}");
         return rewards[challenge];

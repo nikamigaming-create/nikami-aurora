@@ -785,6 +785,8 @@ public sealed partial class KotorModuleBoot
                  (!isAlpha && !isAdditive) ||
                  (!isNormalRender && !isMotionBlur && !isOrientedRender) ||
                  (source.Flags & UnsupportedRoomEmitterFlags) != 0 ||
+                 ((source.Flags & EmitterAffectedWindFlag) != 0 &&
+                  source.WindPower != 0) ||
                  (isCollisionBounce &&
                   (!float.IsFinite(source.BounceCoefficient) ||
                    source.BounceCoefficient < 0 || source.BounceCoefficient > 1)) ||

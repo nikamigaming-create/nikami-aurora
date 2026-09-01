@@ -104,10 +104,18 @@ def export_combat_experience_table(installation: Installation) -> dict[str, Any]
         raise RuntimeError("xptable.2da could not be resolved")
     data = resource_data(resource)
     table = read_2da(data)
-    challenge_columns = [f"c{value}" for value in range(21)]
-    if (table.get_headers() != ["level", *challenge_columns] or
-            table.get_height() <= 0):
+    headers = table.get_headers()
+    if not headers or headers[0].lower() != "level" or table.get_height() <= 0:
         raise RuntimeError("xptable.2da layout is unsupported")
+    challenge_columns = headers[1:]
+    challenge_ids = []
+    for column in challenge_columns:
+        identity = column[1:] if column.lower().startswith("c") else column
+        if not identity.isdecimal():
+            raise RuntimeError("xptable.2da layout is unsupported")
+        challenge_ids.append(int(identity))
+    if challenge_ids != list(range(len(challenge_columns))):
+        raise RuntimeError("xptable.2da challenge columns are inconsistent")
     rows = []
     for row in range(table.get_height()):
         level = int(table.get_cell(row, "level"))
@@ -2214,13 +2222,13 @@ SUPPORTED_ROOM_EMITTER_RENDERS = frozenset({
 SUPPORTED_ROOM_EMITTER_BLENDS = frozenset({"normal", "lighten"})
 ROOM_EMITTER_POINT_TO_POINT_FLAG = 0x0001
 ROOM_EMITTER_POINT_TO_POINT_BEZIER_FLAG = 0x0002
+ROOM_EMITTER_AFFECTED_WIND_FLAG = 0x0004
 ROOM_EMITTER_COLLISION_BOUNCE_FLAG = 0x0010
 # These flags change particle motion or require a render target/collision join
 # that this source-room path does not own. Straight point-to-point acceleration
 # is handled separately through a static authored child target. P2P_SEL without
 # P2P is only a mode selector; TINTED and RANDOM are rendered below.
 UNSUPPORTED_ROOM_EMITTER_FLAGS = (
-    0x0004 |  # linked particle/render behavior
     0x0080 |  # parent velocity inheritance
     0x0200 |  # collision splat
     0x0400 |  # particle inheritance
@@ -2245,12 +2253,12 @@ def room_emitter_visual_safety_reasons(emitter: dict[str, Any]) -> tuple[str, ..
         str(emitter.get("update", "")).lower() == "single" and
         float(emitter.get("lifeExpectancy", 0.0)) == -1.0)
     minimum_frame = 1.0 if persistent_single else 0.0
-    maximum_frame = float(frame_count if persistent_single else frame_count - 1)
     if (not math.isfinite(frame_start) or not math.isfinite(frame_end) or
             frame_start != math.trunc(frame_start) or
             frame_end != math.trunc(frame_end) or
             frame_start < minimum_frame or
-            frame_end > maximum_frame or
+            frame_end < minimum_frame or
+            (persistent_single and frame_end > float(frame_count)) or
             not math.isfinite(fps) or fps < 0):
         reasons.add("atlas_range")
 
@@ -2361,6 +2369,9 @@ def room_emitter_unsupported_reasons(
         if (not math.isfinite(bounce_coefficient) or
                 bounce_coefficient < 0.0 or bounce_coefficient > 1.0):
             reasons.add("render")
+    if (source_flags & ROOM_EMITTER_AFFECTED_WIND_FLAG and
+            int(emitter.get("windPower", -1)) != 0):
+        reasons.add("render")
     for extent_name in ("xSize", "ySize"):
         extent = float(emitter.get(extent_name, 0.0))
         if not math.isfinite(extent) or extent < 0:
@@ -2480,6 +2491,7 @@ def export_room(
     textures: TextureCache,
     mdlops: Path | None = None,
     model_cache: Path | None = None,
+    area_wind_power: int = 0,
 ) -> dict[str, Any]:
     mdl_resource = installation.resource(model_name, ResourceType.MDL)
     mdx_resource = installation.resource(model_name, ResourceType.MDX)
@@ -2553,6 +2565,7 @@ def export_room(
                 "render": str(emitter.render),
                 "blend": str(emitter.blend),
                 "flags": int(emitter.flags),
+                "windPower": area_wind_power,
                 "spawnType": int(emitter.spawn_type),
                 "loop": int(emitter.loop),
                 "twoSidedTexture": int(emitter.two_sided_texture),
@@ -5170,6 +5183,7 @@ def _import_generic_module(
                 textures,
                 mdlops if profile_id == "kotor2" else None,
                 output_root / "_cache" / "rooms" if profile_id == "kotor2" else None,
+                int(getattr(are.wind_power, "value", are.wind_power)),
             )
             if record["glb"] is not None:
                 record["glb"] = f"rooms/{filename}"
@@ -5674,7 +5688,9 @@ def _import_endar_module(
         else:
             filename = f"{model_name.lower()}.glb"
             record = export_room(
-                installation, model_name, rooms_root / filename, textures)
+                installation, model_name, rooms_root / filename, textures,
+                area_wind_power=int(getattr(
+                    are.wind_power, "value", are.wind_power)))
             if record["glb"] is not None:
                 record["glb"] = f"rooms/{filename}"
         record["position"] = vector3(room.position)

@@ -27,6 +27,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private const int EmitterDepthTextureFlag = 0x0800;
     private const int EmitterPointToPointFlag = 0x0001;
     private const int EmitterPointToPointBezierFlag = 0x0002;
+    private const int EmitterAffectedWindFlag = 0x0004;
     private const int EmitterRandomPlaybackFlag = 0x0020;
     private const int EmitterTintedFlag = 0x0008;
     private const int EmitterCollisionBounceFlag = 0x0010;
