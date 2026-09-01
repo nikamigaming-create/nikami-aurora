@@ -386,6 +386,45 @@ public sealed partial class KotorModuleBoot : Node3D
             }
             """
     };
+    private static readonly Shader OdysseySourceLightmapShader =
+        CreateShaderWithoutNormalMapping(OdysseyLightmapShader);
+    private static readonly Shader OdysseySourceTransparentLightmapShader =
+        CreateShaderWithoutNormalMapping(OdysseyTransparentLightmapShader);
+    private static readonly Shader OdysseySourceEnvironmentLightmapShader =
+        CreateShaderWithoutNormalMapping(OdysseyEnvironmentLightmapShader);
+    private static readonly Shader OdysseySourceTransparentEnvironmentLightmapShader =
+        CreateShaderWithoutNormalMapping(OdysseyTransparentEnvironmentLightmapShader);
+    private static readonly Shader OdysseySourceEnvironmentShader =
+        CreateShaderWithoutNormalMapping(OdysseyEnvironmentShader);
+    private static readonly Shader OdysseySourceTransparentEnvironmentShader =
+        CreateShaderWithoutNormalMapping(OdysseyTransparentEnvironmentShader);
+
+    private static Shader CreateShaderWithoutNormalMapping(Shader source)
+    {
+        var output = new List<string>();
+        var skippingNormalBlock = false;
+        foreach (var line in source.Code.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("uniform sampler2D normal_texture", StringComparison.Ordinal) ||
+                trimmed.StartsWith("uniform bool has_normal_texture", StringComparison.Ordinal) ||
+                trimmed.StartsWith("uniform float normal_scale", StringComparison.Ordinal))
+                continue;
+            if (trimmed.Equals("if (has_normal_texture) {", StringComparison.Ordinal))
+            {
+                skippingNormalBlock = true;
+                continue;
+            }
+            if (skippingNormalBlock)
+            {
+                if (trimmed == "}")
+                    skippingNormalBlock = false;
+                continue;
+            }
+            output.Add(line);
+        }
+        return new Shader { Code = string.Join('\n', output) };
+    }
     private CharacterBody3D playerBody = null!;
     private Node3D cameraPivot = null!;
     private SpringArm3D cameraArm = null!;
@@ -2235,12 +2274,18 @@ public sealed partial class KotorModuleBoot : Node3D
                 KotorCameraSurfaceOpacity.SourceOpaque,
             BaseMaterial3D => KotorCameraSurfaceOpacity.SourceTransparent,
             ShaderMaterial source when source.Shader == OdysseyLightmapShader ||
+                                       source.Shader == OdysseySourceLightmapShader ||
                                        source.Shader == OdysseyEnvironmentLightmapShader ||
-                                       source.Shader == OdysseyEnvironmentShader =>
+                                       source.Shader == OdysseySourceEnvironmentLightmapShader ||
+                                       source.Shader == OdysseyEnvironmentShader ||
+                                       source.Shader == OdysseySourceEnvironmentShader =>
                 KotorCameraSurfaceOpacity.SourceOpaque,
             ShaderMaterial source when source.Shader == OdysseyTransparentLightmapShader ||
+                                       source.Shader == OdysseySourceTransparentLightmapShader ||
                                        source.Shader == OdysseyTransparentEnvironmentLightmapShader ||
+                                       source.Shader == OdysseySourceTransparentEnvironmentLightmapShader ||
                                        source.Shader == OdysseyTransparentEnvironmentShader ||
+                                       source.Shader == OdysseySourceTransparentEnvironmentShader ||
                                        source.Shader == OdysseyAdditiveLightmapShader ||
                                        source.Shader == OdysseyAdditiveEnvironmentShader ||
                                        source.Shader == OdysseyAdditiveEnvironmentLightmapShader =>

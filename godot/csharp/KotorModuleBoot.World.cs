@@ -1724,6 +1724,8 @@ public sealed partial class KotorModuleBoot
                 }
                 if (source.AlbedoTexture is not null && source.EmissionTexture is not null)
                 {
+                    var useEnhancedLightmapPbr =
+                        transfer.DynamicLightsEnabled && !sourceAdditive;
                     var lightmapped = new ShaderMaterial
                     {
                         Shader = sourceAdditive
@@ -1732,11 +1734,19 @@ public sealed partial class KotorModuleBoot
                                 : OdysseyAdditiveLightmapShader
                             : environmentMap is not null
                                 ? sourceTransparent
-                                    ? OdysseyTransparentEnvironmentLightmapShader
-                                    : OdysseyEnvironmentLightmapShader
+                                    ? useEnhancedLightmapPbr
+                                        ? OdysseyTransparentEnvironmentLightmapShader
+                                        : OdysseySourceTransparentEnvironmentLightmapShader
+                                    : useEnhancedLightmapPbr
+                                        ? OdysseyEnvironmentLightmapShader
+                                        : OdysseySourceEnvironmentLightmapShader
                             : sourceTransparent
-                                ? OdysseyTransparentLightmapShader
-                                : OdysseyLightmapShader,
+                                ? useEnhancedLightmapPbr
+                                    ? OdysseyTransparentLightmapShader
+                                    : OdysseySourceTransparentLightmapShader
+                                : useEnhancedLightmapPbr
+                                    ? OdysseyLightmapShader
+                                    : OdysseySourceLightmapShader,
                         ResourceName = source.ResourceName,
                         RenderPriority = sourceDecal
                             ? KotorEnvironmentMaterialPolicy.SourceDecalRenderPriority
@@ -1748,16 +1758,17 @@ public sealed partial class KotorModuleBoot
                     lightmapped.SetShaderParameter("dynamic_ambient", new Vector3(
                         dynamicAmbient.R, dynamicAmbient.G, dynamicAmbient.B));
                     ConfigureLightmapTransfer(lightmapped, transfer);
-                    var useEnhancedLightmapPbr =
-                        transfer.DynamicLightsEnabled && !sourceAdditive;
                     var normalTexture = source.NormalTexture;
                     var hasNormalMap = useEnhancedLightmapPbr && normalTexture is not null;
                     if (!sourceAdditive)
                     {
-                        lightmapped.SetShaderParameter("has_normal_texture", hasNormalMap);
-                        if (normalTexture is not null && hasNormalMap)
-                            lightmapped.SetShaderParameter("normal_texture", normalTexture);
-                        lightmapped.SetShaderParameter("normal_scale", sourceNormalScale);
+                        if (useEnhancedLightmapPbr)
+                        {
+                            lightmapped.SetShaderParameter("has_normal_texture", hasNormalMap);
+                            if (normalTexture is not null && hasNormalMap)
+                                lightmapped.SetShaderParameter("normal_texture", normalTexture);
+                            lightmapped.SetShaderParameter("normal_scale", sourceNormalScale);
+                        }
                         lightmapped.SetShaderParameter(
                             "dielectric_specular",
                             environmentMap is null
@@ -1913,8 +1924,12 @@ public sealed partial class KotorModuleBoot
             Shader = sourceAdditive
                 ? OdysseyAdditiveEnvironmentShader
                 : sourceTransparent
-                    ? OdysseyTransparentEnvironmentShader
-                    : OdysseyEnvironmentShader,
+                    ? enhancedPbr
+                        ? OdysseyTransparentEnvironmentShader
+                        : OdysseySourceTransparentEnvironmentShader
+                    : enhancedPbr
+                        ? OdysseyEnvironmentShader
+                        : OdysseySourceEnvironmentShader,
             ResourceName = source.ResourceName,
             RenderPriority = KotorEnvironmentMaterialPolicy.IsSourceDecal(
                 source.ResourceName.ToString())
@@ -1929,7 +1944,7 @@ public sealed partial class KotorModuleBoot
         var normalTexture = source.NormalTexture;
         var normalScale = ResolveNormalScale(source, out _);
         var hasNormalMap = enhancedPbr && !sourceAdditive && normalTexture is not null;
-        if (!sourceAdditive)
+        if (!sourceAdditive && enhancedPbr)
         {
             material.SetShaderParameter("has_normal_texture", hasNormalMap);
             if (normalTexture is not null && hasNormalMap)
