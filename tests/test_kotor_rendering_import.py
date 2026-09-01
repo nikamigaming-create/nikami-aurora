@@ -21,6 +21,22 @@ except (ImportError, SystemExit) as exc:
 
 
 class KotorRenderingImportTests(unittest.TestCase):
+    def test_mdlops_static_axis_angle_orientation_becomes_xyzw_quaternion(self) -> None:
+        # MDLOps static node values are axis-angle, while animation controller
+        # rows have already been converted to quaternions by PyKotor.
+        converted = importer.mdlops_axis_angle_to_quaternion(
+            SimpleNamespace(x=0.0, y=0.0, z=-1.0, w=4.99164))
+
+        self.assertAlmostEqual(0.0, converted.x, places=6)
+        self.assertAlmostEqual(0.0, converted.y, places=6)
+        self.assertAlmostEqual(-0.601816, converted.z, places=6)
+        self.assertAlmostEqual(-0.798635, converted.w, places=6)
+
+        identity = importer.mdlops_axis_angle_to_quaternion(
+            SimpleNamespace(x=-1.604905e-7, y=0.0, z=0.0, w=0.0))
+        self.assertEqual((0.0, 0.0, 0.0, 1.0),
+                         (identity.x, identity.y, identity.z, identity.w))
+
     def test_mdlops_named_skin_weights_are_preserved_for_kotor2(self) -> None:
         source = """node skin Torso
   weights 3
