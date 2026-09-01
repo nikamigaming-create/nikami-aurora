@@ -506,7 +506,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private KotorGameplaySimulation? gameplaySimulation;
     private KotorCombatSimulation? firstEncounterCombat;
     private KotorCombatExperienceTable? combatExperienceTable;
-    private PlayerCombatRecord? playerCombat;
+    private CreatureCombatRecord? playerCombat;
     private string selectedCombatTarget = "end_sith2";
     private readonly Random combatRandom = new(0x4B4F544F);
     private int capturedFrames;

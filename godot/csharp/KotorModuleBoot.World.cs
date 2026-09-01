@@ -1186,7 +1186,8 @@ public sealed partial class KotorModuleBoot
                 0,
                 false,
                 false,
-                ToCombatWeapon(playerSource.Weapon))
+                ToCombatWeapon(playerSource.Weapon ?? throw new InvalidDataException(
+                    "Player combat weapon is unavailable")))
         };
         definitions.AddRange(encounter.Participants
             .Where(source => source.Tag.Equals("end_sith2", StringComparison.OrdinalIgnoreCase) ||
@@ -1273,7 +1274,8 @@ public sealed partial class KotorModuleBoot
         PlayPlayerAnimation("c2a1");
         ResolveFirstEncounterAttack(
             playerId, selectedCombatTarget,
-            playerCombat!.Weapon);
+            playerCombat!.Weapon ?? throw new InvalidDataException(
+                "Player combat weapon is unavailable"));
 
         snapshot = combat.CaptureSnapshot();
         if (snapshot.Values.Where(item => item.Id.StartsWith("end_sith", StringComparison.OrdinalIgnoreCase))

@@ -89,7 +89,7 @@ public sealed partial class KotorModuleBoot
         IReadOnlyList<float>? TalkOffset, IReadOnlyList<float>? CameraOffset,
         PlayerAnimationRecord Animation,
         IReadOnlyList<PlayerEquipmentVariantRecord>? EquipmentVariants,
-        PlayerCombatRecord? Combat = null,
+        CreatureCombatRecord? Combat = null,
         string RigKind = "humanoid");
     private sealed record PlayerAnimationRecord(int MeshCount, int VertexCount, int TriangleCount,
         int SkinCount, int HeadSkinCount, IReadOnlyList<string> Animations,
@@ -211,22 +211,6 @@ public sealed partial class KotorModuleBoot
         string OnUserDefined,
         string UtpSha256,
         DialogueReference Dialogue);
-    private sealed record PlayerCombatRecord(
-        int ClassId,
-        string ClassLabel,
-        string ClassesSha256,
-        string AttackTableSha256,
-        int CurrentHitPoints,
-        int MaxHitPoints,
-        double ChallengeRating,
-        int Strength,
-        int Dexterity,
-        int NaturalArmorClass,
-        int Defense,
-        int BaseAttackBonus,
-        int AttackBonus,
-        IReadOnlyList<CreatureClassLevelRecord> ClassLevels,
-        CreatureCombatWeaponRecord Weapon);
     private sealed record FirstEncounterParticipant(
         string Template,
         string Tag,
@@ -250,11 +234,13 @@ public sealed partial class KotorModuleBoot
         int BaseAttackBonus,
         int AttackBonus,
         IReadOnlyList<CreatureClassLevelRecord> ClassLevels,
-        CreatureCombatWeaponRecord? Weapon);
+        CreatureCombatWeaponRecord? Weapon,
+        string? ClassesSha256 = null);
     private sealed record CreatureClassLevelRecord(
         int ClassId,
         int Level,
-        int BaseAttackBonus);
+        int BaseAttackBonus,
+        string? AttackTableSha256 = null);
     private sealed record CreatureCombatWeaponRecord(
         string Resref,
         string UtiSha256,
@@ -267,7 +253,8 @@ public sealed partial class KotorModuleBoot
         int CriticalMultiplier,
         bool Ranged,
         int DamageFlags,
-        IReadOnlyList<CreatureBonusDamageRecord> BonusDamage);
+        IReadOnlyList<CreatureBonusDamageRecord> BonusDamage,
+        int WeaponWield = 0);
     private sealed record CreatureBonusDamageRecord(
         int DamageType,
         int Flat,
@@ -407,7 +394,14 @@ public sealed partial class KotorModuleBoot
         IReadOnlyList<float>? RenderExtent = null,
         PlayerAnimationRecord? Animation = null,
         IReadOnlyList<CreatureModelRecord>? Models = null,
-        CreatureEffectsRecord? Effects = null);
+        CreatureEffectsRecord? Effects = null,
+        int FactionId = 0,
+        int HitPoints = 0,
+        int CurrentHitPoints = 0,
+        int MaxHitPoints = 0,
+        bool MinimumOneHitPoint = false,
+        bool NoPermanentDeath = false,
+        CreatureCombatRecord? Combat = null);
     private sealed record CreatureModelRecord(
         string Role,
         string Model,
