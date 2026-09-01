@@ -9,6 +9,7 @@ using Nikami.Aurora.GodotRuntime.Presentation.Player;
 using Nikami.Aurora.GodotRuntime.Application.Abstractions;
 using Nikami.Aurora.GodotRuntime.Domain.World;
 using Nikami.Aurora.GodotRuntime.Rendering;
+using Nikami.Aurora.GodotRuntime.Application.Characters;
 
 namespace Nikami.Aurora.GodotRuntime.Presentation.World;
 
@@ -27,6 +28,8 @@ internal sealed class WorldHud
     private readonly PanelContainer panel = new();
     private readonly Label title = new();
     private readonly RichTextLabel content = new();
+    private readonly Dictionary<View, RetailGfxCanvas> retailMenus = [];
+    private readonly Dictionary<View, List<Control>> retailMenuOverlays = [];
     private readonly AbilityState abilities;
     private readonly InventoryState inventory;
     private readonly QuestJournal quests;
@@ -34,20 +37,28 @@ internal sealed class WorldHud
 
     public WorldHud(Node host, AbilityState abilities, InventoryState inventory, QuestJournal quests,
         WorldProfile world, IAreaPresentationProvider areaPresentation,
-        Nikami.Aurora.GodotRuntime.Domain.Characters.CharacterProfile character, PlayerController player)
+        Nikami.Aurora.GodotRuntime.Domain.Characters.CharacterProfile character,
+        CharacterProgression progression, PlayerController player)
     {
         this.abilities = abilities;
         this.inventory = inventory;
         this.quests = quests;
         layer.Name = "WorldHud";
         layer.Layer = 20;
-        BuildAuthoredHud(world, areaPresentation, character, player);
-        panel.Position = new Vector2(48, 96);
-        panel.Size = new Vector2(520, 620);
+        BuildAuthoredHud(world, areaPresentation, character, progression, player);
         panel.Visible = false;
+        panel.AddThemeStyleboxOverride("panel", new StyleBoxFlat
+        {
+            BgColor = Colors.Transparent,
+            ContentMarginLeft = 10,
+            ContentMarginTop = 8,
+            ContentMarginRight = 10,
+            ContentMarginBottom = 8
+        });
         var layout = new VBoxContainer();
-        title.AddThemeFontSizeOverride("font_size", 24);
-        content.CustomMinimumSize = new Vector2(480, 540);
+        title.AddThemeFontSizeOverride("font_size", 19);
+        title.AddThemeColorOverride("font_color", new Color(0.16f, 0.11f, 0.07f));
+        content.AddThemeColorOverride("default_color", new Color(0.19f, 0.14f, 0.09f));
         content.BbcodeEnabled = true;
         layout.AddChild(title);
         layout.AddChild(content);
@@ -64,7 +75,8 @@ internal sealed class WorldHud
     }
 
     private void BuildAuthoredHud(WorldProfile world, IAreaPresentationProvider areaPresentation,
-        Nikami.Aurora.GodotRuntime.Domain.Characters.CharacterProfile character, PlayerController player)
+        Nikami.Aurora.GodotRuntime.Domain.Characters.CharacterProfile character,
+        CharacterProgression progression, PlayerController player)
     {
         var archivePath = Path.Combine(world.GameRoot, "packages", "core", "data", "guiexport.erf");
         if (!File.Exists(archivePath))
@@ -77,7 +89,10 @@ internal sealed class WorldHud
         var atlas = new GfxAtlas(
             archive,
             "atl_shared_dxt1_dat.xml",
-            "atl_shared_dxt5_dat.xml");
+            "atl_shared_dxt5_dat.xml",
+            "atl_guiscreens_dxt5_dat.xml",
+            "atl_itemupgrad_dxt5_dat.xml",
+            "atl_chanters_dxt5_dat.xml");
         retailAtlas = atlas;
         var stage = new Control
         {
@@ -90,6 +105,20 @@ internal sealed class WorldHud
         var presentation = areaPresentation.Resolve(world);
 
         var usesMana = character.Class.Equals("mage", StringComparison.OrdinalIgnoreCase);
+        var inventoryMenu = AddRetailMenu(
+            View.Inventory,
+            "inventory.gfx",
+            "equipment",
+            archive,
+            atlas,
+            quad => quad.Image.Name.Equals("paperdoll.dds", StringComparison.OrdinalIgnoreCase)
+                ? quad with { Alpha = 0 }
+                : quad);
+        AddInventoryPaperDoll(inventoryMenu, player);
+        AddRetailMenu(View.Quests, "journal.gfx", "CurrentQuests", archive, atlas);
+        AddRetailMenu(View.Abilities, "abilities.gfx", usesMana ? "spells" : "talents",
+            archive, atlas);
+        AddRetailMenu(View.Crafting, "crafting.gfx", "crafting", archive, atlas);
         stage.AddChild(new RetailGfxCanvas(
             "Portraits",
             archive,
@@ -162,11 +191,136 @@ internal sealed class WorldHud
         name.AddThemeConstantOverride("outline_size", 1);
         stage.AddChild(name);
         Anchor(name, new Rect2(50, 686, 180, 18), RetailGfxAnchor.BottomLeft);
+        var level = new Label
+        {
+            Name = "CharacterLevel",
+            Text = $"Level {progression.Level}",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        level.AddThemeFontSizeOverride("font_size", 11);
+        if (dragonText is not null) level.AddThemeFontOverride("font", dragonText);
+        level.AddThemeColorOverride("font_color", new Color(0.86f, 0.77f, 0.43f));
+        level.AddThemeColorOverride("font_outline_color", Colors.Black);
+        level.AddThemeConstantOverride("outline_size", 1);
+        stage.AddChild(level);
+        Anchor(level, new Rect2(50, 704, 180, 16), RetailGfxAnchor.BottomLeft);
+        progression.Changed += (_, currentLevel) => level.Text = $"Level {currentLevel}";
         stage.Resized += LayoutAnchoredControls;
         Callable.From(LayoutAnchoredControls).CallDeferred();
         GD.Print("OPENDAO_RETAIL_HUD status=ready source=gfx-display-lists " +
                  "stage=1024x768 reference=1920x1080 portraits=1 minimap=1 " +
                  "quickbar_slots=14 navbar=1");
+    }
+
+    private RetailGfxCanvas AddRetailMenu(
+        View view,
+        string resource,
+        string rootLabel,
+        ErfArchive archive,
+        GfxAtlas atlas,
+        Func<GfxQuad, GfxQuad?>? select = null)
+    {
+        var canvas = new RetailGfxCanvas(
+            "Retail" + view,
+            archive,
+            atlas,
+            resource,
+            RetailGfxAnchor.TopCenter,
+            select,
+            rootLabel: rootLabel,
+            scaleMode: RetailGfxScaleMode.FitStage);
+        canvas.Visible = false;
+        layer.AddChild(canvas);
+        retailMenus.Add(view, canvas);
+        GD.Print($"OPENDAO_RETAIL_MENU status=ready view={view.ToString().ToLowerInvariant()} " +
+                 $"source={resource} quads={canvas.QuadCount} frames={canvas.RootFrameCount} " +
+                 $"label={rootLabel} stage={canvas.StageSize}");
+        return canvas;
+    }
+
+    private void AddInventoryPaperDoll(RetailGfxCanvas menu, PlayerController player)
+    {
+        if (menu.ReferenceBounds("paperdoll.dds") is not { } sourceBounds ||
+            sourceBounds.Size.X <= 0 || sourceBounds.Size.Y <= 0)
+        {
+            GD.PushWarning("OPENDAO_RETAIL_INVENTORY_PAPERDOLL status=missing-source-bounds");
+            return;
+        }
+
+        var viewport = new SubViewport
+        {
+            Name = "InventoryPaperDollViewport",
+            Size = new Vector2I(512, 768),
+            TransparentBg = true,
+            OwnWorld3D = true,
+            RenderTargetUpdateMode = SubViewport.UpdateMode.Always,
+            Msaa3D = Viewport.Msaa.Msaa4X
+        };
+        var camera = new Camera3D { Current = true, Fov = 26, Near = 0.03f };
+        viewport.AddChild(camera);
+        viewport.AddChild(new DirectionalLight3D
+        {
+            RotationDegrees = new Vector3(-30, -25, 0),
+            LightColor = new Color(1.0f, 0.84f, 0.68f),
+            LightEnergy = 1.7f
+        });
+        viewport.AddChild(new DirectionalLight3D
+        {
+            RotationDegrees = new Vector3(-20, 155, 0),
+            LightColor = new Color(0.36f, 0.46f, 0.72f),
+            LightEnergy = 0.75f
+        });
+        viewport.AddChild(new WorldEnvironment
+        {
+            Environment = new Godot.Environment
+            {
+                BackgroundMode = Godot.Environment.BGMode.Color,
+                BackgroundColor = new Color(0, 0, 0, 0),
+                AmbientLightSource = Godot.Environment.AmbientSource.Color,
+                AmbientLightColor = new Color(0.42f, 0.38f, 0.34f),
+                AmbientLightEnergy = 0.72f,
+                TonemapMode = Godot.Environment.ToneMapper.Filmic
+            }
+        });
+        if (player.DuplicateAvatarForPortrait() is not { } avatar)
+        {
+            GD.PushWarning("OPENDAO_RETAIL_INVENTORY_PAPERDOLL status=missing-avatar");
+            return;
+        }
+        avatar.Transform = Transform3D.Identity;
+        viewport.AddChild(avatar);
+        avatar.Rotation = new Vector3(0, Mathf.Pi, 0);
+        var bounds = SceneBounds.Calculate(avatar);
+        if (bounds.Size.IsZeroApprox())
+            bounds = new Aabb(new Vector3(-0.5f, 0, -0.5f), new Vector3(1, 1.8f, 1));
+        avatar.Position -= bounds.GetCenter();
+        var height = Math.Max(1.0f, bounds.Size.Y);
+        camera.Position = Vector3.Back * height * 2.45f;
+        camera.LookAtFromPosition(camera.Position, Vector3.Zero, Vector3.Up);
+        menu.AddChild(viewport);
+
+        var paperDoll = new TextureRect
+        {
+            Name = "InventoryPaperDoll",
+            Texture = viewport.GetTexture(),
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            Visible = false
+        };
+        layer.AddChild(paperDoll);
+        retailMenuOverlays[View.Inventory] = [paperDoll];
+        void Layout()
+        {
+            var placement = RetailGfxLayout.FitStage(menu.Size,
+                new GfxRect(0, menu.StageSize.X, 0, menu.StageSize.Y));
+            paperDoll.Position = placement.Point(sourceBounds.Position);
+            paperDoll.Size = placement.Size(sourceBounds.Size);
+        }
+        menu.Resized += Layout;
+        Callable.From(Layout).CallDeferred();
+        GD.Print($"OPENDAO_RETAIL_INVENTORY_PAPERDOLL status=ready source=player-avatar " +
+                 $"reference={sourceBounds}");
     }
 
     private void AddCharacterPortrait(Control stage, PlayerController player)
@@ -505,14 +659,38 @@ internal sealed class WorldHud
     public void ToggleInventory() => Toggle(View.Inventory);
     public void ToggleQuests() => Toggle(View.Quests);
     public void ToggleAbilities() => Toggle(View.Abilities);
+    public void ToggleCrafting() => Toggle(View.Crafting);
     public void Close() => Toggle(View.None);
 
     private void Toggle(View requested)
     {
         current = current == requested ? View.None : requested;
+        if (retailStage is not null) retailStage.Visible = current == View.None;
+        foreach (var menu in retailMenus)
+            menu.Value.Visible = menu.Key == current;
+        foreach (var overlay in retailMenuOverlays)
+            foreach (var control in overlay.Value)
+                control.Visible = overlay.Key == current;
         panel.Visible = current != View.None;
         Input.MouseMode = panel.Visible ? Input.MouseModeEnum.Visible : Input.MouseModeEnum.Captured;
+        LayoutMenuContent();
         Refresh();
+    }
+
+    private void LayoutMenuContent()
+    {
+        if (current == View.None || !retailMenus.TryGetValue(current, out var menu)) return;
+        var reference = current switch
+        {
+            View.Inventory => new Rect2(675, 155, 300, 515),
+            View.Quests => new Rect2(170, 150, 675, 505),
+            View.Abilities => new Rect2(610, 155, 340, 500),
+            View.Crafting => new Rect2(590, 155, 360, 505),
+            _ => default
+        };
+        var placement = RetailGfxLayout.FitStage(menu.Size, new GfxRect(0, 1024, 0, 768));
+        panel.Position = placement.Point(reference.Position);
+        panel.Size = placement.Size(reference.Size);
     }
 
     private void Refresh()
@@ -535,9 +713,13 @@ internal sealed class WorldHud
                 content.Text = abilities.Granted.Count == 0 ? "[i]No abilities[/i]" : string.Join("\n",
                     abilities.Granted.Values.Select(x => $"[b]{Escape(x.Label)}[/b]  Cost {x.Cost:F0}  Cooldown {x.Cooldown:F1}s"));
                 break;
+            case View.Crafting:
+                title.Text = "Crafting";
+                content.Text = "[i]No learned recipes in the current character state[/i]";
+                break;
         }
     }
 
     private static string Escape(string value) => value.Replace("[", "[​", StringComparison.Ordinal);
-    private enum View { None, Inventory, Quests, Abilities }
+    private enum View { None, Inventory, Quests, Abilities, Crafting }
 }

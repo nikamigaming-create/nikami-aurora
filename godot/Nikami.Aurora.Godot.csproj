@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../src/Nikami.Aurora.Profiles.Kotor/Nikami.Aurora.Profiles.Kotor.csproj" />
+    <ProjectReference Include="../src/Nikami.Aurora.Profiles.Kotor2/Nikami.Aurora.Profiles.Kotor2.csproj" />
     <ProjectReference Include="../src/Nikami.Aurora.Profiles.DragonAgeOrigins/Nikami.Aurora.Profiles.DragonAgeOrigins.csproj" />
   </ItemGroup>
 </Project>

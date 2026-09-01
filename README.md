@@ -252,7 +252,8 @@ assembly is implemented.
   no retail payloads.
 - `config/kotor-runtime.json` — public KOTOR profile policy and guardrails.
 - `scripts` — owned-install import and launch commands.
-- `scripts/Run-DaoCityElfAcceptance.ps1` — fail-closed transitional City Elf
+- `scripts/Run-DaoOriginAcceptance.ps1` — shared six-origin DAO runtime launch,
+  capture, and video path backed by a legally owned local installation
   integration/video gate using external ignored OpenDAO cache roots.
 - `tests/Nikami.Aurora.Acceptance` — dependency-free synthetic acceptance.
 - `docs/ARCHITECTURE.md` — dependency and profile boundaries.

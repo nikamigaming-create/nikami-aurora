@@ -214,6 +214,12 @@ class KotorRenderingImportTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "module identifier"):
             importer.normalize_module_id("../end_m01aa")
 
+    def test_odyssey_profiles_select_their_authored_pc_hud(self) -> None:
+        self.assertEqual(
+            "mipc8x6", importer.odyssey_hud_layout_resref(""))
+        self.assertEqual(
+            "mipc28x6_p", importer.odyssey_hud_layout_resref("_p"))
+
     def test_owned_mdl_reader_excludes_the_twelve_byte_resource_wrapper(self) -> None:
         original_reader = importer.MDLBinaryReader
 
@@ -238,6 +244,41 @@ class KotorRenderingImportTests(unittest.TestCase):
             )
         finally:
             importer.MDLBinaryReader = original_reader
+
+    def test_mdlops_ascii_secondary_texture_is_restored_to_the_parsed_mesh(self) -> None:
+        parsed_meshes = [
+            SimpleNamespace(texture_2=""),
+            SimpleNamespace(texture_2=""),
+        ]
+        parsed_model = SimpleNamespace(all_nodes=lambda: [
+            SimpleNamespace(mesh=parsed_meshes[0]),
+            SimpleNamespace(mesh=None),
+            SimpleNamespace(mesh=parsed_meshes[1]),
+        ])
+        source = """\
+node trimesh floor
+  bitmap LEH_floor05
+  bitmap2 001EBO9_lm2
+endnode
+node dummy hook
+endnode
+node trimesh screen
+  bitmap LEH_scre02
+endnode
+"""
+        original_reader = importer.read_mdl
+        importer.read_mdl = lambda _path: parsed_model
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "room.mdl.ascii"
+                path.write_text(source, encoding="ascii")
+                result = importer.read_mdl_ascii_preserving_lightmaps(path)
+        finally:
+            importer.read_mdl = original_reader
+
+        self.assertIs(parsed_model, result)
+        self.assertEqual("001EBO9_lm2", parsed_meshes[0].texture_2)
+        self.assertEqual("", parsed_meshes[1].texture_2)
 
     def test_odyssey_room_placeholder_is_preserved_without_fabricated_assets(self) -> None:
         record = importer.source_room_placeholder_record("****")
@@ -521,6 +562,15 @@ class KotorRenderingImportTests(unittest.TestCase):
         self.assertEqual(
             "unsupported", importer.txi_directive_class("decal", ["maybe"]))
 
+    def test_tsl_presence_only_decal_suffix_is_canonicalized(self) -> None:
+        directives = importer.parse_txi_directives(
+            "decal1\nproceduretype cycle\nnumx 4\nnumy 4\nfps 16\n")
+
+        self.assertEqual(["1"], directives["decal"])
+        self.assertNotIn("decal1", directives)
+        self.assertEqual(
+            "rendered", importer.txi_directive_class("decal", directives["decal"]))
+
     def test_source_decal_is_alpha_no_depth_write_material_marker(self) -> None:
         cache = importer.TextureCache.__new__(importer.TextureCache)
         cache.images = {"floor_mark": object()}
@@ -538,6 +588,35 @@ class KotorRenderingImportTests(unittest.TestCase):
         )
         self.assertEqual(
             "rendered", importer.txi_directive_class("decal", ["1"]))
+
+    def test_mesh_transparency_hint_preserves_source_render_queue(self) -> None:
+        cache = importer.TextureCache.__new__(importer.TextureCache)
+        cache.images = {"kolto": object(), "kolto_lm": object()}
+        cache.alpha_tests = {"kolto": 1.0, "kolto_lm": 1.0}
+        cache.txi = {"kolto": "", "kolto_lm": ""}
+        cache.raw_txi = {}
+        cache.missing = set()
+        cache.environment_maps = set()
+        cache.installation = SimpleNamespace(
+            texture_resource_result=lambda _name: (None, ""))
+
+        hinted = cache.material_semantics("kolto", "kolto_lm", True)
+        opaque = cache.material_semantics("kolto", "kolto_lm", False)
+
+        self.assertEqual("alpha", hinted["blend"])
+        self.assertEqual("opaque", opaque["blend"])
+        self.assertEqual(
+            "kolto__aurora_transparency_hint", hinted["materialName"])
+        self.assertEqual("kolto", opaque["materialName"])
+
+    def test_lightmap_uv_uses_the_same_v_convention_as_gltf_diffuse_uv(self) -> None:
+        converted = importer.gltf_lightmap_uv([
+            SimpleNamespace(x=0.25, y=0.125),
+            SimpleNamespace(x=0.75, y=0.875),
+        ])
+
+        importer.np.testing.assert_allclose(
+            [[0.25, 0.875], [0.75, 0.125]], converted)
 
     def test_generic_room_emitter_policy_accepts_supported_source_semantics(self) -> None:
         emitter = {

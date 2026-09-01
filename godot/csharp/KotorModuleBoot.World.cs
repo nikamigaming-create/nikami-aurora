@@ -395,6 +395,21 @@ public sealed partial class KotorModuleBoot
             RequireGameplaySimulation().ExecuteScript(resref));
     }
 
+    private void ExecuteScript(string? resref, DialogueScriptParameters? parameters)
+    {
+        ApplyGameplayTransition(RequireGameplaySimulation().ExecuteScript(
+            resref,
+            parameters is null
+                ? null
+                : new KotorScriptInvocation(
+                    parameters.Int1,
+                    parameters.Int2,
+                    parameters.Int3,
+                    parameters.Int4,
+                    parameters.Int5,
+                    parameters.String6)));
+    }
+
     private void ApplyGameplayTransition(KotorGameplayTransition transition)
     {
         var equipmentChanged = false;
@@ -453,8 +468,38 @@ public sealed partial class KotorModuleBoot
                 case KotorDialogueRequested requested:
                     PresentRequestedDialogue(requested);
                     break;
+                case KotorPlayerMoveRequested requested:
+                    PresentPlayerMove(requested);
+                    break;
+                case KotorGlobalFadeRequested requested:
+                    PresentGlobalFade(requested);
+                    break;
+                case KotorBackgroundMusicRequested requested:
+                    PresentBackgroundMusic(requested);
+                    break;
+                case KotorSoundObjectPlayRequested requested:
+                    PresentSoundObjectPlay(requested);
+                    break;
+                case KotorRoomAnimationRequested requested:
+                    PresentRoomAnimation(requested);
+                    break;
                 case KotorExperienceAwarded experience:
                     PresentExperienceAward(experience);
+                    break;
+                case KotorCombatExperienceAwarded experience:
+                    GD.Print("NIKAMI_AURORA_COMBAT_XP status=awarded " +
+                             $"source={experience.SourceId} " +
+                             $"xp={experience.Before}+{experience.Awarded}->{experience.After}");
+                    break;
+                case KotorCombatDamageApplied damage:
+                    GD.Print("NIKAMI_AURORA_COMBAT_DAMAGE status=applied " +
+                             $"source={damage.SourceId} target={damage.TargetId} " +
+                             $"damage={damage.Damage} " +
+                             $"vitality={damage.VitalityBefore}->{damage.VitalityAfter}");
+                    break;
+                case KotorLevelChanged level:
+                    GD.Print($"NIKAMI_AURORA_LEVEL status=changed " +
+                             $"level={level.Before}->{level.After} xp={level.Experience}");
                     break;
                 case KotorScriptExecuted executed:
                     PresentScriptExecution(executed.Contract);
@@ -476,6 +521,105 @@ public sealed partial class KotorModuleBoot
         }
         if (equipmentChanged)
             PresentEquipment(transition.After);
+    }
+
+    private void PresentRoomAnimation(KotorRoomAnimationRequested request)
+    {
+        if (!roomModels.TryGetValue(request.RoomModel, out var roomRoot) ||
+            !roomRecords.TryGetValue(request.RoomModel, out var room))
+            throw new InvalidDataException(
+                $"Room animation could not resolve model {request.RoomModel}");
+        var animationName = $"scriptloop{request.AnimationIndex:00}";
+        var animation = room.AlphaAnimations?.SingleOrDefault(candidate =>
+            candidate.Name.Equals(animationName, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidDataException(
+                $"Room {request.RoomModel} has no alpha animation {animationName}");
+
+        foreach (var alphaNode in room.AlphaNodes ?? [])
+        {
+            var tweenKey = $"{request.RoomModel}/{alphaNode.NodeName}";
+            if (roomAlphaTweens.Remove(tweenKey, out var existing) && existing.IsValid())
+                existing.Kill();
+            SetRoomNodeAlpha(
+                RequireRoomAnimationNode(roomRoot, request.RoomModel, alphaNode.NodeName),
+                alphaNode.BaseAlpha);
+        }
+
+        foreach (var track in animation.Tracks)
+        {
+            var mesh = RequireRoomAnimationNode(roomRoot, request.RoomModel, track.NodeName);
+            if (track.Keys.Count == 0) continue;
+            var tweenKey = $"{request.RoomModel}/{track.NodeName}";
+            var tween = CreateTween();
+            var previousTime = 0.0f;
+            var previousValue = room.AlphaNodes?.Single(node =>
+                node.NodeName.Equals(track.NodeName, StringComparison.OrdinalIgnoreCase)).BaseAlpha
+                ?? 1.0f;
+            foreach (var key in track.Keys)
+            {
+                if (!float.IsFinite(key.Time) || key.Time < previousTime ||
+                    !float.IsFinite(key.Value) || key.Value < 0 || key.Value > 1)
+                    throw new InvalidDataException(
+                        $"Invalid room alpha key {request.RoomModel}/{animationName}/" +
+                        $"{track.NodeName}");
+                var duration = key.Time - previousTime;
+                if (duration > 0)
+                {
+                    var start = previousValue;
+                    var end = key.Value;
+                    tween.TweenMethod(
+                        Callable.From<float>(value => SetRoomNodeAlpha(mesh, value)),
+                        start,
+                        end,
+                        duration);
+                }
+                else
+                {
+                    var value = key.Value;
+                    tween.TweenCallback(
+                        Callable.From(() => SetRoomNodeAlpha(mesh, value)));
+                }
+                previousTime = key.Time;
+                previousValue = key.Value;
+            }
+            roomAlphaTweens[tweenKey] = tween;
+        }
+        GD.Print($"NIKAMI_AURORA_ROOM_ANIMATION status=playing " +
+                 $"room={request.RoomModel} animation={animationName} " +
+                 $"length={animation.Length:F3} tracks={animation.Tracks.Count}");
+    }
+
+    private static MeshInstance3D RequireRoomAnimationNode(
+        Node roomRoot,
+        string roomModel,
+        string nodeName) =>
+        roomRoot.FindChild(nodeName, recursive: true, owned: false) as MeshInstance3D
+        ?? throw new InvalidDataException(
+            $"Room alpha animation node was not materialized: {roomModel}/{nodeName}");
+
+    private static void SetRoomNodeAlpha(MeshInstance3D mesh, float alpha)
+    {
+        if (!float.IsFinite(alpha) || alpha < 0 || alpha > 1)
+            throw new ArgumentOutOfRangeException(nameof(alpha));
+        for (var surface = 0; surface < mesh.Mesh.GetSurfaceCount(); surface++)
+        {
+            switch (mesh.GetActiveMaterial(surface))
+            {
+                case BaseMaterial3D material:
+                    var color = material.AlbedoColor;
+                    color.A = alpha;
+                    material.AlbedoColor = color;
+                    break;
+                case ShaderMaterial material:
+                    var tint = material.GetShaderParameter("albedo_tint").AsColor();
+                    tint.A = alpha;
+                    material.SetShaderParameter("albedo_tint", tint);
+                    break;
+                default:
+                    throw new InvalidDataException(
+                        $"Room alpha node has an unsupported material: {mesh.Name}");
+            }
+        }
     }
 
     private void PresentDoorState(KotorDoorStateChanged state)
@@ -718,6 +862,109 @@ public sealed partial class KotorModuleBoot
                  $"animations={string.Join(',', animationContract.Animations)}");
     }
 
+    private void PresentPlayerMove(KotorPlayerMoveRequested request)
+    {
+        if (!moduleWaypoints.TryGetValue(request.WaypointTag, out var waypoint))
+            throw new InvalidDataException(
+                $"Player-move waypoint was not found: {request.WaypointTag}");
+        var position = ToGodot(waypoint.Position);
+        if (TryProjectToWalkmesh(position, out var floor)) position.Y = floor;
+        playerBody.GlobalPosition = position;
+        // Movement, turning, and the minimap all consume the authoritative yaw.
+        // Keep that state joined to scripted Odyssey teleports so subsequent
+        // input continues from the waypoint's authored facing.
+        yaw = waypoint.Bearing;
+        playerBody.Rotation = new Vector3(0, yaw, 0);
+        cameraPivot.Rotation = new Vector3(pitch, 0, 0);
+        simulationPlayerPosition = ToNumerics(waypoint.Position);
+        simulationPlayerPosition.Z = position.Y;
+        GD.Print($"NIKAMI_AURORA_PLAYER_MOVE status=ready " +
+                 $"waypoint={request.WaypointTag} position={position} " +
+                 $"bearing={waypoint.Bearing:F3}");
+    }
+
+    private void PresentGlobalFade(KotorGlobalFadeRequested request)
+    {
+        dialogueFadeTween?.Kill();
+        cinematicFade.Color = new Color(0, 0, 0, request.FadeIn ? 1 : 0);
+        cinematicFade.Visible = true;
+        var targetAlpha = request.FadeIn ? 0.0f : 1.0f;
+        if (request.DelaySeconds == 0 && request.LengthSeconds == 0)
+        {
+            cinematicFade.Color = new Color(0, 0, 0, targetAlpha);
+            if (request.FadeIn)
+                cinematicFade.Visible = false;
+        }
+        else
+        {
+            var tween = cinematicFade.CreateTween();
+            dialogueFadeTween = tween;
+            if (request.DelaySeconds > 0)
+                tween.TweenInterval(request.DelaySeconds);
+            tween.TweenProperty(
+                cinematicFade, "color:a", targetAlpha, request.LengthSeconds);
+            if (request.FadeIn)
+                tween.TweenCallback(Callable.From(() => cinematicFade.Visible = false));
+        }
+        GD.Print($"NIKAMI_AURORA_GLOBAL_FADE status=active " +
+                 $"direction={(request.FadeIn ? "in" : "out")} " +
+                 $"delay={request.DelaySeconds:F3} length={request.LengthSeconds:F3}");
+    }
+
+    private async void PresentBackgroundMusic(KotorBackgroundMusicRequested request)
+    {
+        var generation = ++areaMusicRequestGeneration;
+        if (request.DelaySeconds > 0)
+        {
+            var timer = GetTree().CreateTimer(request.DelaySeconds);
+            await ToSignal(timer, SceneTreeTimer.SignalName.Timeout);
+            if (generation != areaMusicRequestGeneration)
+                return;
+        }
+        if (request.Playing)
+        {
+            if (areaMusic.Stream is null)
+                throw new InvalidOperationException(
+                    "Authored background-music request has no loaded area stream");
+            areaMusic.Play();
+        }
+        else
+        {
+            areaMusic.Stop();
+        }
+        GD.Print($"NIKAMI_AURORA_AREA_MUSIC " +
+                 $"status={(request.Playing ? "playing" : "stopped")} " +
+                 $"resref={currentMusicResref} delay={request.DelaySeconds:F3}");
+    }
+
+    private async void PresentSoundObjectPlay(KotorSoundObjectPlayRequested request)
+    {
+        if (!moduleSoundObjects.TryGetValue(request.Tag, out var sound))
+            throw new InvalidDataException(
+                $"Authored sound object was not materialized: {request.Tag}");
+        if (request.DelaySeconds > 0)
+        {
+            var timer = GetTree().CreateTimer(request.DelaySeconds);
+            await ToSignal(timer, SceneTreeTimer.SignalName.Timeout);
+        }
+        switch (sound.Player)
+        {
+            case AudioStreamPlayer3D spatial:
+                spatial.Play();
+                break;
+            case AudioStreamPlayer flat:
+                flat.Play();
+                break;
+            default:
+                throw new InvalidDataException(
+                    $"Unsupported sound-object player: {request.Tag}");
+        }
+        GD.Print($"NIKAMI_AURORA_SOUND_OBJECT status=playing " +
+                 $"tag={request.Tag} template={sound.Source.Template} " +
+                 $"audio={sound.Source.Audio.Resref} delay={request.DelaySeconds:F3} " +
+                 $"looping={sound.Source.Looping} positional={sound.Source.Positional}");
+    }
+
     private static void PresentExperienceAward(KotorExperienceAwarded experience)
     {
         var contract = experience.Contract;
@@ -734,7 +981,8 @@ public sealed partial class KotorModuleBoot
         {
             GD.Print($"NIKAMI_AURORA_NCS status=executed script={contract.Resref} " +
                      $"kind={contract.KindName} trigger={trigger.TriggerTemplate} " +
-                     $"global={trigger.GlobalName}:{trigger.GlobalValue} " +
+                     $"global={trigger.GlobalName ?? "none"}:" +
+                     $"{trigger.GlobalValue?.ToString() ?? "none"} " +
                      $"actor={trigger.ActorTag} event={trigger.UserEvent} " +
                      $"conversation={trigger.Conversation} starter={trigger.DialogueStarter}");
             return;
@@ -919,6 +1167,203 @@ public sealed partial class KotorModuleBoot
                 beat.MaximumProjectedHeight));
     }
 
+    private void InitializeFirstEncounterCombat()
+    {
+        var encounter = firstEncounter
+            ?? throw new InvalidDataException("First encounter is unavailable at combat handoff");
+        var playerSource = playerCombat
+            ?? throw new InvalidDataException("Player combat source is unavailable");
+        var gameplay = RequireGameplaySimulation().CaptureSnapshot();
+        var definitions = new List<KotorCombatantDefinition>
+        {
+            new(
+                gameplay.PlayerPartyMemberId,
+                0,
+                gameplay.PlayerCurrentVitality,
+                gameplay.PlayerMaximumVitality,
+                playerSource.Defense,
+                playerSource.AttackBonus,
+                0,
+                false,
+                false,
+                ToCombatWeapon(playerSource.Weapon))
+        };
+        definitions.AddRange(encounter.Participants
+            .Where(source => source.Tag.Equals("end_sith2", StringComparison.OrdinalIgnoreCase) ||
+                             source.Tag.Equals("end_sith3", StringComparison.OrdinalIgnoreCase))
+            .Select(source => new KotorCombatantDefinition(
+                source.Tag,
+                1,
+                source.CurrentHitPoints,
+                source.MaxHitPoints,
+                source.Combat.Defense,
+                source.Combat.AttackBonus,
+                source.Combat.ChallengeRating,
+                source.MinimumOneHitPoint,
+                true,
+                ToCombatWeapon(source.Combat.Weapon ?? throw new InvalidDataException(
+                    $"Combat weapon is unavailable: {source.Tag}")))));
+        firstEncounterCombat = new KotorCombatSimulation(
+            definitions,
+            combatExperienceTable ?? throw new InvalidDataException(
+                "Combat XP table is unavailable"));
+        selectedCombatTarget = "end_sith3";
+        GD.Print("NIKAMI_AURORA_COMBAT status=ready " +
+                 $"player={gameplay.PlayerPartyMemberId} target={selectedCombatTarget} " +
+                 "controls=Tab:target,Space:attack");
+    }
+
+    private static KotorCombatWeaponDefinition ToCombatWeapon(
+        CreatureCombatWeaponRecord source)
+    {
+        var damage = new List<KotorDamageComponent>();
+        if (source.BaseDiceCount > 0)
+            damage.Add(new KotorDamageComponent(
+                source.BaseDiceCount, source.BaseDieSides, 0, source.DamageFlags, true));
+        damage.AddRange(source.BonusDamage.Select(component =>
+            new KotorDamageComponent(
+                component.DiceCount,
+                component.DieSides,
+                component.Flat,
+                component.DamageType)));
+        return new KotorCombatWeaponDefinition(
+            source.Resref,
+            source.AttackModifier,
+            source.CriticalThreat,
+            source.CriticalMultiplier,
+            source.Ranged,
+            damage);
+    }
+
+    private void CycleFirstEncounterTarget()
+    {
+        var combat = firstEncounterCombat;
+        if (combat is null) return;
+        var living = combat.CaptureSnapshot().Values
+            .Where(item => !item.IsDead && item.Id.StartsWith("end_sith", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(item => item.Id)
+            .ToArray();
+        if (living.Length == 0) return;
+        var current = Array.FindIndex(living, item =>
+            item.Equals(selectedCombatTarget, StringComparison.OrdinalIgnoreCase));
+        selectedCombatTarget = living[(current + 1 + living.Length) % living.Length];
+        status.Text = $"TARGET: {selectedCombatTarget.ToUpperInvariant()}";
+        GD.Print($"NIKAMI_AURORA_COMBAT status=target target={selectedCombatTarget}");
+    }
+
+    private void ResolveFirstEncounterPlayerTurn()
+    {
+        var combat = firstEncounterCombat;
+        var encounter = firstEncounter;
+        if (combat is null || encounter is null) return;
+        var snapshot = combat.CaptureSnapshot();
+        var playerId = RequireGameplaySimulation().CaptureSnapshot().PlayerPartyMemberId;
+        if (snapshot[playerId].IsDead) return;
+        if (!snapshot.TryGetValue(selectedCombatTarget, out var target) || target.IsDead)
+        {
+            CycleFirstEncounterTarget();
+            snapshot = combat.CaptureSnapshot();
+            if (!snapshot.TryGetValue(selectedCombatTarget, out target) || target.IsDead) return;
+        }
+
+        if (actorModels.TryGetValue(selectedCombatTarget, out var targetModel))
+            FaceModelToward(playerModel!, targetModel.GlobalPosition + Vector3.Up);
+        currentPlayerAnimation = "";
+        PlayPlayerAnimation("c2a1");
+        ResolveFirstEncounterAttack(
+            playerId, selectedCombatTarget,
+            playerCombat!.Weapon);
+
+        snapshot = combat.CaptureSnapshot();
+        if (snapshot.Values.Where(item => item.Id.StartsWith("end_sith", StringComparison.OrdinalIgnoreCase))
+            .All(item => item.IsDead))
+        {
+            firstEncounterCombatReady = false;
+            status.Text = "COMBAT COMPLETE";
+            details.Text = $"Experience: {RequireGameplaySimulation().CaptureSnapshot().PlayerExperience}";
+            GD.Print("NIKAMI_AURORA_COMBAT status=complete hostiles=0");
+            if (launchEnvironment.Get("NIKAMI_AURORA_TEST_FIRST_COMBAT") == "1")
+                RequestCleanExit(0);
+            return;
+        }
+
+        foreach (var hostile in snapshot.Values.Where(item =>
+                     !item.IsDead && item.Id.StartsWith("end_sith", StringComparison.OrdinalIgnoreCase)))
+        {
+            var source = encounter.Participants.Single(item =>
+                item.Tag.Equals(hostile.Id, StringComparison.OrdinalIgnoreCase));
+            PlayActorAnimation(hostile.Id, "b7a1", false);
+            FireEncounterBlaster(hostile.Id, "PLAYER");
+            ResolveFirstEncounterAttack(
+                hostile.Id, playerId,
+                source.Combat.Weapon!);
+            if (combat.CaptureSnapshot()[playerId].IsDead)
+            {
+                firstEncounterCombatReady = false;
+                currentPlayerAnimation = "";
+                PlayPlayerAnimation("die");
+                status.Text = "PLAYER DEFEATED";
+                break;
+            }
+        }
+    }
+
+    private void ResolveFirstEncounterAttack(
+        string attackerId,
+        string targetId,
+        CreatureCombatWeaponRecord weapon)
+    {
+        var combat = firstEncounterCombat
+            ?? throw new InvalidOperationException("First encounter combat is not active");
+        combat.QueueAttack(attackerId, targetId);
+        var rolls = new List<int>();
+        if (weapon.BaseDiceCount > 0)
+            for (var index = 0; index < weapon.BaseDiceCount; index++)
+                rolls.Add(combatRandom.Next(1, weapon.BaseDieSides + 1));
+        foreach (var component in weapon.BonusDamage)
+            for (var index = 0; index < component.DiceCount; index++)
+                rolls.Add(combatRandom.Next(1, component.DieSides + 1));
+        var playerLevel = RequireGameplaySimulation().CaptureSnapshot().PlayerLevel;
+        var transition = combat.ResolveNextAttack(
+            playerLevel, combatRandom.Next(1, 21), rolls);
+        foreach (var combatEvent in transition.Events)
+        {
+            switch (combatEvent)
+            {
+                case KotorAttackResolved resolved:
+                    GD.Print("NIKAMI_AURORA_COMBAT status=resolved " +
+                             $"attacker={resolved.AttackerId} target={resolved.TargetId} " +
+                             $"roll={resolved.D20} total={resolved.AttackTotal} " +
+                             $"defense={resolved.TargetDefense} hit={resolved.Hit} " +
+                             $"critical={resolved.Critical} damage={resolved.Damage} " +
+                             $"hp={resolved.HitPointsBefore}->{resolved.HitPointsAfter}");
+                    if (!resolved.Hit) break;
+                    if (resolved.TargetId.Equals(
+                            RequireGameplaySimulation().CaptureSnapshot().PlayerPartyMemberId,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        ApplyGameplayTransition(RequireGameplaySimulation().ApplyCombatDamage(
+                            resolved.AttackerId, resolved.Damage));
+                        currentPlayerAnimation = "";
+                        PlayPlayerAnimation("g2d1");
+                    }
+                    else
+                    {
+                        PlayActorAnimation(
+                            resolved.TargetId,
+                            resolved.HitPointsAfter == 0 ? "die" : "g5d1",
+                            false);
+                    }
+                    break;
+                case KotorCombatantDied died when died.ExperienceReward > 0:
+                    ApplyGameplayTransition(RequireGameplaySimulation().AwardCombatExperience(
+                        died.Id, died.ExperienceReward));
+                    break;
+            }
+        }
+    }
+
     private void FinishFirstEncounter()
     {
         if (actorModels.TryGetValue("end_sith2", out var sith2))
@@ -941,6 +1386,7 @@ public sealed partial class KotorModuleBoot
             new CinematicFramingRequirements(0.02f, 0.12f, 0.72f),
             camera);
         currentDialogueNodeKey = "encounter:gameplay-ready";
+        InitializeFirstEncounterCombat();
         firstEncounterCombatReady = true;
         GD.Print("NIKAMI_AURORA_FIRST_ENCOUNTER status=gameplay-ready " +
                  "camera=third-person input=released music=battle " +
@@ -1289,6 +1735,7 @@ public sealed partial class KotorModuleBoot
                             : 0
                     };
                     lightmapped.SetShaderParameter("albedo_texture", source.AlbedoTexture);
+                    lightmapped.SetShaderParameter("albedo_tint", source.AlbedoColor);
                     lightmapped.SetShaderParameter("lightmap_texture", source.EmissionTexture);
                     lightmapped.SetShaderParameter("dynamic_ambient", new Vector3(
                         dynamicAmbient.R, dynamicAmbient.G, dynamicAmbient.B));
@@ -1547,14 +1994,19 @@ public sealed partial class KotorModuleBoot
             foreach (var triangle in room.WalkmeshTriangles)
             {
                 if (triangle.Count != 3) continue;
+                var nativeA = ToNumericsWithOffset(triangle[0], room.Position);
+                var nativeB = ToNumericsWithOffset(triangle[1], room.Position);
+                var nativeC = ToNumericsWithOffset(triangle[2], room.Position);
+                var denominator = (nativeB.Y - nativeC.Y) * (nativeA.X - nativeC.X) +
+                                  (nativeC.X - nativeB.X) * (nativeA.Y - nativeC.Y);
+                if (!float.IsFinite(denominator) || MathF.Abs(denominator) < 0.000001f)
+                    continue;
                 navigationTriangles.Add(new NavigationTriangle(
                     ToGodotWithOffset(triangle[0], room.Position),
                     ToGodotWithOffset(triangle[1], room.Position),
                     ToGodotWithOffset(triangle[2], room.Position)));
                 profileTriangles.Add(new KotorNavigationTriangle(
-                    ToNumericsWithOffset(triangle[0], room.Position),
-                    ToNumericsWithOffset(triangle[1], room.Position),
-                    ToNumericsWithOffset(triangle[2], room.Position)));
+                    nativeA, nativeB, nativeC));
             }
         }
         movementSimulation = new KotorMovementSimulation(

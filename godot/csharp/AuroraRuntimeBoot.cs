@@ -1,6 +1,7 @@
 using Godot;
 using Nikami.Aurora.Profiles.DragonAgeOrigins;
 using Nikami.Aurora.Profiles.Kotor;
+using Nikami.Aurora.Profiles.Kotor2;
 
 namespace Nikami.Aurora.GodotRuntime;
 
@@ -18,6 +19,7 @@ public sealed partial class AuroraRuntimeBoot : Node
         var scenePath = profile switch
         {
             KotorGameProfile.ProfileId => "res://kotor_main.tscn",
+            Kotor2GameProfile.ProfileId => "res://kotor_main.tscn",
             DragonAgeOriginsGameProfile.ProfileId => "res://dao_boot.tscn",
             _ => throw new InvalidDataException(
                 $"Unsupported Nikami Aurora profile: {profile}")

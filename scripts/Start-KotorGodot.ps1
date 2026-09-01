@@ -1,12 +1,16 @@
 [CmdletBinding()]
 param(
     [string]$Manifest,
+    [ValidateSet('kotor', 'kotor2')]
+    [string]$Profile = 'kotor',
     [ValidatePattern('^[A-Za-z0-9_]{1,16}$')]
     [string]$Module = "end_m01aa",
     [string]$Godot,
     [string]$CapturePath,
     [string]$CaptureDialogueNode,
     [string]$CaptureCreature,
+    [string]$CaptureCreatureEffectAnimation,
+    [string]$CaptureCreatureEffectAnchor,
     [int]$CaptureFrame = 0,
     [int]$DialogueChoice = -1,
     [double]$TestMoveMeters = 0,
@@ -19,6 +23,8 @@ param(
     [switch]$TestFirstCorridorTrigger,
     [switch]$TestFirstCorridorTransmission,
     [switch]$TestFirstEncounter,
+
+    [switch]$TestFirstCombat,
     [switch]$ShowcaseRoute,
     [switch]$GenericWorldShowcase,
     [switch]$ExitOnShowcaseComplete,
@@ -83,16 +89,21 @@ $hadXrRuntimeJson = Test-Path Env:XR_RUNTIME_JSON
 $previousXrRuntimeJson = $env:XR_RUNTIME_JSON
 if ([string]::IsNullOrWhiteSpace($Manifest)) {
     $Module = $Module.ToLowerInvariant()
-    $Manifest = Join-Path $repo "local\kotor\$Module\module-manifest.json"
+    $Manifest = Join-Path $repo "local\$Profile\$Module\module-manifest.json"
 }
 if (-not (Test-Path -LiteralPath $Manifest -PathType Leaf)) {
     throw "Module manifest not found: $Manifest. Run scripts/Import-KotorModule.ps1 first."
 }
 $manifestContract = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
 if ($manifestContract.schema -ne 'nikami-aurora-kotor-module-v1' -or
-    $manifestContract.profileId -ne 'kotor') {
-    throw "Unsupported KOTOR module manifest contract: $Manifest"
+    $manifestContract.profileId -notin @('kotor', 'kotor2')) {
+    throw "Unsupported Odyssey module manifest contract: $Manifest"
 }
+if ($PSBoundParameters.ContainsKey('Profile') -and
+    $Profile -ne [string]$manifestContract.profileId) {
+    throw "Requested profile $Profile does not match manifest profile $($manifestContract.profileId)."
+}
+$Profile = [string]$manifestContract.profileId
 $manifestModule = [string]$manifestContract.module
 if ($manifestModule -notmatch '^[A-Za-z0-9_]{1,16}$') {
     throw "KOTOR manifest has an invalid module identifier: $manifestModule"
@@ -120,10 +131,9 @@ if ([string]$manifestContract.missingSourceAssetPolicy -ne
 $endarOnlyRequested =
     $OpenFirstDoor -or $OpenFirstLocker -or $EquipOpeningGear -or
     $TestTutorialXpChain -or $TestFirstCorridorTrigger -or
-    $TestFirstCorridorTransmission -or $TestFirstEncounter -or
+    $TestFirstCorridorTransmission -or $TestFirstEncounter -or $TestFirstCombat -or
     $ShowcaseRoute -or $ExitOnShowcaseComplete -or $LipSyncCloseup -or
-    $EquipmentCloseup -or $ChairCloseup -or $InventoryScreen -or
-    $EquipmentScreen -or $TestEquipmentMenuTransaction -or
+    $EquipmentCloseup -or $ChairCloseup -or $TestEquipmentMenuTransaction -or
     $TestFlatMenuNavigation -or $TestInventoryQuestFilter -or
     $TestInventoryScroll -or $TestInventoryPartySelection -or
     $TestXrDialogueControls
@@ -155,9 +165,11 @@ if ([string]::IsNullOrWhiteSpace($Godot)) {
 $resolvedMoviePath = $null
 if (-not [string]::IsNullOrWhiteSpace($MoviePath)) {
     if (-not $ShowcaseRoute -and -not $TestFirstEncounter -and
-        -not $GenericWorldShowcase) {
-        throw "-MoviePath requires -ShowcaseRoute, -GenericWorldShowcase, or " +
-              "-TestFirstEncounter."
+        -not $GenericWorldShowcase -and -not $CaptureAndExit -and
+        [string]::IsNullOrWhiteSpace($CaptureCreatureEffectAnimation)) {
+        throw "-MoviePath requires a bounded exit route such as -CaptureAndExit, " +
+              "-ShowcaseRoute, -GenericWorldShowcase, -TestFirstEncounter, or " +
+              "-CaptureCreatureEffectAnimation."
     }
     if ($OpenXR -and -not $OpenXRSimulator) {
         throw "-MoviePath supports desktop or -OpenXRSimulator recording; " +
@@ -186,7 +198,7 @@ if ($redirectGodotOutput) {
     $resolvedGodotStderrPath = [IO.Path]::GetFullPath($GodotStderrPath)
 }
 
-$env:NIKAMI_AURORA_PROFILE = 'kotor'
+$env:NIKAMI_AURORA_PROFILE = $Profile
 $env:NIKAMI_AURORA_MODULE_MANIFEST = (Resolve-Path -LiteralPath $Manifest).Path
 if (-not [string]::IsNullOrWhiteSpace($CapturePath)) {
     $env:NIKAMI_AURORA_CAPTURE = [IO.Path]::GetFullPath($CapturePath)
@@ -201,6 +213,26 @@ if (-not [string]::IsNullOrWhiteSpace($CaptureCreature)) {
         throw "Capture creature identity is invalid: $CaptureCreature"
     }
     $env:NIKAMI_AURORA_CAPTURE_CREATURE = $CaptureCreature.ToLowerInvariant()
+}
+if (-not [string]::IsNullOrWhiteSpace($CaptureCreatureEffectAnimation)) {
+    if ([string]::IsNullOrWhiteSpace($CaptureCreature)) {
+        throw '-CaptureCreatureEffectAnimation requires -CaptureCreature.'
+    }
+    if ($CaptureCreatureEffectAnimation -notmatch '^[A-Za-z0-9_]{1,32}$') {
+        throw "Capture creature effect animation is invalid: $CaptureCreatureEffectAnimation"
+    }
+    $env:NIKAMI_AURORA_CAPTURE_CREATURE_EFFECT_ANIMATION =
+        $CaptureCreatureEffectAnimation.ToLowerInvariant()
+}
+if (-not [string]::IsNullOrWhiteSpace($CaptureCreatureEffectAnchor)) {
+    if ([string]::IsNullOrWhiteSpace($CaptureCreatureEffectAnimation)) {
+        throw '-CaptureCreatureEffectAnchor requires -CaptureCreatureEffectAnimation.'
+    }
+    if ($CaptureCreatureEffectAnchor -notmatch '^[A-Za-z0-9_:.-]{1,64}$') {
+        throw "Capture creature effect anchor is invalid: $CaptureCreatureEffectAnchor"
+    }
+    $env:NIKAMI_AURORA_CAPTURE_CREATURE_EFFECT_ANCHOR =
+        $CaptureCreatureEffectAnchor.ToLowerInvariant()
 }
 if ($CaptureAndExit) {
     $env:NIKAMI_AURORA_CAPTURE_EXIT = "1"
@@ -243,6 +275,10 @@ if ($TestFirstEncounter) {
 }
 if ($ShowcaseRoute) {
     $env:NIKAMI_AURORA_SHOWCASE_ROUTE = "1"
+}
+if ($TestFirstCombat) {
+    $env:NIKAMI_AURORA_TEST_FIRST_COMBAT = "1"
+    $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
 }
 if ($GenericWorldShowcase) {
     $env:NIKAMI_AURORA_GENERIC_WORLD_SHOWCASE = "1"
@@ -336,7 +372,9 @@ if ($InventoryScreen) {
         throw "-InventoryScreen is a flat presentation gate."
     }
     $env:NIKAMI_AURORA_TEST_INVENTORY_SCREEN = "1"
-    $env:NIKAMI_AURORA_TEST_OPEN_LOCKER = "1"
+    if ($isEndarModule) {
+        $env:NIKAMI_AURORA_TEST_OPEN_LOCKER = "1"
+    }
     $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
 }
 if ($TestInventoryQuestFilter) {
@@ -362,7 +400,9 @@ if ($EquipmentScreen) {
         throw "-EquipmentScreen is a flat presentation gate."
     }
     $env:NIKAMI_AURORA_TEST_EQUIPMENT_SCREEN = "1"
-    $env:NIKAMI_AURORA_TEST_OPEN_LOCKER = "1"
+    if ($isEndarModule) {
+        $env:NIKAMI_AURORA_TEST_OPEN_LOCKER = "1"
+    }
     $env:NIKAMI_AURORA_SKIP_OPENING_DIALOGUE = "1"
 }
 if ($TestEquipmentMenuTransaction) {
@@ -487,8 +527,8 @@ try {
         }
         $requiredSourceTransfer =
             'NIKAMI_AURORA_LIGHTMAP_TRANSFER status=ready tier=source ' +
-            'formula=surface-times-clamped-lightmap diffuse_weight=0.00 ' +
-            'baked_weight=1.00 dynamic_ambient_weight=0.00 dynamic_lights=0 ' +
+            'formula=surface-times-max-clamped-lightmap-authored-ambient diffuse_weight=0.00 ' +
+            'baked_weight=1.00 dynamic_ambient_weight=1.00 dynamic_lights=0 ' +
             'double_light=0'
         if ($sourceEvidence.IndexOf(
                 $requiredSourceTransfer, [StringComparison]::Ordinal) -lt 0) {
@@ -503,6 +543,10 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_FRAME -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_DIALOGUE_NODE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_CREATURE -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_CREATURE_EFFECT_ANIMATION `
+        -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_CAPTURE_CREATURE_EFFECT_ANCHOR `
+        -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_CAPTURE_EXIT -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_DIALOGUE_CHOICE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_MOVE_METERS -ErrorAction SilentlyContinue
@@ -515,6 +559,7 @@ finally {
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRIGGER -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRANSMISSION -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_ENCOUNTER -ErrorAction SilentlyContinue
+    Remove-Item Env:NIKAMI_AURORA_TEST_FIRST_COMBAT -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SHOWCASE_ROUTE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_GENERIC_WORLD_SHOWCASE -ErrorAction SilentlyContinue
     Remove-Item Env:NIKAMI_AURORA_SHOWCASE_EXIT_ON_COMPLETE -ErrorAction SilentlyContinue

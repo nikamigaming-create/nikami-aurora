@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Nikami.Aurora.Core;
 using Nikami.Aurora.Profiles.DragonAgeOrigins;
 using Nikami.Aurora.Profiles.Kotor;
+using Nikami.Aurora.Profiles.Kotor2;
 
 namespace Nikami.Aurora.Cli;
 
@@ -11,6 +12,7 @@ internal static class Program
     private static readonly GameProfileRegistry Registry = new(new IGameProfile[]
     {
         new KotorGameProfile(),
+        new Kotor2GameProfile(),
         new DragonAgeOriginsGameProfile()
     });
 

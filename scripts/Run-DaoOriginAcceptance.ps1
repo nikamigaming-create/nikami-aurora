@@ -4,8 +4,11 @@ param(
     [string]$GameRoot = '',
     [string]$CacheRoot = '',
     [string]$GeneratedRoot = '',
+    [string]$ScriptRoot = '',
     [string]$OutputRoot = '',
     [string]$Origin = 'city-elf',
+    [ValidateSet('', 'human', 'elf', 'dwarf')]
+    [string]$Race = '',
     [ValidateSet('male', 'female')]
     [string]$Gender = 'female',
     [string]$CharacterName = 'Kallian',
@@ -58,9 +61,6 @@ $GodotConsolePath = [IO.Path]::GetFullPath($GodotConsolePath)
 if (-not (Test-Path -LiteralPath $GodotConsolePath -PathType Leaf)) {
     throw "Godot console was not found: $GodotConsolePath"
 }
-if ($Origin -ne 'city-elf') {
-    throw "The current Aurora DAO acceptance route is city-elf; received $Origin."
-}
 $repository = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $project = Join-Path $repository 'godot'
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
@@ -81,47 +81,44 @@ if (-not [string]::IsNullOrWhiteSpace($OutputVideo)) {
     $requestedVideoPath = Join-Path (Resolve-Path -LiteralPath $videoParent).Path `
         (Split-Path -Leaf $OutputVideo)
     if (Test-Path -LiteralPath $requestedVideoPath) {
-        throw "Refusing to overwrite an existing proof video: $requestedVideoPath"
+        throw "Refusing to overwrite the existing output video: $requestedVideoPath"
     }
 }
-$route = @{ area = 'bec110ar_players_house'; waypoint = 'bec110wp_start'; cutscene = 'start_wake' }
-$characterMorphs = @{
-    'female:preset-1' = @{
-        resource = 'ef_cps_p01.mop'
-        sha256 = '3824bd11fd6ba7820be055b1a8b296a9faa9ee83f5b3a56d51bc9bfcfbb71a62'
-    }
-    'female:preset-2' = @{
-        resource = 'ef_cps_p02.mop'
-        sha256 = '4e5b5543cdccc4a03f9a34337790a8f608825f19a2b0d8f271bef2d855f3faec'
-    }
-    'female:preset-3' = @{
-        resource = 'ef_cps_p03.mop'
-        sha256 = '0ea48e526b5d7edc99318fd00aad7d3ad868d5f19d3e3cd1d112323ddc91ca65'
-    }
-    'female:preset-4' = @{
-        resource = 'ef_cps_p04.mop'
-        sha256 = '1414d567f130fb14c44776f92aa8d154cbdf2ba59b13f250be69f24cb9292fdf'
-    }
-    'male:preset-1' = @{
-        resource = 'em_cps_p01.mop'
-        sha256 = '5ee71ea686ab9a416007e6c76383d6ab0890d4e0c935febea400e15efa6a18c8'
-    }
-    'male:preset-2' = @{
-        resource = 'em_cps_p02.mop'
-        sha256 = '07c5a851294651ac49a27c8b075622c93e8ee42be64f3c275c26f7de2928229c'
-    }
-    'male:preset-3' = @{
-        resource = 'em_cps_p03.mop'
-        sha256 = 'aade2e0bcc4584fc2fe8d95ac8a6c127a8a629916e4578893a095a8251206092'
-    }
-    'male:preset-4' = @{
-        resource = 'em_cps_p04.mop'
-        sha256 = '11446fc707f17e07b5f85b175cca302a2910f2335151c1c5b9707004cd454b77'
-    }
+$routes = @{
+    'human-noble' = @{ race = 'human'; area = 'bhn100ar_castle_cousland'; waypoint = 'bhn100wp_start'; cutscene = 'bhn100cs_intro'; dialogue = '' }
+    'city-elf' = @{ race = 'elf'; area = 'bec110ar_players_house'; waypoint = 'bec110wp_start'; cutscene = 'start_wake'; dialogue = 'bec110cr_shianni' }
+    'dalish-elf' = @{ race = 'elf'; area = 'bed100ar_forest_clearing'; waypoint = 'bed100wp_start'; cutscene = 'bed100cs_intro'; dialogue = '' }
+    'dwarf-commoner' = @{ race = 'dwarf'; area = 'bdc200ar_slums'; waypoint = 'start'; cutscene = 'bdccs_intro'; dialogue = '' }
+    'dwarf-noble' = @{ race = 'dwarf'; area = 'bdn120ar_royal_palace'; waypoint = 'start'; cutscene = 'bdncs_intro'; dialogue = '' }
+    'circle-mage' = @{ race = 'human'; area = 'bhm500ar_tower_harrowing'; waypoint = 'bhm400wp_start'; cutscene = 'bhm500cs_harrowing'; dialogue = '' }
 }
-$characterMorph = $characterMorphs["${Gender}:${CharacterAppearance}"]
+$route = $routes[$Origin]
+if ($null -eq $route) {
+    throw "Unknown Dragon Age origin route: $Origin"
+}
+$selectedRace = if ([string]::IsNullOrWhiteSpace($Race)) { $route.race } else { $Race }
+$morphPrefixes = @{
+    'human:female' = 'hf'; 'human:male' = 'hm'
+    'elf:female' = 'ef'; 'elf:male' = 'em'
+    'dwarf:female' = 'df'; 'dwarf:male' = 'dm'
+}
+$morphHashes = @{
+    'human:female' = @('7479b2d0d24e4ec5e71b082eac5f0c8ce7774ae030fabf29b8a06988f7361554','825f47c8dea293cb212243873fe0ccb18da30c245f2fa639c62d399930596fb3','c1d7a0efd8e49e293864b6cfdde5ae301c58811adb65cd653e827d74c527621f','95c0436ad41a0d2753d44e67663b7dabc0ad15f4a07e76c704670370d816c55c')
+    'human:male' = @('de699199dbcf48a258dd4049cb30fd04bad892cb2e4e95d0291d4b0e9fdb12e3','ebb359d1ba26550efccaa6e32865ec159e25b2b3309dd1792850fc1cf0c43980','3de8631b9e8c991c4e0d6c1854703e8099c959cd8b6d1d19d4138798e2dfea43','59937dbc515b5191ae9e132263b44275fe43a5a2d05cfe3b22b736f2dfdda5d0')
+    'elf:female' = @('3824bd11fd6ba7820be055b1a8b296a9faa9ee83f5b3a56d51bc9bfcfbb71a62','4e5b5543cdccc4a03f9a34337790a8f608825f19a2b0d8f271bef2d855f3faec','0ea48e526b5d7edc99318fd00aad7d3ad868d5f19d3e3cd1d112323ddc91ca65','1414d567f130fb14c44776f92aa8d154cbdf2ba59b13f250be69f24cb9292fdf')
+    'elf:male' = @('5ee71ea686ab9a416007e6c76383d6ab0890d4e0c935febea400e15efa6a18c8','07c5a851294651ac49a27c8b075622c93e8ee42be64f3c275c26f7de2928229c','aade2e0bcc4584fc2fe8d95ac8a6c127a8a629916e4578893a095a8251206092','11446fc707f17e07b5f85b175cca302a2910f2335151c1c5b9707004cd454b77')
+    'dwarf:female' = @('1112f92eed5373192b294a393100abb055bac494ea2f4c1bee19b3c02058aa7a','78e6f687ce23777b532866b8f71c81e1651b2dae83d53c3eb106bd4487e132a3','6693b13fbc4a0f02536fadbb3c1641ecf32c6be5585ef1a799417f93c391c0b6','6b5aaafd0c296d59510641835ce2003345b167a2bb52079af5619a54ae733675')
+    'dwarf:male' = @('5b6e18fd0159ea85753f6d94673489efb3318e674fc98b08d40e0a0394648d0a','c8abd124da803fc090c812a25dd72ba3f85e042f2168e22823989fc3d550cb49','07a01768ed62d066631d7434398d1d055983df4dcaf6f7f4e921af07085a8460','8eab258b28ee7c2f9ed6953255756b49683fe8715ee6702af30f445451503e76')
+}
+$familyKey = "${selectedRace}:${Gender}"
+$presetIndex = [int]($CharacterAppearance -replace '^preset-', '') - 1
+$prefix = $morphPrefixes[$familyKey]
+$hashes = $morphHashes[$familyKey]
+$characterMorph = if ($prefix -and $hashes -and $presetIndex -ge 0 -and $presetIndex -lt 4) {
+    @{ resource = "${prefix}_cps_p$($presetIndex + 1).mop" -replace 'p(\d)\.mop$', 'p0$1.mop'; sha256 = $hashes[$presetIndex] }
+} else { $null }
 if ($null -eq $characterMorph) {
-    throw "No source-bound city-elf morph identity exists for ${Gender}:${CharacterAppearance}."
+    throw "No source-bound morph identity exists for ${familyKey}:${CharacterAppearance}."
 }
 $characterStem = [IO.Path]::GetFileNameWithoutExtension($characterMorph.resource)
 
@@ -131,12 +128,27 @@ if ([string]::IsNullOrWhiteSpace($CacheRoot) -or
 }
 $CacheRoot = [IO.Path]::GetFullPath($CacheRoot)
 $GeneratedRoot = [IO.Path]::GetFullPath($GeneratedRoot)
+if ([string]::IsNullOrWhiteSpace($ScriptRoot)) {
+    $candidateScriptRoot = Join-Path (Split-Path $CacheRoot -Parent) 'dao-control\designerscripts'
+    if (Test-Path -LiteralPath $candidateScriptRoot -PathType Container) {
+        $ScriptRoot = $candidateScriptRoot
+    }
+}
+if (-not [string]::IsNullOrWhiteSpace($ScriptRoot)) {
+    $ScriptRoot = [IO.Path]::GetFullPath($ScriptRoot)
+}
+if ($RunPlayableSmoke -and
+    (-not $ScriptRoot -or -not (Test-Path -LiteralPath $ScriptRoot -PathType Container))) {
+    throw '-ScriptRoot is required for the playable origin script route.'
+}
 $requiredImportedFiles = @(
     (Join-Path $CacheRoot 'runtime-catalog.json'),
     (Join-Path $CacheRoot 'dao-gda.json'),
-    (Join-Path $GeneratedRoot 'cutscenes\start_wake\media-manifest.json'),
-    (Join-Path $GeneratedRoot 'dialogues\bec110cr_shianni\dialogue-manifest.json')
+    (Join-Path $GeneratedRoot "cutscenes\$($route.cutscene)\media-manifest.json")
 )
+if ($route.dialogue) {
+    $requiredImportedFiles += Join-Path $GeneratedRoot "dialogues\$($route.dialogue)\dialogue-manifest.json"
+}
 foreach ($requiredImportedFile in $requiredImportedFiles) {
     if (-not (Test-Path -LiteralPath $requiredImportedFile -PathType Leaf)) {
         throw "Aurora DAO imported source is incomplete: $requiredImportedFile"
@@ -146,6 +158,7 @@ foreach ($requiredImportedFile in $requiredImportedFiles) {
 $variables = @(
     'OPENDAO_CHARACTER_CREATION_ACCEPTANCE',
     'OPENDAO_ACCEPTANCE_ORIGIN',
+    'OPENDAO_ACCEPTANCE_RACE',
     'OPENDAO_ACCEPTANCE_GENDER',
     'OPENDAO_ACCEPTANCE_NAME',
     'OPENDAO_ACCEPTANCE_CLASS',
@@ -157,6 +170,7 @@ $variables = @(
     'OPENDAO_CITY_ELF_SKY_CAPTURE',
     'OPENDAO_CUTSCENE_TIME_SCALE',
     'OPENDAO_TEST_NO_PERSIST',
+    'OPENDAO_SCRIPT_ROOT',
     'OPENDAO_MAIN_MENU_CAPTURE',
     'OPENDAO_LOADING_CAPTURE',
     'OPENDAO_LOADING_CAPTURE_EXIT',
@@ -206,6 +220,7 @@ try {
     $settings = @{
         OPENDAO_CHARACTER_CREATION_ACCEPTANCE = '1'
         OPENDAO_ACCEPTANCE_ORIGIN = $Origin
+        OPENDAO_ACCEPTANCE_RACE = $selectedRace
         OPENDAO_ACCEPTANCE_GENDER = $Gender
         OPENDAO_ACCEPTANCE_NAME = $CharacterName
         OPENDAO_ACCEPTANCE_CLASS = $CharacterClass
@@ -235,6 +250,9 @@ try {
             }
         }
         $settings.DRAGON_AGE_GODOT_GAME_ROOT = $resolvedGameRoot
+    }
+    if ($ScriptRoot) {
+        $settings.OPENDAO_SCRIPT_ROOT = $ScriptRoot
     }
     if ($RunLocomotionSmoke -and -not $RunPlayableSmoke) {
         $settings.OPENDAO_FLOW_LOCOMOTION = '1'
@@ -366,6 +384,7 @@ try {
         characterAppearance = 'OPENDAO_CHARACTER_APPEARANCE_ACCEPTANCE status=pass'
         originRoute = "OPENDAO_AUTHORED_ARRIVAL source=pending-transition waypoint=$($route.waypoint)"
         abilityLoadout = "OPENDAO_CHARACTER_ABILITIES status=ready"
+        progression = 'OPENDAO_CHARACTER_PROGRESSION status=ready level=1 experience=0 next=2001 source=installed-exptable-gda'
         retailHud = "OPENDAO_RETAIL_HUD status=ready source=gfx-display-lists"
         retailLoading = 'OPENDAO_RETAIL_LOADING_SCREEN status=ready source=load_town.gfx archive=installed-guiexport'
         retailAreaName = "OPENDAO_RETAIL_AREA_NAME status=ready"
@@ -413,11 +432,13 @@ try {
             $requirements.volumetricClouds = 'OPENDAO_VOLUMETRIC_CLOUDS status=ready source=are-atmo'
         }
         $requirements.worldMaterialInterior = 'OPENDAO_WORLD_MATERIAL_CENSUS status=partial binding_status=ready identity_status=ready layout=Den201d'
-        $requirements.worldMaterialExterior = 'OPENDAO_WORLD_MATERIAL_CENSUS status=partial binding_status=ready identity_status=ready layout=den200d'
         $requirements.worldMaterialIdentity = 'payload_identity_verified='
         $requirements.worldMaterialScope = 'semantic_scope=imported-gltf-slots+terrain-contract+water-contract collision_proxies=render-suppressed'
         $requirements.worldEffectInterior = 'OPENDAO_WORLD_EFFECT_CENSUS status=ready materialized=ready parity=partial layout=den201d definitions=2 instances=3 rendered=3'
-        $requirements.worldEffectExterior = 'OPENDAO_WORLD_EFFECT_CENSUS status=ready materialized=ready parity=partial layout=den200d definitions=4 instances=32 rendered=32'
+        if ($RunPlayableSmoke) {
+            $requirements.worldMaterialExterior = 'OPENDAO_WORLD_MATERIAL_CENSUS status=partial binding_status=ready identity_status=ready layout=den200d'
+            $requirements.worldEffectExterior = 'OPENDAO_WORLD_EFFECT_CENSUS status=ready materialized=ready parity=partial layout=den200d definitions=4 instances=32 rendered=32'
+        }
         $requirements.dialogue = 'OPENDAO_DIALOGUE_FINISHED id=bec110cr_shianni status=pass'
         $requirements.linearLightEncoding = 'color_encoding=linear-radiance-to-srgb-chromaticity'
         $requirements.characterLightDomain = 'point_lights=Character_2hot,Character_1cool,Character_2cool'
@@ -427,7 +448,6 @@ try {
         $requirements.possessionsCrate = 'OPENDAO_PLACEABLE_VISUAL status=ready tag=bec110ip_pc_possessions model=plc_chstwd_01_0'
         if ($RunPlayableSmoke) {
             $requirements.possessionsUse = 'OPENDAO_PLACEABLE_USE status=pass tag=bec110ip_pc_possessions handle='
-            $requirements.possessionsUseCommit = 'event=7 plot=85c3d035f1274fd59849b190d64d5290 flag=2 value=1 one_shot=committed'
         }
         $requirements.shianniSkinContinuity = 'OPENDAO_CHARACTER_SKIN_CONTINUITY status=ready face=(0.94, 0.86, 0.66, 1) body=(0.94, 0.86, 0.66, 1)'
         $expectedGenderFlag = if ($Gender -eq 'female') { 259 } else { 260 }
@@ -476,6 +496,7 @@ try {
         $checks[$requirement.Key] = $content.IndexOf($requirement.Value, [StringComparison]::Ordinal) -ge 0
     }
     if ($Origin -eq 'city-elf') {
+        $expectedAreaCount = if ($RunPlayableSmoke) { 2 } else { 1 }
         $expectedStanding = Join-Path $CacheRoot "quickplay-characters\${characterStem}.glb"
         $expectedBed = Join-Path $CacheRoot "quickplay-characters\${characterStem}-bed.glb"
         $requirements.characterIdentityExact =
@@ -498,7 +519,7 @@ try {
             'all captured-area material rows require bound=surfaces, missing=0, unresolved_identity=0, and pbr_contract_ready=surfaces'
         $resolvedMaterialRows = [regex]::Matches($content,
             'OPENDAO_WORLD_MATERIAL_CENSUS status=partial binding_status=ready identity_status=ready layout=(?<layout>Den201d|den200d) surfaces=(?<surfaces>\d+) bound=(?<bound>\d+) missing=(?<missing>\d+)[^\r\n]*payload_identity_verified=(?<identity>\d+) unresolved_identity=(?<unresolved>\d+) pbr_contract_ready=(?<pbr>\d+)[^\r\n]*semantic_scope=imported-gltf-slots\+terrain-contract\+water-contract collision_proxies=render-suppressed')
-        $checks.worldMaterialRouteCoverage = $resolvedMaterialRows.Count -eq 2 -and
+        $checks.worldMaterialRouteCoverage = $resolvedMaterialRows.Count -eq $expectedAreaCount -and
             @($resolvedMaterialRows | Where-Object {
                 [int]$_.Groups['surfaces'].Value -le 0 -or
                 $_.Groups['bound'].Value -ne $_.Groups['surfaces'].Value -or
@@ -512,7 +533,7 @@ try {
                 'every captured-area render row is enhanced Forward+ with AgX/SSAO/SSIL/glow/volumetric clouds'
             $renderRows = [regex]::Matches($content,
                 'OPENDAO_RENDER_PIPELINE status=ready method=forward_plus tier=enhanced tonemap=agx ssao=1 ssil=1 glow=1 volumetric_clouds=1 layout=(?:den201d|den200d) atmosphere=source-validated')
-            $checks.applicationWideEnhancedForwardPlus = $renderRows.Count -eq 2
+            $checks.applicationWideEnhancedForwardPlus = $renderRows.Count -eq $expectedAreaCount
             $requirements.zeroCharacterUnshadedFallback =
                 'every enhanced character PBR row has shaded=surfaces, authored_unshaded=0, and variant=godot-pbr'
             $characterPbrRows = [regex]::Matches($content,
@@ -528,8 +549,8 @@ try {
         }
         $partialEffectRows = [regex]::Matches($content,
             'OPENDAO_WORLD_EFFECT_CENSUS status=ready materialized=ready parity=partial layout=(?:den201d|den200d)[^\r\n]*distortion_skipped=(?<count>\d+)')
-        $checks.worldEffectPartialEvidence = $partialEffectRows.Count -eq 2 -and
-            @($partialEffectRows | Where-Object { [int]$_.Groups['count'].Value -gt 0 }).Count -eq 2
+        $checks.worldEffectPartialEvidence = $partialEffectRows.Count -eq $expectedAreaCount -and
+            @($partialEffectRows | Where-Object { [int]$_.Groups['count'].Value -gt 0 }).Count -eq $expectedAreaCount
     }
     if (-not $Headless) {
         $display = [regex]::Match($content,

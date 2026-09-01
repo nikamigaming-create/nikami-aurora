@@ -8,6 +8,11 @@ public enum KotorScriptContractKind
     PlotExperienceIfPlayerExperience,
     DialogueOpenDoor,
     TriggerDialogue,
+    MovePlayerToWaypoint,
+    ModuleStartPresentation,
+    PlaySoundObjectFromParameters,
+    NoOp,
+    RoomAnimationFromParameters,
     GlobalNumberAdd,
     GlobalNumberSet,
     RevealMap
@@ -15,25 +20,25 @@ public enum KotorScriptContractKind
 
 public sealed record KotorTriggerDialogueBehavior(
     string TriggerTemplate,
-    string GlobalName,
-    int GlobalValue,
+    string? GlobalName,
+    int? GlobalValue,
     string ActorTag,
     int UserEvent,
     float InputLockSeconds,
     float DelaySeconds,
     string Conversation,
     int DialogueStarter,
-    string ActorScriptSourceSha256,
-    int ActorScriptInstructionCount,
-    string ConditionScriptSourceSha256,
-    int ConditionScriptInstructionCount)
+    string? ActorScriptSourceSha256,
+    int? ActorScriptInstructionCount,
+    string? ConditionScriptSourceSha256,
+    int? ConditionScriptInstructionCount)
 {
     public KotorTriggerDialogueBehavior Validate()
     {
         if (string.IsNullOrWhiteSpace(TriggerTemplate))
             throw new ArgumentException("Trigger template cannot be empty", nameof(TriggerTemplate));
-        if (string.IsNullOrWhiteSpace(GlobalName))
-            throw new ArgumentException("Global name cannot be empty", nameof(GlobalName));
+        if ((GlobalName is null) != (GlobalValue is null))
+            throw new ArgumentException("Dialogue global name and value must be provided together");
         if (string.IsNullOrWhiteSpace(ActorTag))
             throw new ArgumentException("Dialogue actor tag cannot be empty", nameof(ActorTag));
         if (UserEvent < 0)
@@ -46,10 +51,19 @@ public sealed record KotorTriggerDialogueBehavior(
             throw new ArgumentException("Conversation cannot be empty", nameof(Conversation));
         if (DialogueStarter < 0)
             throw new ArgumentOutOfRangeException(nameof(DialogueStarter));
-        ValidateSource(ActorScriptSourceSha256, ActorScriptInstructionCount, "actor script");
-        ValidateSource(ConditionScriptSourceSha256, ConditionScriptInstructionCount,
-            "dialogue condition");
+        ValidateOptionalSource(
+            ActorScriptSourceSha256, ActorScriptInstructionCount, "actor script");
+        ValidateOptionalSource(
+            ConditionScriptSourceSha256, ConditionScriptInstructionCount, "dialogue condition");
         return this;
+    }
+
+    private static void ValidateOptionalSource(string? sha256, int? instructionCount, string kind)
+    {
+        if ((sha256 is null) != (instructionCount is null))
+            throw new ArgumentException($"{kind} hash and instruction count must be provided together");
+        if (sha256 is not null)
+            ValidateSource(sha256, instructionCount!.Value, kind);
     }
 
     private static void ValidateSource(string sha256, int instructionCount, string kind)
@@ -81,13 +95,23 @@ public sealed record KotorScriptContract(
     bool? ResumeConversation = null,
     KotorTriggerDialogueBehavior? TriggerDialogue = null,
     string? GlobalName = null,
-    int? GlobalValue = null)
+    int? GlobalValue = null,
+    float? FadeInWaitSeconds = null,
+    float? FadeInLengthSeconds = null,
+    float? MusicRestartDelaySeconds = null)
 {
     public string KindName => Kind switch
     {
         KotorScriptContractKind.PlotExperienceIfPlayerExperience => "plot-xp-if-player-xp",
         KotorScriptContractKind.DialogueOpenDoor => "dialogue-open-door",
         KotorScriptContractKind.TriggerDialogue => "trigger-dialogue",
+        KotorScriptContractKind.MovePlayerToWaypoint => "move-player-to-waypoint",
+        KotorScriptContractKind.ModuleStartPresentation => "module-start-presentation",
+        KotorScriptContractKind.PlaySoundObjectFromParameters =>
+            "play-sound-object-from-parameters",
+        KotorScriptContractKind.NoOp => "no-op",
+        KotorScriptContractKind.RoomAnimationFromParameters =>
+            "room-animation-from-parameters",
         KotorScriptContractKind.GlobalNumberAdd => "global-number-add",
         KotorScriptContractKind.GlobalNumberSet => "global-number-set",
         KotorScriptContractKind.RevealMap => "reveal-map",
@@ -133,6 +157,24 @@ public sealed record KotorScriptContract(
                         "Trigger-dialogue behavior cannot be empty", nameof(TriggerDialogue));
                 TriggerDialogue.Validate();
                 break;
+            case KotorScriptContractKind.MovePlayerToWaypoint:
+                if (string.IsNullOrWhiteSpace(MoveTargetTag))
+                    throw new ArgumentException(
+                        "Player-move waypoint cannot be empty", nameof(MoveTargetTag));
+                break;
+            case KotorScriptContractKind.ModuleStartPresentation:
+                if (string.IsNullOrWhiteSpace(MoveTargetTag))
+                    throw new ArgumentException(
+                        "Module-start waypoint cannot be empty", nameof(MoveTargetTag));
+                ValidateDuration(FadeInWaitSeconds, nameof(FadeInWaitSeconds));
+                ValidateDuration(FadeInLengthSeconds, nameof(FadeInLengthSeconds));
+                ValidateDuration(MusicRestartDelaySeconds, nameof(MusicRestartDelaySeconds));
+                break;
+            case KotorScriptContractKind.PlaySoundObjectFromParameters:
+            case KotorScriptContractKind.NoOp:
+                break;
+            case KotorScriptContractKind.RoomAnimationFromParameters:
+                break;
             case KotorScriptContractKind.GlobalNumberAdd:
             case KotorScriptContractKind.GlobalNumberSet:
                 if (string.IsNullOrWhiteSpace(GlobalName))
@@ -148,6 +190,12 @@ public sealed record KotorScriptContract(
                 throw new ArgumentOutOfRangeException(nameof(Kind));
         }
         return this;
+    }
+
+    private static void ValidateDuration(float? value, string name)
+    {
+        if (value is null || !float.IsFinite(value.Value) || value.Value < 0)
+            throw new ArgumentOutOfRangeException(name);
     }
 }
 
@@ -312,6 +360,8 @@ public sealed record KotorPlaceableDefinition(
 
 public sealed record KotorGameplaySnapshot(
     int PlayerExperience,
+    int PlayerLevel,
+    int? NextLevelExperience,
     int PlayerCurrentVitality,
     int PlayerMaximumVitality,
     int PlayerDefense,
@@ -381,11 +431,56 @@ public sealed record KotorDialogueRequested(
     float InputLockSeconds,
     float DelaySeconds) : KotorGameplayEvent;
 
+public sealed record KotorPlayerMoveRequested(string WaypointTag) : KotorGameplayEvent;
+
+public sealed record KotorGlobalFadeRequested(
+    bool FadeIn,
+    float DelaySeconds,
+    float LengthSeconds) : KotorGameplayEvent;
+
+public sealed record KotorBackgroundMusicRequested(
+    bool Playing,
+    float DelaySeconds) : KotorGameplayEvent;
+
+public sealed record KotorSoundObjectPlayRequested(
+    string Tag,
+    float DelaySeconds) : KotorGameplayEvent;
+
+public sealed record KotorScriptInvocation(
+    int Int1,
+    int Int2,
+    int Int3,
+    int Int4,
+    int Int5,
+    string String6);
+
+public sealed record KotorRoomAnimationRequested(
+    string RoomModel,
+    int AnimationIndex) : KotorGameplayEvent;
+
 public sealed record KotorExperienceAwarded(
     KotorScriptContract Contract,
     int Before,
     int Awarded,
     int After) : KotorGameplayEvent;
+
+public sealed record KotorCombatExperienceAwarded(
+    string SourceId,
+    int Before,
+    int Awarded,
+    int After) : KotorGameplayEvent;
+
+public sealed record KotorCombatDamageApplied(
+    string SourceId,
+    string TargetId,
+    int Damage,
+    int VitalityBefore,
+    int VitalityAfter) : KotorGameplayEvent;
+
+public sealed record KotorLevelChanged(
+    int Before,
+    int After,
+    int Experience) : KotorGameplayEvent;
 
 public sealed record KotorScriptExecuted(KotorScriptContract Contract) : KotorGameplayEvent;
 
@@ -418,6 +513,7 @@ public sealed class KotorGameplaySimulation
     private readonly Dictionary<string, int> globalNumbers =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, KotorPartyMemberSnapshot> partyMembers;
+    private readonly KotorExperienceTable experienceTable;
     private readonly string playerPartyMemberId;
     private int playerExperience;
     private readonly int playerCredits;
@@ -429,9 +525,12 @@ public sealed class KotorGameplaySimulation
         IEnumerable<KotorDoorDefinition> doors,
         IEnumerable<KotorPlaceableDefinition> placeables,
         KotorGameplayInitialState initialState,
+        KotorExperienceTable experienceTable,
         IEnumerable<KotorTriggerDefinition>? triggers = null)
     {
         ArgumentNullException.ThrowIfNull(initialState);
+        ArgumentNullException.ThrowIfNull(experienceTable);
+        this.experienceTable = experienceTable;
         var validatedInitialState = initialState.Validate();
         this.scripts = UniqueByKey(scripts.Select(contract => contract.Validate()),
             contract => contract.Resref, "script contract");
@@ -494,6 +593,9 @@ public sealed class KotorGameplaySimulation
         var player = partyMembers[playerPartyMemberId];
         return new KotorGameplaySnapshot(
             playerExperience,
+            experienceTable.ResolveLevel(playerExperience),
+            experienceTable.MinimumExperienceFor(
+                experienceTable.ResolveLevel(playerExperience) + 1),
             player.CurrentVitality,
             player.MaximumVitality,
             player.Defense,
@@ -518,6 +620,41 @@ public sealed class KotorGameplaySimulation
 
     public bool IsPlaceableOpened(string instanceId) =>
         GetState(placeableStates, instanceId, "placeable instance");
+
+    public KotorGameplayTransition AwardCombatExperience(string sourceId, int awarded)
+    {
+        if (string.IsNullOrWhiteSpace(sourceId))
+            throw new ArgumentException("Combat XP source cannot be empty", nameof(sourceId));
+        if (awarded < 0) throw new ArgumentOutOfRangeException(nameof(awarded));
+        var before = CaptureSnapshot();
+        var beforeLevel = before.PlayerLevel;
+        playerExperience = checked(playerExperience + awarded);
+        var events = new List<KotorGameplayEvent>
+        {
+            new KotorCombatExperienceAwarded(
+                sourceId, before.PlayerExperience, awarded, playerExperience)
+        };
+        var afterLevel = experienceTable.ResolveLevel(playerExperience);
+        if (afterLevel != beforeLevel)
+            events.Add(new KotorLevelChanged(beforeLevel, afterLevel, playerExperience));
+        return Complete(before, events);
+    }
+
+    public KotorGameplayTransition ApplyCombatDamage(string sourceId, int damage)
+    {
+        if (string.IsNullOrWhiteSpace(sourceId))
+            throw new ArgumentException("Combat damage source cannot be empty", nameof(sourceId));
+        if (damage < 0) throw new ArgumentOutOfRangeException(nameof(damage));
+        var before = CaptureSnapshot();
+        var target = partyMembers[playerPartyMemberId];
+        var afterVitality = Math.Max(0, checked(target.CurrentVitality - damage));
+        partyMembers[playerPartyMemberId] = target with { CurrentVitality = afterVitality };
+        return Complete(before,
+        [
+            new KotorCombatDamageApplied(
+                sourceId, target.Id, damage, target.CurrentVitality, afterVitality)
+        ]);
+    }
 
     public KotorGameplayTransition SelectPartyMember(string id)
     {
@@ -601,11 +738,14 @@ public sealed class KotorGameplaySimulation
         return Complete(before, events);
     }
 
-    public KotorGameplayTransition ExecuteScript(string? resref)
+    public KotorGameplayTransition ExecuteScript(
+        string? resref,
+        KotorScriptInvocation? invocation = null)
     {
         var before = CaptureSnapshot();
         var events = new List<KotorGameplayEvent>();
-        ExecuteScriptCore(resref, events, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        ExecuteScriptCore(resref, events, new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            invocation);
         return Complete(before, events);
     }
 
@@ -729,7 +869,8 @@ public sealed class KotorGameplaySimulation
     private void ExecuteScriptCore(
         string? resref,
         List<KotorGameplayEvent> events,
-        HashSet<string> executionStack)
+        HashSet<string> executionStack,
+        KotorScriptInvocation? invocation = null)
     {
         if (string.IsNullOrWhiteSpace(resref)) return;
         if (!scripts.TryGetValue(resref, out var contract))
@@ -752,6 +893,46 @@ public sealed class KotorGameplaySimulation
                     break;
                 case KotorScriptContractKind.TriggerDialogue:
                     ExecuteTriggerDialogue(contract, events);
+                    break;
+                case KotorScriptContractKind.MovePlayerToWaypoint:
+                    events.Add(new KotorPlayerMoveRequested(contract.MoveTargetTag!));
+                    events.Add(new KotorScriptExecuted(contract));
+                    break;
+                case KotorScriptContractKind.ModuleStartPresentation:
+                    events.Add(new KotorGlobalFadeRequested(false, 0, 0));
+                    events.Add(new KotorPlayerMoveRequested(contract.MoveTargetTag!));
+                    events.Add(new KotorGlobalFadeRequested(
+                        true,
+                        contract.FadeInWaitSeconds!.Value,
+                        contract.FadeInLengthSeconds!.Value));
+                    events.Add(new KotorBackgroundMusicRequested(false, 0));
+                    events.Add(new KotorBackgroundMusicRequested(
+                        true,
+                        contract.MusicRestartDelaySeconds!.Value));
+                    events.Add(new KotorScriptExecuted(contract));
+                    break;
+                case KotorScriptContractKind.PlaySoundObjectFromParameters:
+                    if (invocation is null || invocation.Int1 < 0 ||
+                        string.IsNullOrWhiteSpace(invocation.String6))
+                        throw new InvalidOperationException(
+                            $"Sound-object script {contract.Resref} requires " +
+                            "a non-negative delay and sound-object tag");
+                    events.Add(new KotorSoundObjectPlayRequested(
+                        invocation.String6, invocation.Int1));
+                    events.Add(new KotorScriptExecuted(contract));
+                    break;
+                case KotorScriptContractKind.NoOp:
+                    events.Add(new KotorScriptExecuted(contract));
+                    break;
+                case KotorScriptContractKind.RoomAnimationFromParameters:
+                    if (invocation is null || invocation.Int1 <= 0 ||
+                        string.IsNullOrWhiteSpace(invocation.String6))
+                        throw new InvalidOperationException(
+                            $"Room-animation script {contract.Resref} requires " +
+                            "a positive animation index and room model");
+                    events.Add(new KotorRoomAnimationRequested(
+                        invocation.String6, invocation.Int1));
+                    events.Add(new KotorScriptExecuted(contract));
                     break;
                 case KotorScriptContractKind.GlobalNumberAdd:
                 case KotorScriptContractKind.GlobalNumberSet:
@@ -783,10 +964,14 @@ public sealed class KotorGameplaySimulation
         }
 
         var before = playerExperience;
+        var beforeLevel = experienceTable.ResolveLevel(before);
         var awarded = contract.AwardedExperience!.Value;
         playerExperience = checked(playerExperience + awarded);
         events.Add(new KotorExperienceAwarded(
             contract, before, awarded, playerExperience));
+        var afterLevel = experienceTable.ResolveLevel(playerExperience);
+        if (afterLevel != beforeLevel)
+            events.Add(new KotorLevelChanged(beforeLevel, afterLevel, playerExperience));
     }
 
     private void ExecuteDialogueDoor(
@@ -814,10 +999,13 @@ public sealed class KotorGameplaySimulation
         var behavior = contract.TriggerDialogue
             ?? throw new InvalidOperationException(
                 $"Trigger-dialogue contract is incomplete: {contract.Resref}");
-        globalNumbers.TryGetValue(behavior.GlobalName, out var before);
-        globalNumbers[behavior.GlobalName] = behavior.GlobalValue;
-        events.Add(new KotorGlobalNumberChanged(
-            behavior.GlobalName, before, behavior.GlobalValue));
+        if (behavior.GlobalName is not null && behavior.GlobalValue is { } globalValue)
+        {
+            globalNumbers.TryGetValue(behavior.GlobalName, out var before);
+            globalNumbers[behavior.GlobalName] = globalValue;
+            events.Add(new KotorGlobalNumberChanged(
+                behavior.GlobalName, before, globalValue));
+        }
         events.Add(new KotorDialogueRequested(
             behavior.ActorTag,
             behavior.Conversation,

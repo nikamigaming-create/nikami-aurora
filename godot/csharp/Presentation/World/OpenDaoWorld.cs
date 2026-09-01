@@ -14,10 +14,12 @@ using Nikami.Aurora.GodotRuntime.Domain.Story;
 using Nikami.Aurora.GodotRuntime.Domain.World;
 using Nikami.Aurora.GodotRuntime.Infrastructure.World;
 using Nikami.Aurora.GodotRuntime.Infrastructure.Configuration;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Catalogs;
 using Nikami.Aurora.GodotRuntime.Launcher;
 using Nikami.Aurora.GodotRuntime.Presentation.Cinematics;
 using Nikami.Aurora.GodotRuntime.Presentation.Player;
 using Nikami.Aurora.GodotRuntime.Application.Characters;
+using Nikami.Aurora.GodotRuntime.Application.Story;
 using Nikami.Aurora.Core;
 using Nikami.Aurora.Profiles.DragonAgeOrigins;
 
@@ -116,6 +118,8 @@ public partial class OpenDaoWorld : Node3D
     private CancellationTokenSource? lifetime;
     private WorldProfile? profile;
     private CharacterProfile character = CharacterProfile.Default;
+    private CharacterProgression? progression;
+    private DaoPlaceableScriptExecutor? placeableScriptExecutor;
     private PlayerController player = null!;
     private Label status = null!;
     private WorldHud? hud;
@@ -180,6 +184,7 @@ public partial class OpenDaoWorld : Node3D
             case Key.I: hud?.ToggleInventory(); GetViewport().SetInputAsHandled(); break;
             case Key.J: hud?.ToggleQuests(); GetViewport().SetInputAsHandled(); break;
             case Key.K: hud?.ToggleAbilities(); GetViewport().SetInputAsHandled(); break;
+            case Key.C: hud?.ToggleCrafting(); GetViewport().SetInputAsHandled(); break;
             case Key.Key1:
                 services?.GetRequired<AbilityState>().ActivateSlot(1);
                 GetViewport().SetInputAsHandled();
@@ -235,9 +240,20 @@ public partial class OpenDaoWorld : Node3D
         {
             GD.PushWarning("OPENDAO_CHARACTER_ABILITIES status=unavailable reason=" + abilityLoadout.Reason);
         }
+        var experienceProvider = services.GetRequired<GdaExperienceTableProvider>();
+        var experienceTable = experienceProvider.Load() ?? throw new InvalidOperationException(
+            "Unable to load installed DAO experience table: " + experienceProvider.Error);
+        var savedSession = services.GetRequired<IPlayerSessionRepository>().Load();
+        progression = new CharacterProgression(experienceTable, savedSession?.Experience ?? 0);
+        placeableScriptExecutor = new DaoPlaceableScriptExecutor(
+            services.GetRequired<DaoScriptBytecodeProvider>(),
+            services.GetRequired<StoryState>(), progression);
+        GD.Print($"OPENDAO_CHARACTER_PROGRESSION status=ready level={progression.Level} " +
+                 $"experience={progression.Experience} next={progression.NextLevelExperience} " +
+                 $"source=installed-exptable-gda persisted={(savedSession is null ? 0 : 1)}");
         hud = new WorldHud(this, services.GetRequired<AbilityState>(),
             services.GetRequired<InventoryState>(), services.GetRequired<QuestJournal>(),
-            profile, services.GetRequired<IAreaPresentationProvider>(), character, player);
+            profile, services.GetRequired<IAreaPresentationProvider>(), character, progression, player);
         hud.Visible = false;
         var gameplayAvatar = player.GetNodeOrNull<Node3D>("AvatarRoot");
         if (gameplayAvatar is not null) gameplayAvatar.Visible = false;
@@ -315,7 +331,7 @@ public partial class OpenDaoWorld : Node3D
             openingDialogue = new AuthoredDialogueController
             {
                 Name = "OpeningDialogue",
-                DialogueId = "bec110cr_shianni"
+                DialogueId = origin!.OpeningDialogue
             };
             AddChild(openingDialogue);
             Action? releaseOpeningPresentation = openingCutscene is null
@@ -400,51 +416,61 @@ public partial class OpenDaoWorld : Node3D
     {
         if (services is null || loading) return;
         var tag = target.GetMeta("dao_tag").AsString();
+        var eventScript = target.GetMeta("dao_event_script", string.Empty).AsString();
         var handle = target.GetMeta("dao_story_handle", 0).AsInt32();
-        if (tag.Equals("bec110ip_pc_possessions", StringComparison.OrdinalIgnoreCase))
+        var transitionArea = target.GetMeta("dao_transition_area", string.Empty).AsString();
+        var transitionWaypoint = target.GetMeta("dao_transition_waypoint", string.Empty).AsString();
+        if (transitionArea.Length > 0 && transitionWaypoint.Length > 0)
         {
-            var story = services.GetRequired<StoryState>();
-            const string plot = "85c3d035f1274fd59849b190d64d5290";
-            var alreadyUsed = handle > 0 && Convert.ToInt32(story.GetLocal(handle, "PLC_DO_ONCE_A", "int") ?? 0) != 0;
-            if (!alreadyUsed)
-            {
-                story.SetPlotFlag(plot, 2, true);
-                if (handle > 0) story.SetLocal(handle, "PLC_DO_ONCE_A", "int", 1);
-            }
-            placeableHighlighter?.ShowFeedback(alreadyUsed
-                ? "You have already checked your possessions."
-                : "Possessions checked — training options unlocked.");
-            GD.Print($"OPENDAO_PLACEABLE_USE status=pass tag={tag} handle={handle} event=7 " +
-                     $"plot={plot} flag=2 value=1 one_shot={(alreadyUsed ? "repeat" : "committed")}");
+            _ = TravelToAuthoredDestination(tag, transitionArea, transitionWaypoint);
             return;
         }
-        if (tag.Equals("bec110ip_to_alienage", StringComparison.OrdinalIgnoreCase))
+        if (eventScript.Length > 0 && placeableScriptExecutor is not null && handle > 0)
         {
-            _ = TravelToAlienage();
+            var story = services.GetRequired<StoryState>();
+            var beforeRevision = story.Revision;
+            var executed = placeableScriptExecutor.Execute(eventScript, handle, eventType: 7);
+            placeableHighlighter?.ShowFeedback(executed.Succeeded
+                ? "Interaction complete."
+                : "That interaction is not supported yet.");
+            GD.Print($"OPENDAO_PLACEABLE_USE status={(executed.Succeeded ? "pass" : "unsupported")} " +
+                     $"tag={tag} handle={handle} event=7 script={eventScript} " +
+                     $"steps={executed.Steps} actions={string.Join(',', executed.Actions)} " +
+                     $"plot_writes={executed.PlotWrites} local_writes={executed.LocalWrites} " +
+                     $"experience={executed.Experience} revision={beforeRevision}->{story.Revision} " +
+                     $"reason={executed.Error}");
             return;
         }
         placeableHighlighter?.ShowFeedback("Nothing happens.");
-        GD.Print($"OPENDAO_PLACEABLE_USE status=unsupported tag={tag} handle={handle}");
+        GD.Print($"OPENDAO_PLACEABLE_USE status=unsupported tag={tag} handle={handle} " +
+                 $"script={eventScript}");
     }
 
-    private bool TravelToAlienage()
+    private bool TravelToAuthoredDestination(string sourceTag, string areaId,
+        string waypointTag)
     {
         var catalog = new Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog();
         if (!catalog.Load())
         {
-            placeableHighlighter?.ShowFeedback("The Alienage route is unavailable.");
+            placeableHighlighter?.ShowFeedback("That route is unavailable.");
             GD.PushWarning("OPENDAO_PLACEABLE_TRANSITION status=fail reason=" + catalog.Error);
             return false;
         }
-        var destination = catalog.Areas.FirstOrDefault(area => area.Ready &&
-            area.Id.Equals("bec100ar_elven_alienage", StringComparison.OrdinalIgnoreCase) &&
-            area.Archive.EndsWith("al_bec01al_alienage.rim", StringComparison.OrdinalIgnoreCase));
+        var sourceArchive = profile?.SourceKey.Split("::", 2,
+            StringSplitOptions.None).FirstOrDefault() ?? string.Empty;
+        var candidates = catalog.Areas.Where(area => area.Ready &&
+            area.Id.Equals(areaId, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var sameArchive = candidates.Where(area => area.Archive.Equals(sourceArchive,
+            StringComparison.OrdinalIgnoreCase)).ToArray();
+        var destination = sameArchive.Length == 1
+            ? sameArchive[0]
+            : candidates.Length == 1 ? candidates[0] : null;
         var transitionError = destination is null ? "destination-profile-absent" : string.Empty;
         if (destination is null ||
             !Nikami.Aurora.GodotRuntime.MainMenu.AreaCatalog.WriteProfileForLoading(destination,
                 Nikami.Aurora.GodotRuntime.MainMenu.RuntimeSavePaths.SelectedProfile, out transitionError))
         {
-            placeableHighlighter?.ShowFeedback("The Alienage route is unavailable.");
+            placeableHighlighter?.ShowFeedback("That route is unavailable.");
             GD.PushWarning("OPENDAO_PLACEABLE_TRANSITION status=fail reason=" +
                            transitionError);
             return false;
@@ -457,12 +483,12 @@ public partial class OpenDaoWorld : Node3D
             schema = "opendao-pending-transition-v1",
             areaId = destination.Id.ToLowerInvariant(),
             areaKey = destination.Key.ToLowerInvariant(),
-            waypointTag = "bec100wp_from_home",
+            waypointTag,
             provenance = new
             {
                 source = "authored-placeable-transition",
                 sourceArea = profile?.AreaId ?? string.Empty,
-                sourceTag = "bec110ip_to_alienage",
+                sourceTag,
                 destinationAreaKey = destination.Key
             }
         };
@@ -472,8 +498,8 @@ public partial class OpenDaoWorld : Node3D
         OS.SetEnvironment("OPENDAO_CONTINUE", "0");
         OS.SetEnvironment("OPENDAO_IGNORE_PENDING_TRANSITION", "");
         loading = true;
-        GD.Print($"OPENDAO_PLACEABLE_TRANSITION status=ready source=bec110ar_players_house " +
-                 $"tag=bec110ip_to_alienage destination={destination.Id} waypoint=bec100wp_from_home");
+        GD.Print($"OPENDAO_PLACEABLE_TRANSITION status=ready source={profile?.AreaId} " +
+                 $"tag={sourceTag} destination={destination.Id} waypoint={waypointTag}");
         var reload = GetTree().ReloadCurrentScene();
         if (reload != Error.Ok)
         {
@@ -827,9 +853,8 @@ public partial class OpenDaoWorld : Node3D
 
     private static bool ShouldPlayOpeningDialogue(WorldProfile world,
         Nikami.Aurora.GodotRuntime.MainMenu.CharacterOrigin? origin) =>
-        origin is not null &&
-        origin.Id.Equals("city-elf", StringComparison.OrdinalIgnoreCase) &&
-        world.AreaId.Equals("bec110ar_players_house", StringComparison.OrdinalIgnoreCase) &&
+        origin is { OpeningDialogue.Length: > 0 } &&
+        world.AreaId.Equals(origin.AreaId, StringComparison.OrdinalIgnoreCase) &&
         System.Environment.GetEnvironmentVariable("OPENDAO_CONTINUE") != "1" &&
         (!RuntimeAutomation.WantsWorld() ||
          System.Environment.GetEnvironmentVariable("OPENDAO_CHARACTER_CREATION_ACCEPTANCE") == "1");

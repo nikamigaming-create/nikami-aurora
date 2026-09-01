@@ -327,7 +327,47 @@ public sealed partial class KotorModuleBoot
                     $"Unsupported creature effect animation: " +
                     $"{creature.Template}/{animation.Name}");
         }
-        return new CreatureEffectRig(emitters, lights, animations);
+        var explosionPools = emitters
+            .Where(pair => pair.Value.GetMeta("source_update").AsString().Equals(
+                "Explosion", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(
+                pair => pair.Key,
+                pair => CreateCreatureExplosionPool(
+                    pair.Value,
+                    KotorCreatureEffectPolicy.RequiredBurstPoolSize(
+                        animations.Values.Select(animation =>
+                            new KotorCreatureEffectSchedule(
+                                animation.Length,
+                                animation.Events.Select(item =>
+                                    (double)item.Time).ToArray())),
+                        pair.Value.Lifetime)),
+                StringComparer.OrdinalIgnoreCase);
+        GD.Print($"NIKAMI_AURORA_ACTOR_EFFECT_RIG status=ready " +
+                 $"actor={creature.Template} emitters={emitters.Count} " +
+                 $"lights={lights.Count} animations={animations.Count} " +
+                 $"burst_instances={explosionPools.Values.Sum(pool => pool.Count)}");
+        return new CreatureEffectRig(emitters, explosionPools, lights, animations);
+    }
+
+    private static IReadOnlyList<GpuParticles3D> CreateCreatureExplosionPool(
+        GpuParticles3D primary,
+        int size)
+    {
+        var pool = new List<GpuParticles3D>(size) { primary };
+        var parent = primary.GetParent()
+            ?? throw new InvalidDataException(
+                "Creature explosion emitter has no source anchor");
+        for (var index = 1; index < size; index++)
+        {
+            if (primary.Duplicate() is not GpuParticles3D duplicate)
+                throw new InvalidDataException(
+                    "Creature explosion emitter could not be pooled");
+            duplicate.Name = $"SourceActorEmitterBurst_{index}";
+            duplicate.Emitting = false;
+            parent.AddChild(duplicate);
+            pool.Add(duplicate);
+        }
+        return pool;
     }
 
     private static bool UnsupportedCreatureEffectTrack(
@@ -394,6 +434,9 @@ public sealed partial class KotorModuleBoot
         scale.AddPoint(new Vector2(mid, source.SizeMid));
         scale.AddPoint(new Vector2(source.PercentEnd, source.SizeEnd));
         var frameCount = source.XGrid * source.YGrid;
+        var atlas = KotorCreatureEffectPolicy.RequireAtlasPlayback(
+            source.XGrid, source.YGrid, source.FrameStart, source.FrameEnd,
+            source.Fps, source.LifeExpectancy, source.Loop);
         var process = new ParticleProcessMaterial
         {
             Direction = Vector3.Forward,
@@ -412,10 +455,10 @@ public sealed partial class KotorModuleBoot
             ScaleMax = 1,
             ScaleCurve = new CurveTexture { Curve = scale },
             ColorRamp = new GradientTexture1D { Gradient = gradient },
-            AnimSpeedMin = source.Fps * source.LifeExpectancy / frameCount,
-            AnimSpeedMax = source.Fps * source.LifeExpectancy / frameCount,
-            AnimOffsetMin = source.FrameStart / frameCount,
-            AnimOffsetMax = source.FrameStart / frameCount
+            AnimSpeedMin = atlas.Cycles,
+            AnimSpeedMax = atlas.Cycles,
+            AnimOffsetMin = atlas.Offset,
+            AnimOffsetMax = atlas.Offset
         };
         if ((source.Flags & EmitterCollisionBounceFlag) != 0)
         {
@@ -443,7 +486,7 @@ public sealed partial class KotorModuleBoot
             VertexColorUseAsAlbedo = true,
             ParticlesAnimHFrames = source.XGrid,
             ParticlesAnimVFrames = source.YGrid,
-            ParticlesAnimLoop = true,
+            ParticlesAnimLoop = atlas.Loop,
             ProximityFadeEnabled = enhancedPresentation,
             ProximityFadeDistance = enhancedPresentation
                 ? EnhancedParticleProximityFadeDistance
@@ -492,8 +535,13 @@ public sealed partial class KotorModuleBoot
         foreach (var activeTween in rig.ActiveTweens)
             activeTween.Kill();
         rig.ActiveTweens.Clear();
-        foreach (var emitter in rig.Emitters.Values)
+        foreach (var emitter in rig.Emitters.Values.Where(candidate =>
+                     !candidate.GetMeta("source_update").AsString().Equals(
+                         "Explosion", StringComparison.OrdinalIgnoreCase)))
             emitter.Emitting = false;
+        foreach (var emitter in rig.ExplosionPools.Values.SelectMany(pool => pool))
+            emitter.Emitting = false;
+        rig.ExplosionPoolCursors.Clear();
         foreach (var light in rig.Lights.Values)
             light.Visible = false;
         if (!rig.Animations.TryGetValue(requested, out var animation)) return;
@@ -511,10 +559,28 @@ public sealed partial class KotorModuleBoot
                 tween.TweenCallback(Callable.From(() =>
                 {
                     if (rig.Generation != generation) return;
-                    foreach (var emitter in rig.ExplosionEmitters)
+                    foreach (var pair in rig.ExplosionPools)
                     {
+                        var captureAnchor = launchEnvironment.Get(
+                            "NIKAMI_AURORA_CAPTURE_CREATURE_EFFECT_ANCHOR");
+                        if (!string.IsNullOrWhiteSpace(captureAnchor) &&
+                            !pair.Key.Equals(captureAnchor,
+                                StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        var cursor = rig.ExplosionPoolCursors.GetValueOrDefault(
+                            pair.Key);
+                        var emitter = pair.Value[cursor];
+                        rig.ExplosionPoolCursors[pair.Key] =
+                            (cursor + 1) % pair.Value.Count;
+                        if (emitter.Emitting)
+                            throw new InvalidDataException(
+                                $"Creature explosion pool exhausted: {pair.Key}");
                         emitter.Restart();
                         emitter.Emitting = true;
+                        GD.Print($"NIKAMI_AURORA_ACTOR_EFFECT_BURST status=fired " +
+                                 $"actor={actor} animation={requested} " +
+                                 $"anchor={pair.Key} instance={cursor} " +
+                                 $"pool={pair.Value.Count} time={item.Time:F6}");
                     }
                 }));
                 elapsed = item.Time;
@@ -607,7 +673,8 @@ public sealed partial class KotorModuleBoot
         var emitterSources = room.Emitters ?? [];
         var collisionEmitterCount = emitterSources.Count(source =>
             (source.Flags & EmitterCollisionBounceFlag) != 0);
-        var collisionReport = collisionEmitterCount > 0
+        var collisionReport = collisionEmitterCount > 0 &&
+                              room.WalkmeshTriangles is { Count: > 0 }
             ? BuildRoomParticleCollision(room, roomRoot)
             : default;
         foreach (var source in emitterSources)
@@ -657,8 +724,8 @@ public sealed partial class KotorModuleBoot
                 float.IsFinite(source.FrameStart) && float.IsFinite(source.FrameEnd) &&
                 source.FrameStart == MathF.Truncate(source.FrameStart) &&
                 source.FrameEnd == MathF.Truncate(source.FrameEnd) &&
-                source.FrameStart >= minimumFrame && source.FrameEnd <= maximumFrame &&
-                source.FrameStart <= source.FrameEnd &&
+                source.FrameStart >= minimumFrame &&
+                (!persistentSingleFrames || source.FrameEnd <= maximumFrame) &&
                 float.IsFinite(source.Fps) && source.Fps >= 0;
             var maximumSize = Math.Max(
                 source.SizeStart, Math.Max(source.SizeMid, source.SizeEnd));
@@ -730,7 +797,7 @@ public sealed partial class KotorModuleBoot
                 source.SpawnType != 0 ||
                 source.FrameBlender != 0 ||
                 (isFountain &&
-                 (source.BirthRate <= 0 || source.LifeExpectancy <= 0)) ||
+                 (source.BirthRate < 0 || source.LifeExpectancy <= 0)) ||
                 (isSingle && !IsSupportedSingleEmitter(source)))
                 throw new InvalidDataException(
                     $"Unsupported room emitter: {room.Model}/{source.NodePath}");
@@ -817,8 +884,9 @@ public sealed partial class KotorModuleBoot
             var frameDivisor = Math.Max(1, frameCount);
             var frameStart = Mathf.Clamp(source.FrameStart / frameDivisor, 0, 1);
             var frameEnd = Mathf.Clamp(source.FrameEnd / frameDivisor, 0, 1);
+            var animationDirection = source.FrameEnd < source.FrameStart ? -1.0f : 1.0f;
             var animationCycles = source.Fps > 0
-                ? source.Fps * source.LifeExpectancy / frameCount
+                ? animationDirection * source.Fps * source.LifeExpectancy / frameCount
                 : 0.0f;
             var emitterBasis = ToEmitterGodotBasis(source);
             var inverseEmitterBasis = emitterBasis.Inverse();
@@ -1375,6 +1443,87 @@ public sealed partial class KotorModuleBoot
         return stream;
     }
 
+    private void LoadModuleSoundObjects(
+        IReadOnlyList<SoundObjectRecord> sources,
+        string manifestDirectory)
+    {
+        moduleSoundObjects.Clear();
+        foreach (var source in sources)
+        {
+            if (source.Schema != "nikami-aurora-kotor-sound-object-v1" ||
+                string.IsNullOrWhiteSpace(source.Tag) ||
+                source.Position.Count < 3 ||
+                source.Volume is < 0 or > 127 ||
+                !float.IsFinite(source.MinDistance) || source.MinDistance <= 0 ||
+                !float.IsFinite(source.MaxDistance) ||
+                source.MaxDistance < source.MinDistance ||
+                !float.IsFinite(source.PitchVariation) ||
+                source.PitchVariation != 0 ||
+                source.UtsSha256.Length != 64 ||
+                !source.UtsSha256.All(Uri.IsHexDigit) ||
+                !moduleSoundObjects.TryAdd(
+                    source.Tag,
+                    MaterializeSoundObject(source, manifestDirectory)))
+                throw new InvalidDataException(
+                    $"KOTOR sound-object contract drifted: {source.Tag}");
+        }
+        GD.Print($"NIKAMI_AURORA_SOUND_OBJECTS status=ready " +
+                 $"count={moduleSoundObjects.Count}");
+    }
+
+    private MaterializedSoundObject MaterializeSoundObject(
+        SoundObjectRecord source,
+        string manifestDirectory)
+    {
+        var stream = LoadOwnedAudio(source.Audio, manifestDirectory);
+        switch (stream)
+        {
+            case AudioStreamWav wav:
+                wav.LoopMode = source.Looping
+                    ? AudioStreamWav.LoopModeEnum.Forward
+                    : AudioStreamWav.LoopModeEnum.Disabled;
+                break;
+            case AudioStreamMP3 mp3:
+                mp3.Loop = source.Looping;
+                break;
+        }
+        var volumeDb = source.Volume == 0
+            ? -80.0f
+            : Mathf.LinearToDb(source.Volume / 127.0f);
+        Node player;
+        if (source.Positional)
+        {
+            var spatial = new AudioStreamPlayer3D
+            {
+                Name = $"SoundObject_{source.Tag}",
+                Stream = stream,
+                VolumeDb = volumeDb,
+                Position = ToGodot(source.Position),
+                UnitSize = source.MinDistance,
+                MaxDistance = source.MaxDistance,
+                PanningStrength = 1.0f
+            };
+            AddChild(spatial);
+            player = spatial;
+            if (source.Active)
+                spatial.Play();
+        }
+        else
+        {
+            var flat = new AudioStreamPlayer
+            {
+                Name = $"SoundObject_{source.Tag}",
+                Stream = stream,
+                VolumeDb = volumeDb
+            };
+            AddChild(flat);
+            player = flat;
+            if (source.Active)
+                flat.Play();
+        }
+        return new MaterializedSoundObject(source, player);
+    }
+
     private void PlaySpatialOneShot(
         AudioStream stream,
         Vector3 position,
@@ -1398,19 +1547,29 @@ public sealed partial class KotorModuleBoot
     {
         var audio = firstEncounterAudio;
         var effects = firstEncounterEffectTextures;
+        var target = targetTag.Equals("PLAYER", StringComparison.OrdinalIgnoreCase)
+            ? playerModel
+            : actorModels.GetValueOrDefault(targetTag);
         if (audio is null || effects is null ||
             !actorModels.TryGetValue(attackerTag, out var attacker) ||
-            !actorModels.TryGetValue(targetTag, out var target))
+            target is null)
             return;
         var presentation = runtimeConfiguration.Presentation.FirstEncounter;
         var muzzleHook = FindDescendantBySuffix<Node3D>(attacker, "bullethook")
             ?? throw new InvalidDataException(
                 $"Encounter attacker has no source bullethook: {attackerTag}");
-        var targetHook = FindDescendantBySuffix<Node3D>(target, "talkdummy")
-            ?? throw new InvalidDataException(
-                $"Encounter target has no source talkdummy: {targetTag}");
         var muzzle = muzzleHook.GlobalPosition;
-        var destination = targetHook.GlobalPosition;
+        var targetHook = FindDescendantBySuffix<Node3D>(target, "talkdummy");
+        var destination = targetHook?.GlobalPosition ??
+            (targetTag.Equals("PLAYER", StringComparison.OrdinalIgnoreCase)
+                ? playerTalkOffset is { } playerOffset
+                    ? target.GlobalTransform * playerOffset
+                    : throw new InvalidDataException(
+                        "Encounter player has no source talk offset")
+                : actorTalkOffsets.TryGetValue(targetTag, out var actorOffset)
+                    ? target.GlobalTransform * actorOffset
+                    : throw new InvalidDataException(
+                        $"Encounter target has no source talk offset: {targetTag}"));
         if (!IsFinite(muzzle) || !IsFinite(destination) ||
             muzzle.DistanceSquaredTo(destination) <= 0.000001f)
             throw new InvalidDataException(

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Globalization;
 using Godot;
 using Nikami.Aurora.Profiles.Kotor;
 
@@ -44,6 +45,10 @@ public sealed partial class KotorModuleBoot
     private int selectedInventoryIndex;
     private bool inventoryQuestItemsOnly;
     private Control? equipmentScreen;
+    private readonly Dictionary<string, Control> navigationScreens =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Dictionary<string, Label>> navigationLabels =
+        new(StringComparer.OrdinalIgnoreCase);
     private Control? equipmentReferenceSurface;
     private VBoxContainer? equipmentRows;
     private Label? equipmentDescription;
@@ -94,7 +99,8 @@ public sealed partial class KotorModuleBoot
                  $"size={width}x{height} aspect=ignore");
     }
 
-    private void ConfigureFlatPresentation(KotorUiRecord ui, string manifestDirectory)
+    private void ConfigureFlatPresentation(
+        KotorUiRecord ui, string manifestDirectory, string profileId)
     {
         if (ui.Schema != "nikami-aurora-kotor-ui-v1")
             throw new InvalidDataException($"Unsupported KOTOR UI schema: {ui.Schema}");
@@ -115,13 +121,15 @@ public sealed partial class KotorModuleBoot
             ConfigureRetailDesktopHud(ui.Hud);
             ConfigureRetailInventory(ui.Inventory);
             ConfigureRetailEquipment(ui.Equipment);
+            ConfigureRetailNavigationScreens(ui.Screens);
         }
         GD.Print($"NIKAMI_AURORA_FLAT_UI status=ready schema={ui.Schema} " +
                  $"textures={ui.Textures.Count} " +
                  $"fonts={flatUiFonts.Count} " +
                  $"loading={ui.Loading.Layout.Resref} " +
-                 $"hud={ui.Hud.Layout.Resref} inventory={ui.Inventory.Layout.Resref} " +
-                 $"equipment={ui.Equipment.Layout.Resref}");
+                 $"hud={ui.Hud.Layout.Resref} profile={profileId} " +
+                 $"inventory={(inventoryScreen is null ? "deferred" : ui.Inventory.Layout.Resref)} " +
+                 $"equipment={(equipmentScreen is null ? "deferred" : ui.Equipment.Layout.Resref)}");
     }
 
     private Texture2D LoadAndValidateUiTexture(KotorUiTextureRecord source)
@@ -299,9 +307,10 @@ public sealed partial class KotorModuleBoot
         foreach (var control in source.Controls.Where(control => staticTags.Contains(control.Tag)))
         {
             var fill = control.Border?.Fill ?? "";
-            if (!string.IsNullOrWhiteSpace(fill))
+            if (!string.IsNullOrWhiteSpace(fill) && flatUiTextures.ContainsKey(fill))
             {
                 var texture = AddTexture(surface, fill, RequireExtent(control));
+                ApplySourceSurfaceColor(texture, control.Border);
                 if (control.Tag.Equals("LBL_ARROW", StringComparison.OrdinalIgnoreCase))
                 {
                     hudMinimapArrow = texture;
@@ -312,19 +321,21 @@ public sealed partial class KotorModuleBoot
 
         var portraitControl = RequireControl(source.Controls, "LBL_CHAR1");
         AddTexture(surface, source.Portrait.Resref, RequireExtent(portraitControl));
+        var playerVitality = RequireControl(source.Controls, "PB_VIT1");
+        var playerForce = RequireControl(source.Controls, "PB_FORCE1");
         hudVitalityBar = AddHudBar(
-            surface, RequireControl(source.Controls, "PB_VIT1"), "redfill", 1.0);
-        AddHudBar(surface, RequireControl(source.Controls, "PB_FORCE1"), "bluefill", 0.0);
+            surface, playerVitality, RequireProgressFill(playerVitality), 1.0);
+        AddHudBar(surface, playerForce, RequireProgressFill(playerForce), 0.0);
         if (source.PartyPortraits.Count > 1)
         {
             AddTexture(
                 surface,
                 source.PartyPortraits[1].Resref,
                 RequireExtent(RequireControl(source.Controls, "LBL_CHAR3")));
-            AddHudBar(
-                surface, RequireControl(source.Controls, "PB_VIT3"), "redfill", 1.0);
-            AddHudBar(
-                surface, RequireControl(source.Controls, "PB_FORCE3"), "bluefill", 0.0);
+            var companionVitality = RequireControl(source.Controls, "PB_VIT3");
+            var companionForce = RequireControl(source.Controls, "PB_FORCE3");
+            AddHudBar(surface, companionVitality, RequireProgressFill(companionVitality), 1.0);
+            AddHudBar(surface, companionForce, RequireProgressFill(companionForce), 0.0);
         }
 
         var inventoryControl = RequireControl(source.Controls, "BTN_INV");
@@ -461,17 +472,21 @@ public sealed partial class KotorModuleBoot
 
         foreach (var tag in new[] { "LBL_BGPORT", "LBL_BGSTATS" })
         {
-            var control = RequireControl(source.Controls, tag);
+            var control = FindControl(source.Controls, tag);
+            if (control is null) continue;
             if (control.Border?.Fill is { Length: > 0 } fill)
-                AddTexture(inventoryReferenceSurface, fill, RequireExtent(control));
+                AddSourceSurfaceTexture(
+                    inventoryReferenceSurface, fill, RequireExtent(control), control.Border);
         }
 
         var playerPartyMember = source.PartyMembers.Single(member => member.IsPlayer);
-        var portraitControl = RequireControl(source.Controls, "LBL_PORT");
-        inventoryPortrait = AddTexture(
-            inventoryReferenceSurface,
-            playerPartyMember.Portrait.Resref,
-            RequireExtent(portraitControl));
+        var portraitControl = FindControl(source.Controls, "LBL_PORT");
+        inventoryPortrait = portraitControl is null
+            ? null
+            : AddTexture(
+                inventoryReferenceSurface,
+                playerPartyMember.Portrait.Resref,
+                RequireExtent(portraitControl));
         var partyControls = source.Controls
             .Where(control => control.Tag.StartsWith(
                 "BTN_CHANGE", StringComparison.OrdinalIgnoreCase))
@@ -514,20 +529,26 @@ public sealed partial class KotorModuleBoot
             fontSize);
         inventoryReferenceSurface.AddChild(inventoryCredits);
 
-        var vitControl = RequireControl(source.Controls, "LBL_VIT");
-        inventoryVitality = CreateKotorLabel(
-            $"{configuredPlayer.CurrentVitality}/{configuredPlayer.MaximumVitality}",
-            vitControl.Text,
-            RequireExtent(vitControl),
-            fontSize);
-        inventoryReferenceSurface.AddChild(inventoryVitality);
-        var defenseControl = RequireControl(source.Controls, "LBL_DEF");
-        inventoryDefense = CreateKotorLabel(
-            configuredPlayer.Defense.ToString(),
-            defenseControl.Text,
-            RequireExtent(defenseControl),
-            fontSize);
-        inventoryReferenceSurface.AddChild(inventoryDefense);
+        var vitControl = FindControl(source.Controls, "LBL_VIT");
+        inventoryVitality = vitControl is null
+            ? null
+            : CreateKotorLabel(
+                $"{configuredPlayer.CurrentVitality}/{configuredPlayer.MaximumVitality}",
+                vitControl.Text,
+                RequireExtent(vitControl),
+                fontSize);
+        if (inventoryVitality is not null)
+            inventoryReferenceSurface.AddChild(inventoryVitality);
+        var defenseControl = FindControl(source.Controls, "LBL_DEF");
+        inventoryDefense = defenseControl is null
+            ? null
+            : CreateKotorLabel(
+                configuredPlayer.Defense.ToString(),
+                defenseControl.Text,
+                RequireExtent(defenseControl),
+                fontSize);
+        if (inventoryDefense is not null)
+            inventoryReferenceSurface.AddChild(inventoryDefense);
 
         var listControl = RequireControl(source.Controls, "LB_ITEMS");
         var listExtent = RequireExtent(listControl);
@@ -584,10 +605,13 @@ public sealed partial class KotorModuleBoot
             true);
         inventoryReferenceSurface.AddChild(inventoryDescription);
 
+        var questButtonTag = FindControl(source.Controls, "BTN_QUESTITEMS") is not null
+            ? "BTN_QUESTITEMS"
+            : "BTN_QUESTS";
         inventoryQuestItemsButton = AddSourceButton(
             inventoryReferenceSurface,
             source.Controls,
-            "BTN_QUESTITEMS",
+            questButtonTag,
             ToggleInventoryQuestItems,
             fontSize);
         inventoryUseButton = AddSourceButton(
@@ -606,6 +630,163 @@ public sealed partial class KotorModuleBoot
                  $"layout={source.Layout.Resref} items={source.Items.Count} " +
                  $"top={source.TopLayout.Resref} party={source.PartyMembers.Count} " +
                  "interaction=mouse,keyboard state=profile-owned");
+    }
+
+    private void ConfigureRetailNavigationScreens(
+        IReadOnlyDictionary<string, KotorUiScreenRecord>? sources)
+    {
+        foreach (var screen in navigationScreens.Values)
+            screen.QueueFree();
+        navigationScreens.Clear();
+        navigationLabels.Clear();
+        if (sources is null) return;
+
+        foreach (var pair in sources)
+        {
+            var root = new Control
+            {
+                Name = "Retail" + pair.Key + "Screen",
+                MouseFilter = Control.MouseFilterEnum.Stop,
+                Visible = false
+            };
+            root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+            overlayLayer.AddChild(root);
+            var dim = new ColorRect
+            {
+                Color = new Color(0, 0, 0,
+                    runtimeConfiguration.Presentation.ModalDimOpacity),
+                MouseFilter = Control.MouseFilterEnum.Stop
+            };
+            dim.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+            root.AddChild(dim);
+            var surface = CreateReferenceSurface(
+                root, pair.Value.Layout.Extent, "Retail" + pair.Key + "Surface",
+                allowUpscale: false);
+            if (pair.Value.Layout.Border?.Fill is { Length: > 0 } background &&
+                flatUiTextures.ContainsKey(background))
+                AddSourceSurfaceTexture(
+                    surface, background, pair.Value.Layout.Extent,
+                    pair.Value.Layout.Border);
+            var labels = new Dictionary<string, Label>(StringComparer.OrdinalIgnoreCase);
+            foreach (var control in pair.Value.Controls)
+            {
+                if (control.Extent is null) continue;
+                if (control.Border?.Fill is { Length: > 0 } fill &&
+                    flatUiTextures.ContainsKey(fill))
+                    AddSourceSurfaceTexture(surface, fill, control.Extent, control.Border);
+                if (pair.Key.Equals("map", StringComparison.OrdinalIgnoreCase) &&
+                    control.Tag.Equals("LBL_Map", StringComparison.OrdinalIgnoreCase) &&
+                    flatUiRecord?.Hud.Minimap is { } minimap)
+                    AddTexture(surface, minimap.Texture.Resref, control.Extent);
+                var text = control.Text?.Resolved ?? control.Text?.Literal;
+                if (!string.IsNullOrWhiteSpace(text) || IsRuntimeNavigationLabel(control.Tag))
+                {
+                    var label = CreateKotorLabel(
+                        IsRuntimeNavigationLabel(control.Tag) ? "" : text ?? "",
+                        control.Text, control.Extent,
+                        runtimeConfiguration.Presentation.FallbackFontSize);
+                    surface.AddChild(label);
+                    labels[control.Tag] = label;
+                }
+            }
+            AddNavigationHotspots(surface, pair.Value.Controls);
+            navigationScreens.Add(pair.Key, root);
+            navigationLabels.Add(pair.Key, labels);
+            GD.Print($"NIKAMI_AURORA_NAVIGATION_UI status=ready screen={pair.Key} " +
+                     $"layout={pair.Value.Layout.Resref} controls={pair.Value.Controls.Count}");
+        }
+    }
+
+    private static bool IsRuntimeNavigationLabel(string tag) => tag is
+        "LBL_NAME" or "LBL_CLASS1" or "LBL_CLASS2" or "LBL_LEVEL1" or "LBL_LEVEL2" or
+        "LBL_VITALITY_STAT" or "LBL_FORCE_STAT" or "LBL_DEFENSE_STAT" or
+        "LBL_EXPERIENCE_STAT" or "LBL_NEEDED_XP" or
+        "LBL_STR" or "LBL_DEX" or "LBL_CON" or "LBL_INT" or "LBL_WIS" or "LBL_CHA" or
+        "LBL_STR_MOD" or "LBL_DEX_MOD" or "LBL_CON_MOD" or "LBL_INT_MOD" or
+        "LBL_WIS_MOD" or "LBL_CHA_MOD" or "LBL_FORTITUDE_STAT" or
+        "LBL_REFLEX_STAT" or "LBL_WILL_STAT";
+
+    private void RefreshNavigationScreen(string name)
+    {
+        if (!name.Equals("character", StringComparison.OrdinalIgnoreCase) ||
+            gameplaySimulation is null ||
+            !navigationLabels.TryGetValue(name, out var labels)) return;
+        var snapshot = gameplaySimulation.CaptureSnapshot();
+        var member = snapshot.PartyMembers[snapshot.SelectedPartyMemberId];
+        Set("LBL_NAME", member.DisplayName);
+        Set("LBL_VITALITY_STAT", $"{member.CurrentVitality}/{member.MaximumVitality}");
+        Set("LBL_DEFENSE_STAT", member.Defense.ToString(CultureInfo.InvariantCulture));
+        Set("LBL_EXPERIENCE_STAT", snapshot.PlayerExperience.ToString("N0", CultureInfo.InvariantCulture));
+        Set("LBL_NEEDED_XP", snapshot.NextLevelExperience?.ToString("N0", CultureInfo.InvariantCulture) ?? "—");
+        Set("LBL_LEVEL1", snapshot.PlayerLevel.ToString(CultureInfo.InvariantCulture));
+        void Set(string tag, string value)
+        {
+            if (labels.TryGetValue(tag, out var label)) label.Text = value;
+        }
+    }
+
+    private void AddNavigationHotspots(
+        Control parent, IReadOnlyList<KotorUiControlRecord> controls)
+    {
+        foreach (var (tag, action) in new[]
+                 {
+                     ("BTN_INV", (Action)ShowInventory),
+                     ("BTN_EQU", (Action)ShowEquipment)
+                 })
+        {
+            var source = FindControl(controls, tag);
+            if (source?.Extent is null) continue;
+            var button = new Button { Name = tag, Flat = true };
+            Place(button, source.Extent);
+            button.Pressed += action;
+            parent.AddChild(button);
+        }
+        foreach (var (tag, screen) in new[]
+                 {
+                     ("BTN_CHAR", "character"), ("BTN_ABI", "abilities"),
+                     ("BTN_JOU", "journal"), ("BTN_MAP", "map"),
+                     ("BTN_MSG", "messages")
+                 })
+        {
+            var source = FindControl(controls, tag);
+            if (source?.Extent is null) continue;
+            var selectedScreen = screen;
+            var button = new Button { Name = tag, Flat = true };
+            Place(button, source.Extent);
+            button.Pressed += () => ShowNavigationScreen(selectedScreen);
+            parent.AddChild(button);
+        }
+        foreach (var tag in new[] { "BTN_EXIT", "BTN_BACK" })
+        {
+            var source = FindControl(controls, tag);
+            if (source?.Extent is null) continue;
+            var button = new Button { Name = tag, Flat = true };
+            Place(button, source.Extent);
+            button.Pressed += HideNavigationScreens;
+            parent.AddChild(button);
+        }
+    }
+
+    private void ShowNavigationScreen(string name)
+    {
+        if (!moduleReady || xrActive || dialoguePanel.Visible ||
+            !navigationScreens.TryGetValue(name, out var selected)) return;
+        if (inventoryScreen is not null) inventoryScreen.Visible = false;
+        if (equipmentScreen is not null) equipmentScreen.Visible = false;
+        foreach (var screen in navigationScreens.Values)
+            screen.Visible = ReferenceEquals(screen, selected);
+        RefreshNavigationScreen(name);
+        Input.MouseMode = Input.MouseModeEnum.Visible;
+        UpdateFlatUiVisibility();
+        GD.Print($"NIKAMI_AURORA_NAVIGATION_UI status=open screen={name}");
+    }
+
+    private void HideNavigationScreens()
+    {
+        foreach (var screen in navigationScreens.Values)
+            screen.Visible = false;
+        Input.MouseMode = Input.MouseModeEnum.Captured;
+        UpdateFlatUiVisibility();
     }
 
     private void ConfigureInventorySourceScrollbar(
@@ -792,16 +973,19 @@ public sealed partial class KotorModuleBoot
                      "LBL_ATTACK_INFO", "LBL_PORT_BORD", "LBL_DEF_INFO", "LBL_TXTBAR"
                  })
         {
-            var control = RequireControl(source.Controls, tag);
+            var control = FindControl(source.Controls, tag);
+            if (control is null) continue;
             if (control.Border?.Fill is { Length: > 0 } fill)
-                AddTexture(equipmentReferenceSurface, fill, RequireExtent(control));
+                AddSourceSurfaceTexture(
+                    equipmentReferenceSurface, fill, RequireExtent(control), control.Border);
         }
 
-        var portraitControl = RequireControl(source.Controls, "LBL_PORTRAIT");
-        AddTexture(
-            equipmentReferenceSurface,
-            source.Portrait.Resref,
-            RequireExtent(portraitControl));
+        var portraitControl = FindControl(source.Controls, "LBL_PORTRAIT");
+        if (portraitControl is not null)
+            AddTexture(
+                equipmentReferenceSurface,
+                source.Portrait.Resref,
+                RequireExtent(portraitControl));
         var partyControls = source.Controls
             .Where(control => control.Tag.StartsWith(
                 "BTN_CHANGE", StringComparison.OrdinalIgnoreCase))
@@ -821,17 +1005,32 @@ public sealed partial class KotorModuleBoot
         {
             var labelControl = RequireControl(source.Controls, labelTag);
             if (labelControl.Border?.Fill is { Length: > 0 } labelFill)
-                AddTexture(
+                AddSourceSurfaceTexture(
                     equipmentReferenceSurface,
                     labelFill,
-                    RequireExtent(labelControl));
+                    RequireExtent(labelControl),
+                    labelControl.Border);
             var buttonControl = RequireControl(source.Controls, buttonTag);
             var buttonExtent = RequireExtent(buttonControl);
-            var frame = AddTexture(
-                equipmentReferenceSurface,
-                buttonControl.Border?.Fill ?? throw new InvalidDataException(
-                    $"KOTOR equipment slot has no source frame: {buttonTag}"),
-                buttonExtent);
+            TextureRect frame;
+            if (buttonControl.Border?.Fill is { Length: > 0 } frameFill)
+            {
+                frame = AddSourceSurfaceTexture(
+                    equipmentReferenceSurface,
+                    frameFill,
+                    buttonExtent,
+                    buttonControl.Border);
+            }
+            else
+            {
+                frame = new TextureRect
+                {
+                    Name = $"SourceFrame_{buttonTag}",
+                    MouseFilter = Control.MouseFilterEnum.Ignore
+                };
+                Place(frame, buttonExtent);
+                equipmentReferenceSurface.AddChild(frame);
+            }
             equipmentSlotFrames.Add(slot, frame);
             var iconInset = runtimeConfiguration.Presentation.Equipment.SlotIconInset;
             if (iconInset * 2 >= buttonExtent.Width || iconInset * 2 >= buttonExtent.Height)
@@ -874,13 +1073,16 @@ public sealed partial class KotorModuleBoot
         AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHITL", fontSize);
         AddSourceLabel(equipmentReferenceSurface, source.Controls, "LBL_TOHITR", fontSize);
 
-        var vitalityControl = RequireControl(source.Controls, "LBL_VITALITY");
-        equipmentVitality = CreateKotorLabel(
-            $"{configuredPlayer.CurrentVitality}/{configuredPlayer.MaximumVitality}",
-            vitalityControl.Text,
-            RequireExtent(vitalityControl),
-            fontSize);
-        equipmentReferenceSurface.AddChild(equipmentVitality);
+        var vitalityControl = FindControl(source.Controls, "LBL_VITALITY");
+        equipmentVitality = vitalityControl is null
+            ? null
+            : CreateKotorLabel(
+                $"{configuredPlayer.CurrentVitality}/{configuredPlayer.MaximumVitality}",
+                vitalityControl.Text,
+                RequireExtent(vitalityControl),
+                fontSize);
+        if (equipmentVitality is not null)
+            equipmentReferenceSurface.AddChild(equipmentVitality);
         var defenseControl = RequireControl(source.Controls, "LBL_DEF");
         equipmentDefense = CreateKotorLabel(
             configuredPlayer.Defense.ToString(),
@@ -962,18 +1164,25 @@ public sealed partial class KotorModuleBoot
                      control.Tag.StartsWith("LBLH_", StringComparison.OrdinalIgnoreCase)))
         {
             var selected = control.Tag.Equals(selectedTag, StringComparison.OrdinalIgnoreCase);
-            var fill = selected ? control.Highlight?.Fill : control.Border?.Fill;
+            var source = selected ? control.Highlight : control.Border;
+            var fill = source?.Fill;
             if (!string.IsNullOrWhiteSpace(fill))
-                AddTexture(parent, fill, RequireExtent(control));
+                AddSourceSurfaceTexture(parent, fill, RequireExtent(control), source);
         }
 
         foreach (var (tag, action, tooltip) in new[]
                  {
                      ("BTN_INV", (Action)ShowInventory, "Inventory"),
-                     ("BTN_EQU", (Action)ShowEquipment, "Equipment")
+                     ("BTN_EQU", (Action)ShowEquipment, "Equipment"),
+                     ("BTN_CHAR", (Action)(() => ShowNavigationScreen("character")), "Character"),
+                     ("BTN_ABI", (Action)(() => ShowNavigationScreen("abilities")), "Abilities"),
+                     ("BTN_JOU", (Action)(() => ShowNavigationScreen("journal")), "Journal"),
+                     ("BTN_MAP", (Action)(() => ShowNavigationScreen("map")), "Map"),
+                     ("BTN_MSG", (Action)(() => ShowNavigationScreen("messages")), "Messages")
                  })
         {
-            var source = RequireControl(controls, tag);
+            var source = FindControl(controls, tag);
+            if (source is null) continue;
             var hotspot = new Button
             {
                 Name = $"RetailToolbar_{tag}",
@@ -1044,6 +1253,8 @@ public sealed partial class KotorModuleBoot
         desktopHudRoot.Visible = moduleReady &&
                                  inventoryScreen?.Visible != true &&
                                  equipmentScreen?.Visible != true &&
+                                 !navigationScreens.Values.Any(screen => screen.Visible) &&
+                                 !dialogueSequenceActive &&
                                  !dialoguePanel.Visible &&
                                  !loadingBackdrop.Visible;
     }
@@ -1054,6 +1265,8 @@ public sealed partial class KotorModuleBoot
             return;
         if (equipmentScreen is not null)
             equipmentScreen.Visible = false;
+        foreach (var screen in navigationScreens.Values)
+            screen.Visible = false;
         RefreshInventory();
         inventoryScreen.Visible = true;
         Input.MouseMode = Input.MouseModeEnum.Visible;
@@ -1110,6 +1323,8 @@ public sealed partial class KotorModuleBoot
             return;
         if (inventoryScreen is not null)
             inventoryScreen.Visible = false;
+        foreach (var screen in navigationScreens.Values)
+            screen.Visible = false;
         equipmentScreen.Visible = true;
         SelectEquipmentSlot(selectedEquipmentSlot);
         Input.MouseMode = Input.MouseModeEnum.Visible;
@@ -1133,6 +1348,16 @@ public sealed partial class KotorModuleBoot
     {
         if (inputEvent is not InputEventKey key || !key.Pressed || key.Echo)
             return false;
+        if (navigationScreens.Values.Any(screen => screen.Visible))
+        {
+            if (key.Keycode == Key.Escape) HideNavigationScreens();
+            else if (key.Keycode == Key.I) ShowInventory();
+            else if (key.Keycode == Key.C) ShowNavigationScreen("character");
+            else if (key.Keycode == Key.K) ShowNavigationScreen("abilities");
+            else if (key.Keycode == Key.J) ShowNavigationScreen("journal");
+            else if (key.Keycode == Key.M) ShowNavigationScreen("map");
+            return true;
+        }
         if (equipmentScreen?.Visible == true)
         {
             if (key.Keycode == Key.Escape)
@@ -1166,6 +1391,10 @@ public sealed partial class KotorModuleBoot
             ShowInventory();
             return true;
         }
+        if (key.Keycode == Key.C) { ShowNavigationScreen("character"); return true; }
+        if (key.Keycode == Key.K) { ShowNavigationScreen("abilities"); return true; }
+        if (key.Keycode == Key.J) { ShowNavigationScreen("journal"); return true; }
+        if (key.Keycode == Key.M) { ShowNavigationScreen("map"); return true; }
         return false;
     }
 
@@ -1440,10 +1669,9 @@ public sealed partial class KotorModuleBoot
             var frameResref = slot == selectedEquipmentSlot
                 ? buttonSource.Highlight?.Fill
                 : buttonSource.Border?.Fill;
-            if (string.IsNullOrWhiteSpace(frameResref))
-                throw new InvalidDataException(
-                    $"KOTOR equipment slot frame is incomplete: {buttonTag}");
-            equipmentSlotFrames[slot].Texture = Texture(frameResref);
+            equipmentSlotFrames[slot].Texture = string.IsNullOrWhiteSpace(frameResref)
+                ? null
+                : Texture(frameResref);
             var icon = equipmentSlotIcons[slot];
             if (!snapshot.Equipment.TryGetValue(slot, out var equippedResref))
             {
@@ -1641,6 +1869,26 @@ public sealed partial class KotorModuleBoot
         return texture;
     }
 
+    private TextureRect AddSourceSurfaceTexture(
+        Control parent,
+        string resref,
+        KotorUiExtent extent,
+        KotorUiSurfaceRecord? source)
+    {
+        var texture = AddTexture(parent, resref, extent);
+        ApplySourceSurfaceColor(texture, source);
+        return texture;
+    }
+
+    private static void ApplySourceSurfaceColor(
+        CanvasItem item,
+        KotorUiSurfaceRecord? source)
+    {
+        if (source?.Color is not { Count: >= 3 } color)
+            return;
+        item.Modulate = new Color(color[0], color[1], color[2], 1.0f);
+    }
+
     private TextureProgressBar AddHudBar(
         Control parent,
         KotorUiControlRecord control,
@@ -1835,10 +2083,23 @@ public sealed partial class KotorModuleBoot
     private static KotorUiExtent ConfiguredExtent(KotorUiBoxConfiguration source) =>
         new(source.Left, source.Top, source.Width, source.Height);
 
-    private Texture2D Texture(string resref) =>
-        flatUiTextures.TryGetValue(resref, out var texture)
-            ? texture
-            : throw new InvalidDataException($"KOTOR UI texture was not imported: {resref}");
+    private Texture2D Texture(string resref)
+    {
+        if (flatUiTextures.TryGetValue(resref, out var texture))
+            return texture;
+        var color = resref.ToLowerInvariant() switch
+        {
+            "redfill" => new Color(0.82f, 0.08f, 0.06f, 1.0f),
+            "bluefill" => new Color(0.05f, 0.35f, 0.85f, 1.0f),
+            _ => throw new InvalidDataException(
+                $"Odyssey UI texture was not imported: {resref}")
+        };
+        var image = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
+        image.Fill(color);
+        texture = ImageTexture.CreateFromImage(image);
+        flatUiTextures[resref] = texture;
+        return texture;
+    }
 
     private static void Place(Control control, KotorUiExtent extent)
     {
@@ -1851,9 +2112,21 @@ public sealed partial class KotorModuleBoot
         string tag) =>
         controls.Single(control => control.Tag.Equals(tag, StringComparison.OrdinalIgnoreCase));
 
+    private static KotorUiControlRecord? FindControl(
+        IReadOnlyList<KotorUiControlRecord> controls,
+        string tag) =>
+        controls.SingleOrDefault(control =>
+            control.Tag.Equals(tag, StringComparison.OrdinalIgnoreCase));
+
     private static KotorUiExtent RequireExtent(KotorUiControlRecord control) =>
         control.Extent ?? throw new InvalidDataException(
             $"KOTOR UI control has no extent: {control.Tag}");
+
+    private static string RequireProgressFill(KotorUiControlRecord control) =>
+        !string.IsNullOrWhiteSpace(control.Progress?.Fill)
+            ? control.Progress.Fill
+            : throw new InvalidDataException(
+                $"Odyssey UI progress control has no source fill: {control.Tag}");
 
     private sealed record KotorUiRecord(
         string Schema,
@@ -1861,7 +2134,11 @@ public sealed partial class KotorModuleBoot
         KotorUiInventoryRecord Inventory,
         KotorUiEquipmentRecord Equipment,
         KotorUiHudRecord Hud,
+        IReadOnlyDictionary<string, KotorUiScreenRecord>? Screens,
         IReadOnlyList<KotorUiTextureRecord> Textures);
+    private sealed record KotorUiScreenRecord(
+        KotorUiLayoutRecord Layout,
+        IReadOnlyList<KotorUiControlRecord> Controls);
     private sealed record KotorUiLoadingRecord(
         KotorUiLayoutRecord Layout,
         IReadOnlyList<KotorUiControlRecord> Controls,

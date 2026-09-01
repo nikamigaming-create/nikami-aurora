@@ -51,9 +51,10 @@ public static class KotorEnvironmentMaterialPolicy
     public const string RowTransform = "flip-top-bottom";
     public const string SampleBasis = "godot-to-odyssey:x,-z,y";
 
-    // Odyssey's authored diffuse alpha is the reflection mask. Source applies
-    // no extra boost. Enhanced adds response only inside partially reflective
-    // mask values and caps the result so at least 10% of authored albedo remains.
+    // Odyssey's authored diffuse alpha is the reflection mask. The reflected
+    // cube is added over authored diffuse; replacing diffuse with the cube turns
+    // fully masked droids and hull panels black wherever the cube is dark.
+    // Enhanced adds response only inside partially reflective mask values.
     public const float SourceReflectionStrength = 0.0f;
     public const float EnhancedReflectionStrength = 0.35f;
     public const float SourceMaximumReflectionWeight = 1.0f;
@@ -61,13 +62,17 @@ public static class KotorEnvironmentMaterialPolicy
 
     public const float SourceDynamicLightAlbedoWeight = 0.0f;
     public const float SourceBakedEmissionWeight = 1.0f;
-    public const float SourceDynamicAmbientEmissionWeight = 0.0f;
+    // Odyssey applies the module's authored dynamic ambient as the floor under
+    // baked room lighting. This is especially visible aboard KOTOR II's damaged
+    // Ebon Hawk: the lightmap preserves red/blue fixtures while dynamic ambient
+    // keeps unlit hull panels from collapsing to black.
+    public const float SourceDynamicAmbientEmissionWeight = 1.0f;
     // Retain the authored baked contrast as the dominant signal. Dynamic
     // response is deliberately restrained: higher fill flattened the Taris
     // sign/window highlights and turned the source walls/floor uniform grey.
     public const float EnhancedDynamicLightAlbedoWeight = 0.12f;
     public const float EnhancedBakedEmissionWeight = 1.0f;
-    public const float EnhancedDynamicAmbientEmissionWeight = 0.15f;
+    public const float EnhancedDynamicAmbientEmissionWeight = 1.0f;
     public const float SourceDielectricSpecular = 0.0f;
     public const float EnhancedDielectricSpecular = 0.5f;
     public const float SourceFallbackRoughness = 1.0f;
@@ -76,7 +81,7 @@ public static class KotorEnvironmentMaterialPolicy
         SourceAuthorizedRenderFeature.Reflections;
 
     private static readonly KotorLightmapTransfer SourceLightmapTransfer = new(
-        "surface-times-clamped-lightmap",
+        "surface-times-max-clamped-lightmap-authored-ambient",
         SourceDynamicLightAlbedoWeight,
         SourceBakedEmissionWeight,
         SourceDynamicAmbientEmissionWeight);

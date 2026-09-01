@@ -5,6 +5,7 @@
   <ItemGroup>
     <ProjectReference Include="../Nikami.Aurora.Core/Nikami.Aurora.Core.csproj" />
     <ProjectReference Include="../Nikami.Aurora.Profiles.Kotor/Nikami.Aurora.Profiles.Kotor.csproj" />
+    <ProjectReference Include="../Nikami.Aurora.Profiles.Kotor2/Nikami.Aurora.Profiles.Kotor2.csproj" />
     <ProjectReference Include="../Nikami.Aurora.Profiles.DragonAgeOrigins/Nikami.Aurora.Profiles.DragonAgeOrigins.csproj" />
   </ItemGroup>
 </Project>
