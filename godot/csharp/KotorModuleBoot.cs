@@ -504,6 +504,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private readonly List<CycleTextureBinding> cycleTextures = [];
     private readonly Dictionary<string, Tween> roomAlphaTweens =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Tween> roomEmitterTweens =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CreatureRecord> actorRecords =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CreatureEffectRig> actorEffectRigs =
@@ -1637,6 +1639,7 @@ public sealed partial class KotorModuleBoot : Node3D
                 var emitterReport = LoadRoomEmitters(
                     room, imported, manifestDirectory, roomEmitterTextures,
                     enhancedPresentation, ToColor(manifest.Lighting.DynamicAmbient));
+                StartRoomEmitterAnimations(room, imported);
                 materializedEmitterCount += emitterReport.Total;
                 alphaEmitterCount += emitterReport.Alpha;
                 additiveEmitterCount += emitterReport.Additive;

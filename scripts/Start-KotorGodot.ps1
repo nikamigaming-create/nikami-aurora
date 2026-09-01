@@ -157,10 +157,27 @@ if ($CaptureFrame -le 0) {
 }
 if ([string]::IsNullOrWhiteSpace($Godot)) {
     $command = Get-Command "Godot_v4.7.1-stable_mono_win64.exe" -ErrorAction SilentlyContinue
-    if (-not $command) {
-        throw "Godot 4.7.1 .NET was not found on PATH. Pass -Godot explicitly."
+    if ($command) {
+        $Godot = $command.Source
     }
-    $Godot = $command.Source
+    else {
+        $bundledGodot = Join-Path $repo `
+            'local\tools\godot-4.7.1\Godot_v4.7.1-stable_mono_win64\Godot_v4.7.1-stable_mono_win64.exe'
+        if (-not (Test-Path -LiteralPath $bundledGodot -PathType Leaf)) {
+            throw "Godot 4.7 .NET was not found on PATH or in local/tools. " +
+                  "Pass -Godot explicitly."
+        }
+        $Godot = $bundledGodot
+    }
+}
+$Godot = [IO.Path]::GetFullPath($Godot)
+if (-not (Test-Path -LiteralPath $Godot -PathType Leaf)) {
+    throw "Godot executable not found: $Godot"
+}
+$godotVersion = (& $Godot --version 2>&1 | Select-Object -First 1).ToString().Trim()
+if ($godotVersion -notmatch '^4\.7\..*\.mono\.') {
+    throw "KOTOR runtime requires Godot 4.7 .NET; '$Godot' reports " +
+          "'$godotVersion'."
 }
 $resolvedMoviePath = $null
 if (-not [string]::IsNullOrWhiteSpace($MoviePath)) {

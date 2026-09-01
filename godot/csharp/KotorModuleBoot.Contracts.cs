@@ -121,13 +121,20 @@ public sealed partial class KotorModuleBoot
         IReadOnlyList<RoomEmitterRecord>? Emitters,
         bool SourcePlaceholder = false,
         IReadOnlyList<RoomAlphaNodeRecord>? AlphaNodes = null,
-        IReadOnlyList<RoomAlphaAnimationRecord>? AlphaAnimations = null);
+        IReadOnlyList<RoomAlphaAnimationRecord>? AlphaAnimations = null,
+        IReadOnlyList<RoomEmitterAnimationRecord>? EmitterAnimations = null);
     private sealed record RoomAlphaNodeRecord(string NodeName, float BaseAlpha);
     private sealed record RoomAlphaAnimationRecord(
         string Name, float Length, IReadOnlyList<RoomAlphaTrackRecord> Tracks);
     private sealed record RoomAlphaTrackRecord(
         string NodeName, IReadOnlyList<RoomAlphaKeyRecord> Keys);
     private sealed record RoomAlphaKeyRecord(float Time, float Value);
+    private sealed record RoomEmitterAnimationRecord(
+        string Name, float Length, bool AutoPlay,
+        IReadOnlyList<RoomEmitterTrackRecord> Tracks);
+    private sealed record RoomEmitterTrackRecord(
+        string NodePath, string Property, IReadOnlyList<RoomEmitterKeyRecord> Keys);
+    private sealed record RoomEmitterKeyRecord(float Time, float Value);
     private sealed record RoomEmitterRecord(
         string Schema,
         string NodePath,
