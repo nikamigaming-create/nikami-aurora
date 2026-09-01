@@ -3,7 +3,14 @@
   "profiles": {
     "kotor2": {
       "001ebo": {
-        "playerTemplate": "p_t3m4"
+        "playerTemplate": "p_t3m4",
+        "openingSequence": {
+          "eventSource": "area-enter",
+          "triggerTemplate": "area:001ebo",
+          "triggerScript": "a_bet3m4",
+          "actorTag": "Prologue",
+          "conversation": "intro"
+        }
       },
       "101per": {
         "openingSequence": {

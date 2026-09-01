@@ -480,6 +480,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private Label details = null!;
     private ColorRect loadingBackdrop = null!;
     private ColorRect cinematicFade = null!;
+    private ColorRect videoEffectOverlay = null!;
+    private readonly Dictionary<int, VideoEffectRecord> videoEffects = [];
     private Tween? dialogueFadeTween;
     private PanelContainer dialoguePanel = null!;
     private Label dialogueSpeaker = null!;
@@ -1489,6 +1491,8 @@ public sealed partial class KotorModuleBoot : Node3D
 
             var manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
             ConfigureFlatPresentation(manifest.Ui, manifestDirectory, manifest.ProfileId);
+            if (manifest.VideoEffects is not null)
+                ConfigureVideoEffects(manifest.VideoEffects);
             UpdateLoadingProgress(runtimeConfiguration.Presentation.Loading.RoomLoadingStart);
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             if (await CaptureLoadingPresentationIfRequested())
@@ -2086,10 +2090,14 @@ public sealed partial class KotorModuleBoot : Node3D
                         launchEnvironment.Get(
                             "NIKAMI_AURORA_SKIP_OPENING_DIALOGUE") != "1");
             }
-            if (manifest.OpeningDialogue is not null && gameplaySimulation is not null &&
+            if (manifest.OpeningDialogue is { } opening && gameplaySimulation is not null &&
                 launchEnvironment.Get("NIKAMI_AURORA_SKIP_OPENING_DIALOGUE") != "1")
-                ApplyGameplayTransition(gameplaySimulation.UpdateTriggers(
-                    simulationPlayerPosition, simulationPlayerPosition));
+            {
+                ApplyGameplayTransition(opening.EventSource == "area-enter"
+                    ? gameplaySimulation.ExecuteScript(opening.ScriptResref)
+                    : gameplaySimulation.UpdateTriggers(
+                        simulationPlayerPosition, simulationPlayerPosition));
+            }
             firstEncounter = manifest.FirstEncounter;
             if (firstEncounter is not null)
             {
@@ -2418,6 +2426,40 @@ public sealed partial class KotorModuleBoot : Node3D
         loadingBackdrop.AddChild(status);
         loadingBackdrop.AddChild(details);
 
+        var videoEffectLayer = new CanvasLayer { Name = "VideoEffectLayer", Layer = 45 };
+        AddChild(videoEffectLayer);
+        videoEffectOverlay = new ColorRect
+        {
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            Visible = false,
+            Material = new ShaderMaterial
+            {
+                Shader = new Shader
+                {
+                    Code = """
+                           shader_type canvas_item;
+                           uniform sampler2D screen_texture : hint_screen_texture,
+                               repeat_disable, filter_linear;
+                           uniform vec3 source_modulation = vec3(1.0);
+                           uniform float source_saturation = 1.0;
+                           uniform bool source_scan_noise = false;
+                           void fragment() {
+                               vec4 source = texture(screen_texture, SCREEN_UV);
+                               float luminance = dot(source.rgb, vec3(0.299, 0.587, 0.114));
+                               vec3 saturated = mix(vec3(luminance), source.rgb,
+                                   source_saturation);
+                               float scan = source_scan_noise
+                                   ? 0.94 + 0.06 * sin(SCREEN_UV.y * 900.0 + TIME * 24.0)
+                                   : 1.0;
+                               COLOR = vec4(saturated * source_modulation * scan, source.a);
+                           }
+                           """
+                }
+            }
+        };
+        videoEffectOverlay.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        videoEffectLayer.AddChild(videoEffectOverlay);
+
         var cinematicFadeLayer = new CanvasLayer { Name = "CinematicFadeLayer", Layer = 50 };
         AddChild(cinematicFadeLayer);
         cinematicFade = new ColorRect
@@ -2541,6 +2583,14 @@ public sealed partial class KotorModuleBoot : Node3D
                     KotorScriptContractKind.ModuleStartPresentation,
                 "play-sound-object-from-parameters" =>
                     KotorScriptContractKind.PlaySoundObjectFromParameters,
+                "sound-object-play-delayed-from-parameters" =>
+                    KotorScriptContractKind.SoundObjectPlayDelayedFromParameters,
+                "sound-object-stop-from-parameters" =>
+                    KotorScriptContractKind.SoundObjectStopFromParameters,
+                "video-effect-from-parameters" =>
+                    KotorScriptContractKind.VideoEffectFromParameters,
+                "local-boolean-set-from-parameters" =>
+                    KotorScriptContractKind.LocalBooleanSetFromParameters,
                 "no-op" => KotorScriptContractKind.NoOp,
                 "room-animation-from-parameters" =>
                     KotorScriptContractKind.RoomAnimationFromParameters,

@@ -480,6 +480,17 @@ public sealed partial class KotorModuleBoot
                 case KotorSoundObjectPlayRequested requested:
                     PresentSoundObjectPlay(requested);
                     break;
+                case KotorSoundObjectStopRequested requested:
+                    PresentSoundObjectStop(requested);
+                    break;
+                case KotorVideoEffectRequested requested:
+                    PresentVideoEffect(requested);
+                    break;
+                case KotorLocalBooleanChanged local:
+                    GD.Print($"NIKAMI_AURORA_LOCAL_BOOLEAN status=changed " +
+                             $"object={local.ObjectTag} index={local.Index} " +
+                             $"value={local.Before}->{local.After}");
+                    break;
                 case KotorRoomAnimationRequested requested:
                     PresentRoomAnimation(requested);
                     break;
@@ -889,6 +900,49 @@ public sealed partial class KotorModuleBoot
                  $"bearing={waypoint.Bearing:F3}");
     }
 
+    private void ConfigureVideoEffects(VideoEffectTableRecord source)
+    {
+        if (source.Schema != "nikami-aurora-kotor-video-effects-v1" ||
+            source.SourceSha256.Length != 64 || !source.SourceSha256.All(Uri.IsHexDigit))
+            throw new InvalidDataException("Odyssey video-effect table is invalid");
+        videoEffects.Clear();
+        foreach (var effect in source.Effects)
+        {
+            if (effect.Id < 0 || string.IsNullOrWhiteSpace(effect.Label) ||
+                effect.Modulation.Count < 3 ||
+                !effect.Modulation.Take(3).All(value => float.IsFinite(value) && value >= 0) ||
+                !float.IsFinite(effect.Saturation) || effect.Saturation < 0 ||
+                effect.Saturation > 1 || !videoEffects.TryAdd(effect.Id, effect))
+                throw new InvalidDataException(
+                    $"Odyssey video-effect row is invalid: {effect.Id}");
+        }
+    }
+
+    private void PresentVideoEffect(KotorVideoEffectRequested request)
+    {
+        if (!request.Enabled)
+        {
+            videoEffectOverlay.Visible = false;
+            GD.Print("NIKAMI_AURORA_VIDEO_EFFECT status=disabled");
+            return;
+        }
+        if (!videoEffects.TryGetValue(request.EffectId, out var source) ||
+            videoEffectOverlay.Material is not ShaderMaterial material)
+            throw new InvalidDataException(
+                $"Odyssey video effect was not resolved: {request.EffectId}");
+        material.SetShaderParameter("source_modulation", new Vector3(
+            source.Modulation[0], source.Modulation[1], source.Modulation[2]));
+        material.SetShaderParameter(
+            "source_saturation", source.EnableSaturation ? source.Saturation : 1.0f);
+        material.SetShaderParameter("source_scan_noise", source.EnableScanNoise);
+        videoEffectOverlay.Visible = true;
+        GD.Print($"NIKAMI_AURORA_VIDEO_EFFECT status=enabled id={source.Id} " +
+                 $"label={source.Label} saturation={source.Saturation:F3} " +
+                 $"modulation={source.Modulation[0]:F3}," +
+                 $"{source.Modulation[1]:F3},{source.Modulation[2]:F3} " +
+                 $"scan_noise={source.EnableScanNoise}");
+    }
+
     private void PresentGlobalFade(KotorGlobalFadeRequested request)
     {
         dialogueFadeTween?.Kill();
@@ -953,22 +1007,38 @@ public sealed partial class KotorModuleBoot
             var timer = GetTree().CreateTimer(request.DelaySeconds);
             await ToSignal(timer, SceneTreeTimer.SignalName.Timeout);
         }
-        switch (sound.Player)
-        {
-            case AudioStreamPlayer3D spatial:
-                spatial.Play();
-                break;
-            case AudioStreamPlayer flat:
-                flat.Play();
-                break;
-            default:
-                throw new InvalidDataException(
-                    $"Unsupported sound-object player: {request.Tag}");
-        }
+        PlayMaterializedSoundObject(sound);
+        var audioIdentity = sound.Source.AudioSources?.FirstOrDefault()?.Resref ??
+                            sound.Source.Audio?.Resref ?? "unknown";
         GD.Print($"NIKAMI_AURORA_SOUND_OBJECT status=playing " +
                  $"tag={request.Tag} template={sound.Source.Template} " +
-                 $"audio={sound.Source.Audio.Resref} delay={request.DelaySeconds:F3} " +
+                 $"audio={audioIdentity} delay={request.DelaySeconds:F3} " +
                  $"looping={sound.Source.Looping} positional={sound.Source.Positional}");
+    }
+
+    private async void PresentSoundObjectStop(KotorSoundObjectStopRequested request)
+    {
+        if (!moduleSoundObjects.TryGetValue(request.Tag, out var sound))
+            throw new InvalidDataException(
+                $"Authored sound object was not materialized: {request.Tag}");
+        if (request.DelaySeconds > 0)
+        {
+            var timer = GetTree().CreateTimer(request.DelaySeconds);
+            await ToSignal(timer, SceneTreeTimer.SignalName.Timeout);
+        }
+        if (request.FadeSeconds > 0)
+        {
+            var tween = CreateTween();
+            tween.TweenProperty(
+                sound.Player, "volume_db", -80.0f, request.FadeSeconds);
+            await ToSignal(tween, Tween.SignalName.Finished);
+        }
+        sound.Generation++;
+        sound.Player.Call("stop");
+        sound.Player.Set("volume_db", sound.SourceVolumeDb);
+        GD.Print($"NIKAMI_AURORA_SOUND_OBJECT status=stopped " +
+                 $"tag={request.Tag} delay={request.DelaySeconds:F3} " +
+                 $"fade={request.FadeSeconds:F3}");
     }
 
     private static void PresentExperienceAward(KotorExperienceAwarded experience)

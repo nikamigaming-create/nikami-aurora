@@ -98,6 +98,47 @@ def export_experience_table(installation: Installation) -> dict[str, Any]:
     }
 
 
+def export_video_effects(installation: Installation) -> dict[str, Any]:
+    resource = installation.resource("videoeffects", ResourceType.TwoDA)
+    if resource is None:
+        raise RuntimeError("videoeffects.2da could not be resolved")
+    data = resource_data(resource)
+    table = read_2da(data)
+    headers = {header.casefold(): header for header in table.get_headers()}
+    def video_column(base: str) -> str:
+        for candidate in (f"{base}_pc", base):
+            if candidate in headers:
+                return headers[candidate]
+        raise RuntimeError(f"videoeffects.2da is missing {base}")
+    modulation_columns = [
+        video_column("modulationred"),
+        video_column("modulationgreen"),
+        video_column("modulationblue"),
+    ]
+    saturation_column = video_column("saturation")
+    effects = []
+    for row in range(table.get_height()):
+        label = str(table.get_cell(row, "label")).strip()
+        if not label or label == "****":
+            continue
+        effects.append({
+            "id": row,
+            "label": label,
+            "enableSaturation": bool(int(table.get_cell(row, "enablesaturation"))),
+            "modulation": [
+                float(table.get_cell(row, column))
+                for column in modulation_columns
+            ],
+            "saturation": float(table.get_cell(row, saturation_column)),
+            "enableScanNoise": bool(int(table.get_cell(row, "enablescannoise"))),
+        })
+    return {
+        "schema": "nikami-aurora-kotor-video-effects-v1",
+        "sourceSha256": sha256_bytes(data),
+        "effects": effects,
+    }
+
+
 def export_combat_experience_table(installation: Installation) -> dict[str, Any]:
     resource = installation.resource("xptable", ResourceType.TwoDA)
     if resource is None:
@@ -348,6 +389,10 @@ def load_profile_starts() -> dict[str, Any]:
                             not opening[key].strip() for key in required)):
                     raise RuntimeError(
                         f"Invalid Odyssey opening sequence: {profile_id}/{module_id}")
+                event_source = opening.get("eventSource", "trigger-enter")
+                if event_source not in ("trigger-enter", "area-enter"):
+                    raise RuntimeError(
+                        f"Invalid Odyssey opening event source: {profile_id}/{module_id}")
             if player_template is None and opening is None:
                 raise RuntimeError(
                     f"Empty Odyssey profile start configuration: {profile_id}/{module_id}")
@@ -506,6 +551,187 @@ def read_owned_mdl_via_mdlops(
                 f"{completed.stdout}\n{completed.stderr}")
         stamp_path.write_text(source_hash + "\n", encoding="ascii")
     return read_mdl_ascii_preserving_lightmaps(ascii_path)
+
+
+def parse_mdlops_skin_weights(
+    ascii_path: Path,
+) -> dict[str, list[list[tuple[str, float]]]]:
+    """Read the named skin influences that PyKotor's ASCII reader omits."""
+    lines = ascii_path.read_text(encoding="ascii", errors="strict").splitlines()
+    weights_by_node: dict[str, list[list[tuple[str, float]]]] = {}
+    current_node: str | None = None
+    index = 0
+    while index < len(lines):
+        fields = lines[index].strip().split()
+        if len(fields) >= 3 and fields[0].casefold() == "node":
+            current_node = fields[2] if fields[1].casefold() == "skin" else None
+        elif fields and fields[0].casefold() == "endnode":
+            current_node = None
+        elif current_node is not None and len(fields) == 2 and fields[0].casefold() == "weights":
+            if current_node.casefold() in {
+                    name.casefold() for name in weights_by_node}:
+                raise RuntimeError(
+                    f"Duplicate MDLOps skin weights for {current_node} in {ascii_path}")
+            count = int(fields[1])
+            vertex_weights: list[list[tuple[str, float]]] = []
+            while len(vertex_weights) < count:
+                index += 1
+                if index >= len(lines):
+                    raise RuntimeError(
+                        f"Truncated MDLOps skin weights for {current_node} in {ascii_path}")
+                influence_fields = lines[index].strip().split()
+                if not influence_fields:
+                    continue
+                if len(influence_fields) % 2 or len(influence_fields) > 8:
+                    raise RuntimeError(
+                        f"Invalid MDLOps skin influence for {current_node} in {ascii_path}")
+                influences: list[tuple[str, float]] = []
+                seen_bones: set[str] = set()
+                for offset in range(0, len(influence_fields), 2):
+                    bone_name = influence_fields[offset]
+                    bone_key = bone_name.casefold()
+                    weight = float(influence_fields[offset + 1])
+                    if bone_key in seen_bones or not math.isfinite(weight) or weight <= 0.0:
+                        raise RuntimeError(
+                            f"Invalid MDLOps skin weight for {current_node}:{bone_name} "
+                            f"in {ascii_path}")
+                    seen_bones.add(bone_key)
+                    influences.append((bone_name, weight))
+                total = sum(weight for _, weight in influences)
+                if not math.isfinite(total) or total <= 0.0 or abs(total - 1.0) > 0.02:
+                    raise RuntimeError(
+                        f"Unnormalized MDLOps skin weights for {current_node} in {ascii_path}: "
+                        f"{total}")
+                vertex_weights.append([
+                    (bone_name, weight / total) for bone_name, weight in influences
+                ])
+            weights_by_node[current_node] = vertex_weights
+        index += 1
+    return weights_by_node
+
+
+def merge_mdlops_skin_bindings(
+    ascii_model: Any,
+    binary_model: Any,
+    ascii_path: Path,
+) -> Any:
+    """Join MDLOps K2 geometry/weights to binary MDL bind transforms."""
+    ascii_nodes = list(ascii_model.all_nodes())
+    binary_nodes = list(binary_model.all_nodes())
+    ascii_names = [str(node.name).casefold() for node in ascii_nodes]
+    binary_names = [str(node.name).casefold() for node in binary_nodes]
+    if ascii_names != binary_names:
+        raise RuntimeError(
+            f"MDLOps/binary skeleton hierarchy drifted in {ascii_path}: "
+            f"ascii={len(ascii_names)} binary={len(binary_names)}")
+
+    weights_by_name = {
+        name.casefold(): weights
+        for name, weights in parse_mdlops_skin_weights(ascii_path).items()
+    }
+    binary_by_name = {
+        str(node.name).casefold(): node for node in binary_nodes
+    }
+    source_index_by_name = {
+        str(node.name).casefold(): index for index, node in enumerate(binary_nodes)
+    }
+    merged_skin_count = 0
+    for ascii_node in ascii_nodes:
+        if ascii_node.skin is None:
+            continue
+        node_key = str(ascii_node.name).casefold()
+        named_weights = weights_by_name.get(node_key)
+        binary_node = binary_by_name[node_key]
+        if named_weights is None or binary_node.skin is None:
+            raise RuntimeError(
+                f"Missing source skin binding for {ascii_node.name} in {ascii_path}")
+        if (ascii_node.mesh is None or
+                len(named_weights) != len(ascii_node.mesh.vertex_positions) or
+                len(named_weights) != len(ascii_node.skin.vertex_bones)):
+            raise RuntimeError(
+                f"Skin vertex count drifted for {ascii_node.name} in {ascii_path}: "
+                f"weights={len(named_weights)} vertices="
+                f"{len(ascii_node.mesh.vertex_positions) if ascii_node.mesh else 0}")
+        if (len(binary_node.skin.bonemap) != len(binary_nodes) or
+                len(binary_node.skin.tbones) != len(binary_nodes) or
+                len(binary_node.skin.qbones) != len(binary_nodes)):
+            raise RuntimeError(
+                f"Binary bind table drifted for {ascii_node.name} in {ascii_path}")
+
+        ascii_node.skin.bonemap = list(binary_node.skin.bonemap)
+        ascii_node.skin.tbones = list(binary_node.skin.tbones)
+        ascii_node.skin.qbones = list(binary_node.skin.qbones)
+        used_slots: set[int] = set()
+        for bone_vertex, influences in zip(
+                ascii_node.skin.vertex_bones, named_weights, strict=True):
+            slots: list[int] = []
+            values: list[float] = []
+            for bone_name, weight in influences:
+                source_index = source_index_by_name.get(bone_name.casefold())
+                if source_index is None:
+                    raise RuntimeError(
+                        f"Unknown source bone {bone_name} for {ascii_node.name} "
+                        f"in {ascii_path}")
+                slot = int(binary_node.skin.bonemap[source_index])
+                if slot < 0:
+                    raise RuntimeError(
+                        f"Unbound source bone {bone_name} for {ascii_node.name} "
+                        f"in {ascii_path}")
+                slots.append(slot)
+                values.append(weight)
+                used_slots.add(slot)
+            bone_vertex.vertex_indices = tuple(slots + [-1] * (4 - len(slots)))
+            bone_vertex.vertex_weights = tuple(values + [0.0] * (4 - len(values)))
+        if used_slots != set(range(max(used_slots) + 1)):
+            raise RuntimeError(
+                f"Non-contiguous source skin slots for {ascii_node.name} in {ascii_path}: "
+                f"{sorted(used_slots)}")
+        merged_skin_count += 1
+    if merged_skin_count != len(weights_by_name):
+        raise RuntimeError(
+            f"Unmatched MDLOps skin nodes in {ascii_path}: "
+            f"weights={len(weights_by_name)} meshes={merged_skin_count}")
+    return ascii_model
+
+
+def has_usable_source_skin(model: Any) -> bool:
+    """Return whether a binary model carries geometry and sane skin weights."""
+    skin_nodes = [node for node in model.all_nodes() if node.skin is not None]
+    if not skin_nodes:
+        return False
+    for node in skin_nodes:
+        skin = node.skin
+        if (node.mesh is None or not node.mesh.vertex_positions or
+                len(skin.vertex_bones) != len(node.mesh.vertex_positions)):
+            return False
+        for vertex in skin.vertex_bones:
+            influences = [
+                (int(slot), float(weight))
+                for slot, weight in zip(vertex.vertex_indices, vertex.vertex_weights)
+                if float(weight) > 0.0
+            ]
+            if (not influences or any(
+                    slot < 0 or not math.isfinite(weight) or weight > 1.001
+                    for slot, weight in influences)):
+                return False
+    return True
+
+
+def repair_owned_skin_model_via_mdlops(
+    binary_model: Any,
+    mdl_bytes: bytes,
+    mdx_bytes: bytes,
+    model_name: str,
+    mdlops: Path,
+    cache_root: Path,
+) -> Any:
+    """Use K2's owned named weights when its binary MDX layout is unsupported."""
+    if has_usable_source_skin(binary_model):
+        return binary_model
+    ascii_model = read_owned_mdl_via_mdlops(
+        mdl_bytes, mdx_bytes, model_name, mdlops, cache_root)
+    ascii_path = cache_root / f"{model_name.lower()}.mdl.ascii"
+    return merge_mdlops_skin_bindings(ascii_model, binary_model, ascii_path)
 
 
 def find_module_resource(installation: Installation, module: str, restype: str) -> Any:
@@ -3739,6 +3965,11 @@ def export_player_actor(
     head_name = str(heads.get_cell(head_index, "head"))
     body, body_mdl, body_mdx = load_model_pair(installation, body_name)
     head, head_mdl, head_mdx = load_model_pair(installation, head_name)
+    model_cache = animation_cache.parent / "player-models"
+    body = repair_owned_skin_model_via_mdlops(
+        body, body_mdl, body_mdx, body_name, mdlops, model_cache)
+    head = repair_owned_skin_model_via_mdlops(
+        head, head_mdl, head_mdx, head_name, mdlops, model_cache)
     animation_model, animation_source_hash = load_animation_supermodel(
         installation, mdlops, animation_cache)
     animation_report = export_actor(
@@ -4053,7 +4284,6 @@ def export_generic_player_actor(
     animation_cache: Path,
     appearance_id: int = 137,
     portrait_id: int = 18,
-    require_head_skin: bool = True,
     additional_animation_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Export the source-bound base avatar without Endar locker variants."""
@@ -4088,12 +4318,11 @@ def export_generic_player_actor(
     head_name = str(heads.get_cell(head_index, "head"))
     body, body_mdl, body_mdx = load_model_pair(installation, body_name)
     head, head_mdl, head_mdx = load_model_pair(installation, head_name)
-    if not require_head_skin:
-        model_cache = animation_cache.parent / "player-models"
-        body = read_owned_mdl_via_mdlops(
-            body_mdl, body_mdx, body_name, mdlops, model_cache)
-        head = read_owned_mdl_via_mdlops(
-            head_mdl, head_mdx, head_name, mdlops, model_cache)
+    model_cache = animation_cache.parent / "player-models"
+    body = repair_owned_skin_model_via_mdlops(
+        body, body_mdl, body_mdx, body_name, mdlops, model_cache)
+    head = repair_owned_skin_model_via_mdlops(
+        head, head_mdl, head_mdx, head_name, mdlops, model_cache)
     animation_models = []
     animation_source_hashes = []
     for animation_supermodel in ("S_Male01", "S_Male02"):
@@ -4121,7 +4350,7 @@ def export_generic_player_actor(
         animation_model=animation_model,
         animation_names=requested_animations,
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
-        require_head_skin=require_head_skin,
+        require_head_skin=True,
     )
     missing_animations = [
         name for name in requested_animations
@@ -4156,7 +4385,7 @@ def export_generic_player_actor(
             [float(item) for item in camera_hook[:3, 3]]
             if camera_hook is not None else None
         ),
-        "rigKind": "humanoid" if require_head_skin else "rigid-humanoid",
+        "rigKind": "humanoid",
         "animationSource": "S_Male01+S_Male02",
         "animationSourceSha256": sha256_bytes(
             "".join(animation_source_hashes).encode("ascii")),
@@ -5124,19 +5353,32 @@ def export_referenced_sound_objects(
         key = str(source.tag).casefold()
         if key not in remaining:
             continue
-        if len(source.sounds) != 1:
-            raise RuntimeError(
-                f"Referenced sound object requires one deterministic source: {source.tag}")
-        sound_resref = canonical_resref(source.sounds[0])
-        sound_bytes = installation.sound(sound_resref)
-        if not sound_bytes:
-            raise RuntimeError(f"Sound-object audio could not be resolved: {sound_resref}")
-        playable, source_encoding, payload_encoding = normalize_wav_for_godot(
-            sound_bytes, sound_resref)
-        relative = f"audio/{sound_resref}.wav"
-        destination = output_root / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(playable)
+        if not source.sounds:
+            raise RuntimeError(f"Referenced sound object has no sources: {source.tag}")
+        audio_sources = []
+        for sound in source.sounds:
+            sound_resref = canonical_resref(sound)
+            sound_bytes = installation.sound(sound_resref)
+            if not sound_bytes:
+                raise RuntimeError(
+                    f"Sound-object audio could not be resolved: {sound_resref}")
+            playable, source_encoding, payload_encoding = normalize_wav_for_godot(
+                sound_bytes, sound_resref)
+            relative = f"audio/{sound_resref}.wav"
+            destination = output_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(playable)
+            audio_sources.append({
+                "resref": sound_resref,
+                "path": relative,
+                "format": "wav",
+                "sourceSha256": sha256_bytes(sound_bytes),
+                "sourceByteCount": len(sound_bytes),
+                "sourceEncoding": source_encoding,
+                "payloadSha256": sha256_bytes(playable),
+                "byteCount": len(playable),
+                "payloadEncoding": payload_encoding,
+            })
         records.append({
             "schema": "nikami-aurora-kotor-sound-object-v1",
             "template": template,
@@ -5150,18 +5392,12 @@ def export_referenced_sound_objects(
             "minDistance": float(source.min_distance),
             "maxDistance": float(source.max_distance),
             "pitchVariation": float(source.pitch_variation),
+            "volumeVariation": int(source.volume_variation),
+            "randomPick": bool(source.random_pick),
+            "intervalMilliseconds": int(source.interval),
+            "intervalVariationMilliseconds": int(source.interval_variation),
             "utsSha256": sha256_bytes(template_bytes),
-            "audio": {
-                "resref": sound_resref,
-                "path": relative,
-                "format": "wav",
-                "sourceSha256": sha256_bytes(sound_bytes),
-                "sourceByteCount": len(sound_bytes),
-                "sourceEncoding": source_encoding,
-                "payloadSha256": sha256_bytes(playable),
-                "byteCount": len(playable),
-                "payloadEncoding": payload_encoding,
-            },
+            "audioSources": audio_sources,
         })
         remaining.pop(key)
     if remaining:
@@ -5251,6 +5487,13 @@ def _import_generic_module(
     area_music = export_area_music(installation, git, output_root)
     opening_animation_names: tuple[str, ...] = ()
     if opening_sequence is not None:
+        opening_event_source = opening_sequence.get("eventSource", "trigger-enter")
+        if (opening_event_source == "area-enter" and
+                canonical_resref(are.on_enter).casefold() !=
+                opening_sequence["triggerScript"].casefold()):
+            raise RuntimeError(
+                f"Opening area-enter script drifted: {module}/"
+                f"{opening_sequence['triggerScript']}")
         lip_path = game_root / "lips" / f"{module}_loc.mod"
         lip_capsule = Capsule(lip_path) if lip_path.is_file() else None
         dialogue_reference = export_dialogue(
@@ -5290,6 +5533,8 @@ def _import_generic_module(
             "schema": "nikami-aurora-kotor-opening-dialogue-v1",
             "actorTag": opening_sequence["actorTag"],
             "conversation": opening_sequence["conversation"],
+            "eventSource": opening_event_source,
+            "scriptResref": opening_sequence["triggerScript"],
             "dialogue": dialogue_reference,
         }
         script_contracts.append({
@@ -5369,6 +5614,73 @@ def _import_generic_module(
                     "sourceSha256": sha256_bytes(script_bytes),
                     "instructionCount": len(script_ncs.instructions),
                 })
+            elif (start_actions == [(719, 5), (768, 1), (508, 1), (510, 0)] and
+                    len(script_ncs.instructions) == 21):
+                script_contracts.append({
+                    "schema": "nikami-aurora-kotor-script-contract-v1",
+                    "resref": dialogue_script,
+                    "kind": "video-effect-from-parameters",
+                    "sourceSha256": sha256_bytes(script_bytes),
+                    "instructionCount": len(script_ncs.instructions),
+                })
+            elif (start_actions == [(768, 1), (831, 0), (200, 2), (680, 3)] and
+                    len(script_ncs.instructions) == 149):
+                script_contracts.append({
+                    "schema": "nikami-aurora-kotor-script-contract-v1",
+                    "resref": dialogue_script,
+                    "kind": "local-boolean-set-from-parameters",
+                    "sourceSha256": sha256_bytes(script_bytes),
+                    "instructionCount": len(script_ncs.instructions),
+                })
+            elif ((start_actions == [
+                        (9, 0), (548, 0), (6, 2), (200, 2), (383, 4),
+                        (548, 0), (6, 2)] and len(script_ncs.instructions) == 21) or
+                    (start_actions == [(200, 2), (200, 2), (383, 4), (6, 2)] and
+                     len(script_ncs.instructions) == 22)):
+                if waypoint_strings != ["wp_t3m4"]:
+                    raise RuntimeError(
+                        f"T3 opening movement drifted: {dialogue_script}")
+                script_contracts.append({
+                    "schema": "nikami-aurora-kotor-script-contract-v1",
+                    "resref": dialogue_script,
+                    "kind": "move-player-to-waypoint",
+                    "sourceSha256": sha256_bytes(script_bytes),
+                    "instructionCount": len(script_ncs.instructions),
+                    "moveTargetTag": waypoint_strings[0],
+                })
+            elif (start_actions == [
+                    (831, 0), (768, 1), (768, 1), (768, 1), (230, 1),
+                    (200, 2), (745, 2), (230, 1), (7, 2), (200, 2),
+                    (413, 1), (230, 1), (7, 2)] and
+                    len(script_ncs.instructions) == 48):
+                script_contracts.append({
+                    "schema": "nikami-aurora-kotor-script-contract-v1",
+                    "resref": dialogue_script,
+                    "kind": "sound-object-play-delayed-from-parameters",
+                    "sourceSha256": sha256_bytes(script_bytes),
+                    "instructionCount": len(script_ncs.instructions),
+                })
+                for node in dialogue_graph["nodes"].values():
+                    for slot in (1, 2):
+                        if node[f"script{slot}"].lower() == dialogue_script:
+                            referenced_sound_tags.add(
+                                str(node[f"script{slot}Parameters"]["string6"]))
+            elif (start_actions == [
+                    (831, 0), (768, 1), (768, 1), (230, 1), (200, 2),
+                    (745, 2), (230, 1), (7, 2)] and
+                    len(script_ncs.instructions) == 30):
+                script_contracts.append({
+                    "schema": "nikami-aurora-kotor-script-contract-v1",
+                    "resref": dialogue_script,
+                    "kind": "sound-object-stop-from-parameters",
+                    "sourceSha256": sha256_bytes(script_bytes),
+                    "instructionCount": len(script_ncs.instructions),
+                })
+                for node in dialogue_graph["nodes"].values():
+                    for slot in (1, 2):
+                        if node[f"script{slot}"].lower() == dialogue_script:
+                            referenced_sound_tags.add(
+                                str(node[f"script{slot}Parameters"]["string6"]))
             elif (start_actions == [
                     (768, 1), (831, 0), (200, 2), (42, 1),
                     (413, 1), (230, 1), (7, 2),
@@ -5426,7 +5738,6 @@ def _import_generic_module(
             output_root / "_cache" / "animations",
             appearance_id=player_appearance_id,
             portrait_id=player_portrait_id,
-            require_head_skin=profile_id == "kotor",
             additional_animation_names=opening_animation_names,
         )
     )
@@ -5612,6 +5923,7 @@ def _import_generic_module(
         },
         "runtimeConfiguration": runtime_configuration,
         "experienceTable": export_experience_table(installation),
+        "videoEffects": export_video_effects(installation),
         "combatExperienceTable": export_combat_experience_table(installation),
         "ui": ui_contract,
         "player": player_actor,
@@ -6281,6 +6593,7 @@ def _import_endar_module(
         },
         "runtimeConfiguration": runtime_configuration,
         "experienceTable": export_experience_table(installation),
+        "videoEffects": export_video_effects(installation),
         "combatExperienceTable": export_combat_experience_table(installation),
         "ui": ui_contract,
         "player": player_actor,
