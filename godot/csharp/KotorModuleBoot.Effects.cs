@@ -1036,8 +1036,11 @@ public sealed partial class KotorModuleBoot
                 VisibilityAabb = new Aabb(
                     Vector3.One * -boundsExtent,
                     Vector3.One * boundsExtent * 2),
-                Emitting = true
+                Emitting = source.BirthRate > 0
             };
+            particles.SetMeta("source_birth_rate", source.BirthRate);
+            particles.SetMeta("source_random_birth_rate", source.RandomBirthRate);
+            particles.SetMeta("source_life_expectancy", source.LifeExpectancy);
             roomRoot.AddChild(particles);
             if (isPointToPoint)
             {
@@ -1103,6 +1106,96 @@ public sealed partial class KotorModuleBoot
             maximumSmokeQuadExtent, maximumSparkTrailExtent, smoke, spark,
             pointToPoint, collisionBounce, collisionReport.Rooms,
             collisionReport.WalkmeshTriangles, bounceCoefficients, damagedEnd);
+    }
+
+    private void StartRoomEmitterAnimations(RoomRecord room, Node3D roomRoot)
+    {
+        foreach (var animation in (room.EmitterAnimations ?? []).Where(item => item.AutoPlay))
+            StartRoomEmitterAnimation(room, roomRoot, animation);
+    }
+
+    private void StartRoomEmitterAnimation(
+        RoomRecord room, Node3D roomRoot, RoomEmitterAnimationRecord animation)
+    {
+        var expectedPrefix = animation.AutoPlay ? "animloop" : "scriptloop";
+        if (!animation.Name.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase) ||
+            !float.IsFinite(animation.Length) || animation.Length <= 0)
+            throw new InvalidDataException(
+                $"Invalid room emitter loop: {room.Model}/{animation.Name}");
+        foreach (var track in animation.Tracks)
+        {
+            if (track.Keys.Count == 0 ||
+                (track.Property != "birthRate" && track.Property != "randomBirthRate"))
+                throw new InvalidDataException(
+                    $"Invalid room emitter track: {room.Model}/{animation.Name}/" +
+                    $"{track.NodePath}/{track.Property}");
+            var particles = roomRoot.GetNodeOrNull<GpuParticles3D>(
+                "Emitter_" + track.NodePath.Replace('/', '_'))
+                ?? throw new InvalidDataException(
+                    $"Room emitter animation could not resolve node " +
+                    $"{room.Model}/{track.NodePath}");
+            var tweenKey = $"{room.Model}/{animation.Name}/{track.NodePath}/" +
+                           track.Property;
+            if (roomEmitterTweens.Remove(tweenKey, out var existing) && existing.IsValid())
+                existing.Kill();
+            var tween = CreateTween().SetLoops();
+            var previousTime = 0.0f;
+            var previousValue = ReadRoomEmitterRate(particles, track.Property);
+            foreach (var key in track.Keys)
+            {
+                if (!float.IsFinite(key.Time) || key.Time < previousTime ||
+                    key.Time > animation.Length || !float.IsFinite(key.Value) ||
+                    key.Value < 0)
+                    throw new InvalidDataException(
+                        $"Invalid room emitter key: {tweenKey}");
+                var property = track.Property;
+                var duration = key.Time - previousTime;
+                if (duration > 0)
+                {
+                    tween.TweenMethod(
+                        Callable.From<float>(value =>
+                            ApplyRoomEmitterRate(particles, property, value)),
+                        previousValue,
+                        key.Value,
+                        duration);
+                }
+                else
+                {
+                    var value = key.Value;
+                    tween.TweenCallback(Callable.From(() =>
+                        ApplyRoomEmitterRate(particles, property, value)));
+                }
+                previousTime = key.Time;
+                previousValue = key.Value;
+            }
+            if (previousTime < animation.Length)
+                tween.TweenInterval(animation.Length - previousTime);
+            roomEmitterTweens[tweenKey] = tween;
+        }
+        GD.Print($"NIKAMI_AURORA_ROOM_EMITTER_ANIMATION status=playing " +
+                 $"room={room.Model} animation={animation.Name} " +
+                 $"length={animation.Length:F3} tracks={animation.Tracks.Count} " +
+                 $"trigger={(animation.AutoPlay ? "area-load" : "script")}");
+    }
+
+    private static float ReadRoomEmitterRate(GpuParticles3D particles, string property) =>
+        particles.GetMeta(
+            property == "birthRate" ? "source_birth_rate" : "source_random_birth_rate")
+            .AsSingle();
+
+    private static void ApplyRoomEmitterRate(
+        GpuParticles3D particles, string property, float value)
+    {
+        particles.SetMeta(
+            property == "birthRate" ? "source_birth_rate" : "source_random_birth_rate",
+            value);
+        var birthRate = ReadRoomEmitterRate(particles, "birthRate");
+        var randomBirthRate = ReadRoomEmitterRate(particles, "randomBirthRate");
+        var lifetime = particles.GetMeta("source_life_expectancy").AsSingle();
+        particles.Amount = Math.Max(1, (int)Math.Ceiling(birthRate * lifetime));
+        particles.Randomness = Mathf.Clamp(
+            randomBirthRate / Math.Max(1.0f, birthRate), 0, 1);
+        particles.Emitting = birthRate > 0;
     }
 
     private static ParticleCollisionReport BuildRoomParticleCollision(

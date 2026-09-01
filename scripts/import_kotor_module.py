@@ -2723,18 +2723,23 @@ def export_room(
 
     visit(model.root, np.identity(4, dtype=np.float64), "")
     alpha_animations = []
+    emitter_animations = []
     animated_render_nodes: set[str] = set()
+    emitter_paths_by_name: dict[str, list[str]] = {}
+    for emitter in emitters:
+        emitter_paths_by_name.setdefault(
+            emitter["nodePath"].split("/")[-1].casefold(), []).append(
+                emitter["nodePath"])
     for animation in model.anims:
         tracks = []
+        emitter_tracks = []
         for animation_node in animation.all_nodes():
             rendered = render_node_names.get(str(animation_node.name).casefold(), [])
             alpha_controllers = [
                 controller for controller in animation_node.controllers
                 if controller.controller_type == MDLControllerType.ALPHA
             ]
-            if not alpha_controllers:
-                continue
-            if len(rendered) != 1:
+            if alpha_controllers and len(rendered) != 1:
                 raise RuntimeError(
                     f"Room alpha animation node is not uniquely rendered: "
                     f"{model_name}/{animation.name}/{animation_node.name}")
@@ -2752,12 +2757,59 @@ def export_room(
                         f"Invalid room alpha animation: "
                         f"{model_name}/{animation.name}/{animation_node.name}")
                 tracks.append({"nodeName": rendered[0], "keys": keys})
+            emitter_paths = emitter_paths_by_name.get(
+                str(animation_node.name).casefold(), [])
+            if len(emitter_paths) > 1:
+                raise RuntimeError(
+                    f"Room emitter animation node is not unique: "
+                    f"{model_name}/{animation.name}/{animation_node.name}")
+            emitter_node_path = emitter_paths[0] if emitter_paths else None
+            if emitter_node_path is not None:
+                for controller_type, property_name in (
+                    (MDLControllerType.RADIUS, "birthRate"),
+                    (MDLControllerType.RANDOMBIRTHRATE, "randomBirthRate"),
+                ):
+                    for controller in animation_node.controllers:
+                        if controller.controller_type != controller_type:
+                            continue
+                        keys = [
+                            {"time": float(row.time), "value": float(row.data[0])}
+                            for row in controller.rows
+                        ]
+                        if any(not math.isfinite(key["time"]) or key["time"] < 0 or
+                               not math.isfinite(key["value"]) or key["value"] < 0
+                               for key in keys):
+                            raise RuntimeError(
+                                f"Invalid room emitter animation: "
+                                f"{model_name}/{animation.name}/{animation_node.name}/"
+                                f"{property_name}")
+                        # Export only effective controller motion. DCC-authored room
+                        # loops commonly key zero on every unrelated emitter; those
+                        # tracks must not fight the loop that actually owns the node.
+                        if keys and any(key["value"] != 0 for key in keys):
+                            emitter_tracks.append({
+                                "nodePath": emitter_node_path,
+                                "property": property_name,
+                                "keys": keys,
+                            })
         animation_name = str(animation.name)
         if tracks or animation_name.casefold().startswith("scriptloop"):
             alpha_animations.append({
                 "name": animation_name,
                 "length": float(animation.length),
                 "tracks": tracks,
+            })
+        if emitter_tracks:
+            auto_play = animation_name.casefold().startswith("animloop")
+            if not auto_play and not animation_name.casefold().startswith("scriptloop"):
+                raise RuntimeError(
+                    f"Unsupported room emitter animation trigger: "
+                    f"{model_name}/{animation_name}")
+            emitter_animations.append({
+                "name": animation_name,
+                "length": float(animation.length),
+                "autoPlay": auto_play,
+                "tracks": emitter_tracks,
             })
     record = {
         "model": model_name,
@@ -2782,6 +2834,7 @@ def export_room(
             for node_name in sorted(animated_render_nodes, key=str.casefold)
         ],
         "alphaAnimations": alpha_animations,
+        "emitterAnimations": emitter_animations,
         "walkmeshTriangles": walkmesh_triangles,
     }
     if mesh_count > 0:

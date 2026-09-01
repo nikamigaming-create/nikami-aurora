@@ -531,9 +531,12 @@ public sealed partial class KotorModuleBoot
                 $"Room animation could not resolve model {request.RoomModel}");
         var animationName = $"scriptloop{request.AnimationIndex:00}";
         var animation = room.AlphaAnimations?.SingleOrDefault(candidate =>
-            candidate.Name.Equals(animationName, StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidDataException(
-                $"Room {request.RoomModel} has no alpha animation {animationName}");
+            candidate.Name.Equals(animationName, StringComparison.OrdinalIgnoreCase));
+        var emitterAnimation = room.EmitterAnimations?.SingleOrDefault(candidate =>
+            candidate.Name.Equals(animationName, StringComparison.OrdinalIgnoreCase));
+        if (animation is null && emitterAnimation is null)
+            throw new InvalidDataException(
+                $"Room {request.RoomModel} has no animation {animationName}");
 
         foreach (var alphaNode in room.AlphaNodes ?? [])
         {
@@ -545,7 +548,7 @@ public sealed partial class KotorModuleBoot
                 alphaNode.BaseAlpha);
         }
 
-        foreach (var track in animation.Tracks)
+        foreach (var track in animation?.Tracks ?? [])
         {
             var mesh = RequireRoomAnimationNode(roomRoot, request.RoomModel, track.NodeName);
             if (track.Keys.Count == 0) continue;
@@ -584,9 +587,12 @@ public sealed partial class KotorModuleBoot
             }
             roomAlphaTweens[tweenKey] = tween;
         }
+        if (emitterAnimation is not null)
+            StartRoomEmitterAnimation(room, roomRoot, emitterAnimation);
         GD.Print($"NIKAMI_AURORA_ROOM_ANIMATION status=playing " +
                  $"room={request.RoomModel} animation={animationName} " +
-                 $"length={animation.Length:F3} tracks={animation.Tracks.Count}");
+                 $"alpha_tracks={animation?.Tracks.Count ?? 0} " +
+                 $"emitter_tracks={emitterAnimation?.Tracks.Count ?? 0}");
     }
 
     private static MeshInstance3D RequireRoomAnimationNode(
