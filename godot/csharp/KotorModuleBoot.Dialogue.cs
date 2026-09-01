@@ -93,7 +93,10 @@ public sealed partial class KotorModuleBoot
                 string.IsNullOrWhiteSpace(animation.Participant))
                 continue;
             if (animation.Participant.Equals("PLAYER", StringComparison.OrdinalIgnoreCase))
-                PlayPlayerAnimation(animation.AnimationName);
+                PlayPlayerAnimation(
+                    animation.AnimationName,
+                    loop: animation.Looping && !animation.FireForget,
+                    restart: true);
             else
                 PlayActorAnimation(
                     animation.Participant,
