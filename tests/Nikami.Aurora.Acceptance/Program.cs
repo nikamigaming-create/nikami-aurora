@@ -173,6 +173,13 @@ internal static partial class Program
         var criticalBonus = counter.ResolveNextAttack(1, 20, []);
         Expect(criticalBonus.Events.OfType<KotorAttackResolved>().Single().Damage == 1,
             "KOTOR critical incorrectly multiplied item-property bonus damage");
+
+        var tslRewards = Enumerable.Range(0, 51).Select(value => value * 25).ToArray();
+        var tslExperience = new KotorCombatExperienceTable(
+            new string('B', 64),
+            [new KotorCombatExperienceRow(1, tslRewards)]);
+        Expect(tslExperience.RewardFor(1, 50) == 1250,
+            "KOTOR II combat XP challenge range collapsed to KOTOR I");
     }
 
     private static void DragonAgeOriginCatalogOwnsEveryRetailRoute()

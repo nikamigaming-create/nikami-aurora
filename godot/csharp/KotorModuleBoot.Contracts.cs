@@ -182,7 +182,8 @@ public sealed partial class KotorModuleBoot
         float FrameEnd,
         float Fps,
         float BlurLength,
-        float BounceCoefficient);
+        float BounceCoefficient,
+        int WindPower = 0);
     private sealed record LightRecord(string Name, IReadOnlyList<float> Position,
         IReadOnlyList<float> Color, float Radius, float Multiplier, bool AmbientOnly,
         int DynamicType, bool AffectDynamic, bool Shadow, int Priority);

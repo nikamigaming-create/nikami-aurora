@@ -21,6 +21,30 @@ except (ImportError, SystemExit) as exc:
 
 
 class KotorRenderingImportTests(unittest.TestCase):
+    def test_combat_xp_export_accepts_kotor2_numeric_challenge_columns(self) -> None:
+        headers = ["level", *(str(value) for value in range(51))]
+
+        class Table:
+            def get_headers(self):
+                return headers
+
+            def get_height(self):
+                return 2
+
+            def get_cell(self, row, column):
+                return str(row + 1) if column == "level" else str(
+                    row * 100 + int(column))
+
+        installation = SimpleNamespace(resource=lambda *_args: object())
+        with (
+            patch.object(importer, "resource_data", return_value=b"k2-xp"),
+            patch.object(importer, "read_2da", return_value=Table()),
+        ):
+            result = importer.export_combat_experience_table(installation)
+
+        self.assertEqual(51, len(result["rows"][0]["rewards"]))
+        self.assertEqual(150, result["rows"][1]["rewards"][50])
+
     def test_shared_odyssey_combat_export_uses_source_class_and_weapon_rules(
         self,
     ) -> None:
@@ -794,6 +818,7 @@ endnode
         inert_static_room_flags = 0x0002 | 0x0008 | 0x0020 | 0x0040 | 0x0100
         emitter.update({
             "flags": inert_static_room_flags,
+            "windPower": 0,
             "spawnType": 0,
             "renderOrder": 1,
             "frameBlender": 0,
@@ -801,7 +826,6 @@ endnode
         })
         self.assertEqual((), importer.room_emitter_unsupported_reasons(emitter))
         for key, value in (
-            ("flags", inert_static_room_flags | 0x0004),
             ("flags", inert_static_room_flags | 0x0080),
             ("flags", inert_static_room_flags | 0x0200),
             ("flags", inert_static_room_flags | 0x0400),
@@ -820,6 +844,13 @@ endnode
                 importer.room_emitter_unsupported_reasons(candidate),
                 msg=f"{key}={value!r}",
             )
+        wind_affected = {**emitter, "flags": inert_static_room_flags | 0x0004}
+        self.assertEqual(
+            (), importer.room_emitter_unsupported_reasons(wind_affected))
+        self.assertEqual(
+            ("render",), importer.room_emitter_unsupported_reasons({
+                **wind_affected, "windPower": 1,
+            }))
         collision_bounce = {
             **emitter,
             "flags": inert_static_room_flags | 0x0010,
@@ -834,7 +865,7 @@ endnode
                     "bounceCoefficient": coefficient,
                 }))
         for candidate, expected_visual_reason in (
-            ({**emitter, "frameEnd": 1.0}, "atlas_range"),
+            ({**emitter, "frameEnd": -1.0}, "atlas_range"),
             ({**emitter, "sizeStart": 9.0}, "quad_extent"),
             ({
                 **emitter,
@@ -851,6 +882,15 @@ endnode
             self.assertEqual(
                 ("render",),
                 importer.room_emitter_unsupported_reasons(candidate))
+        self.assertEqual(
+            (), importer.room_emitter_unsupported_reasons({
+                **emitter,
+                "xGrid": 4,
+                "yGrid": 4,
+                "frameStart": 0.0,
+                "frameEnd": 20.0,
+                "fps": 25.0,
+            }))
         point_to_point = {
             **emitter,
             "flags": (inert_static_room_flags & ~0x0002) | 0x0001,
