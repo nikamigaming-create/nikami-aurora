@@ -5,6 +5,7 @@ using Godot;
 using Nikami.Aurora.GodotRuntime.Application.Abstractions;
 using Nikami.Aurora.GodotRuntime.Domain.World;
 using Nikami.Aurora.GodotRuntime.Domain.Story;
+using Nikami.Aurora.GodotRuntime.Infrastructure.Catalogs;
 using Nikami.Aurora.GodotRuntime.Rendering;
 using Nikami.Aurora.Profiles.DragonAgeOrigins;
 
@@ -19,6 +20,7 @@ public sealed class GodotWorldContentLoader(
     IAuthoredNavigationGridSource navigationSource,
     IAuthoredWorldBlockerBuilder blockerBuilder,
     IAuthoredLightingResolver lightingResolver,
+    DaoAreaStoryContractProvider areaStoryContracts,
     StoryState story,
     IWorldLoadScheduler scheduler) : IWorldContentLoader
 {
@@ -77,8 +79,13 @@ public sealed class GodotWorldContentLoader(
 
             if (area?["placeables"] is JsonArray placeables)
             {
+                var placeableStory = areaStoryContracts.Load(profile);
+                GD.Print($"OPENDAO_AREA_STORY_CONTRACT " +
+                         $"status={(placeableStory.Count > 0 ? "ready" : "unavailable")} " +
+                         $"area={profile.AreaId} placeables={placeableStory.Count} " +
+                         "source=installed-area-templates");
                 metrics += await LoadPlaceableVisuals(placeables, profile.AreaRoot, staging,
-                    cancellationToken);
+                    placeableStory, cancellationToken);
                 authoredBlockers = blockerBuilder.Build(ReadAuthoredBlockers(placeables), staging);
                 metrics += new LoadMetrics(0, 0, authoredBlockers);
             }
@@ -316,13 +323,15 @@ public sealed class GodotWorldContentLoader(
     }
 
     private async Task<LoadMetrics> LoadPlaceableVisuals(JsonArray placeables, string root,
-        Node3D destination, CancellationToken cancellationToken)
+        Node3D destination, IReadOnlyDictionary<int, DaoPlaceableStoryContract> storyContracts,
+        CancellationToken cancellationToken)
     {
         var metrics = new LoadMetrics();
         var attempted = 0;
         var failed = 0;
-        foreach (var record in placeables.OfType<JsonObject>())
+        for (var ordinal = 0; ordinal < placeables.Count; ordinal++)
         {
+            if (placeables[ordinal] is not JsonObject record) continue;
             cancellationToken.ThrowIfCancellationRequested();
             if (!(record["active"]?.GetValue<bool>() ?? true) ||
                 record["visual"] is not JsonObject visual ||
@@ -344,12 +353,20 @@ public sealed class GodotWorldContentLoader(
             }
             var template = record["template"]?.GetValue<string>() ?? string.Empty;
             var tag = record["tag"]?.GetValue<string>() ?? template;
+            storyContracts.TryGetValue(ordinal, out var storyContract);
+            if (storyContract is not null &&
+                (!storyContract.Template.Equals(template, StringComparison.OrdinalIgnoreCase) ||
+                 !storyContract.Tag.Equals(tag, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"placeable-story-identity-mismatch:{ordinal}");
             node.Name = "Placeable_" + SanitizeNodeName(tag.Length > 0 ? tag : $"Object{attempted}");
             node.Transform = ReadTransform(record);
             node.SetMeta("dao_placeable", true);
             node.SetMeta("dao_interactive", true);
             node.SetMeta("dao_resref", template);
             node.SetMeta("dao_tag", tag);
+            node.SetMeta("dao_event_script", storyContract?.EventScript ?? string.Empty);
+            node.SetMeta("dao_transition_area", storyContract?.TransitionArea ?? string.Empty);
+            node.SetMeta("dao_transition_waypoint", storyContract?.TransitionWaypoint ?? string.Empty);
             node.SetMeta("dao_placeable_model", visual["model"]?.GetValue<string>() ?? string.Empty);
             var sourcePosition = ReadVector(record["position"] as JsonArray);
             var storyObject = story.Create(template, tag, StoryObjectKind.Placeable,
@@ -357,7 +374,10 @@ public sealed class GodotWorldContentLoader(
                 new Dictionary<string, object?>
                 {
                     ["visualModel"] = visual["model"]?.GetValue<string>() ?? string.Empty,
-                    ["source"] = "installed-placeable-types-gda"
+                    ["source"] = "installed-placeable-types-gda",
+                    ["eventScript"] = storyContract?.EventScript ?? string.Empty,
+                    ["transitionArea"] = storyContract?.TransitionArea ?? string.Empty,
+                    ["transitionWaypoint"] = storyContract?.TransitionWaypoint ?? string.Empty
                 });
             node.SetMeta("dao_story_handle", storyObject.Handle);
             destination.AddChild(node);

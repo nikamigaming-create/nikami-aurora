@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using Nikami.Aurora.Core;
 using Nikami.Aurora.Profiles.DragonAgeOrigins;
 using Nikami.Aurora.Profiles.Kotor;
+using Nikami.Aurora.Profiles.Kotor2;
 
 namespace Nikami.Aurora.Acceptance;
 
@@ -19,9 +20,23 @@ internal static partial class Program
             passed++;
             KotorProbeRejectsMissingMarker(suiteRoot);
             passed++;
+            Kotor2ProbeAcceptsCompleteSyntheticInstall(suiteRoot);
+            passed++;
+            Kotor2ProfileDoesNotAcceptKotorInstall(suiteRoot);
+            passed++;
             DragonAgeProfileRemainsIndependent(suiteRoot);
             passed++;
             DragonAgeCharacterCreationCatalogCoversEveryUiSelection();
+            passed++;
+            DragonAgeOriginCatalogOwnsEveryRetailRoute();
+            passed++;
+            DragonAgeExperienceTableOwnsLevelBoundaries();
+            passed++;
+            DragonAgeCreaturePropertyOwnsExperienceMutation();
+            passed++;
+            DragonAgeNcsDecoderOwnsInstalledInstructionLayout();
+            passed++;
+            DragonAgeNcsExecutorPreservesActionArgumentOrder();
             passed++;
             DragonAgeCharacterCreationReadinessSeparatesLegacyAndFresh();
             passed++;
@@ -73,6 +88,8 @@ internal static partial class Program
             passed++;
             KotorGameplayOwnsOpeningState();
             passed++;
+            KotorCombatOwnsDamageDeathAndRetailExperience();
+            passed++;
             KotorInventoryProjectionStaysLinear();
             passed++;
             KotorEnvironmentMaterialPolicyPreservesSourceContract();
@@ -96,6 +113,7 @@ internal static partial class Program
             KotorGenericVisualInventoryFailsClosed();
             passed++;
             KotorCreaturePresentationRequiresEveryModelAndWeaponEffect();
+            KotorCreatureEffectsPreserveBurstOverlapAndAtlasBounds();
             passed++;
             KotorGlobalPbrCoverageRequiresEveryEligibleSurface();
             passed++;
@@ -114,6 +132,172 @@ internal static partial class Program
             if (Directory.Exists(suiteRoot))
                 Directory.Delete(suiteRoot, recursive: true);
         }
+    }
+
+    private static void KotorCombatOwnsDamageDeathAndRetailExperience()
+    {
+        var experience = new KotorCombatExperienceTable(
+            new string('A', 64),
+            [new KotorCombatExperienceRow(1,
+                Enumerable.Range(0, 21).Select(challenge => challenge == 1 ? 75 : 0).ToArray())]);
+        var sword = new KotorCombatWeaponDefinition(
+            "g_w_shortswrd01", 0, 1, 2, false,
+            [new KotorDamageComponent(1, 6, 0, 2, true)]);
+        var oneDamageBlaster = new KotorCombatWeaponDefinition(
+            "end_1damblast", -5, 2, 2, true,
+            [new KotorDamageComponent(0, 0, 1, 12)]);
+        var combat = new KotorCombatSimulation(
+        [
+            new KotorCombatantDefinition(
+                "player", 0, 12, 12, 12, 4, 0, false, false, sword),
+            new KotorCombatantDefinition(
+                "end_sith", 1, 10, 10, 6, -3, 1, false, true, oneDamageBlaster)
+        ], experience);
+
+        combat.QueueAttack("player", "end_sith");
+        var kill = combat.ResolveNextAttack(1, 20, [6]);
+        var resolved = kill.Events.OfType<KotorAttackResolved>().Single();
+        Expect(resolved.Hit && resolved.Critical && resolved.Damage == 12 &&
+               resolved.HitPointsAfter == 0 && kill.AwardedExperience == 75 &&
+               kill.Events.OfType<KotorCombatantDied>().Single().ExperienceReward == 75,
+            "KOTOR combat death or retail CR1 experience drifted");
+
+        var counter = new KotorCombatSimulation(
+        [
+            new KotorCombatantDefinition(
+                "player", 0, 12, 12, 12, 4, 0, false, false, sword),
+            new KotorCombatantDefinition(
+                "end_sith", 1, 1, 1, 6, -3, 1, false, true, oneDamageBlaster)
+        ], experience);
+        counter.QueueAttack("end_sith", "player");
+        var criticalBonus = counter.ResolveNextAttack(1, 20, []);
+        Expect(criticalBonus.Events.OfType<KotorAttackResolved>().Single().Damage == 1,
+            "KOTOR critical incorrectly multiplied item-property bonus damage");
+    }
+
+    private static void DragonAgeOriginCatalogOwnsEveryRetailRoute()
+    {
+        var routes = DragonAgeOriginsOriginCatalog.Routes;
+        Expect(routes.Count == 6, "DAO origin route count drifted");
+        Expect(routes.Select(route => route.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 6,
+            "DAO origin route ids are not unique");
+        Expect(routes.All(route => route.AreaId.Length > 0 && route.Archive.Length > 0 &&
+                                   route.Waypoint.Length > 0 && route.OpeningCutscene.Length > 0),
+            "DAO origin route lost a source start identity");
+        Expect(DragonAgeOriginsOriginCatalog.For("human", "warrior")
+                   .Select(route => route.Id).SequenceEqual(["human-noble"]),
+            "human martial origin selection drifted");
+        Expect(DragonAgeOriginsOriginCatalog.For("elf", "rogue")
+                   .Select(route => route.Id).SequenceEqual(["city-elf", "dalish-elf"]),
+            "elf martial origin selection drifted");
+        Expect(DragonAgeOriginsOriginCatalog.For("dwarf", "warrior")
+                   .Select(route => route.Id).SequenceEqual(["dwarf-commoner", "dwarf-noble"]),
+            "dwarf martial origin selection drifted");
+        Expect(DragonAgeOriginsOriginCatalog.For("human", "mage").Single().Id == "circle-mage" &&
+               DragonAgeOriginsOriginCatalog.For("elf", "mage").Single().Id == "circle-mage" &&
+               DragonAgeOriginsOriginCatalog.For("dwarf", "mage").Count == 0,
+            "circle mage race selection drifted");
+        Expect(DragonAgeOriginsOriginCatalog.Resolve("CITY-ELF")?.OpeningDialogue ==
+               "bec110cr_shianni", "city elf opening dialogue identity drifted");
+    }
+
+    private static void DragonAgeExperienceTableOwnsLevelBoundaries()
+    {
+        var table = new DragonAgeOriginsExperienceTable(
+        [
+            new(0, 0), new(1, 1), new(2, 2001), new(3, 4501)
+        ]);
+        Expect(table.ResolveLevel(0) == 0 && table.ResolveLevel(1) == 1 &&
+               table.ResolveLevel(2000) == 1 && table.ResolveLevel(2001) == 2,
+            "DAO level resolution drifted from exptable semantics");
+        Expect(table.MinimumExperienceFor(2) == 2001,
+            "DAO level-two experience boundary drifted");
+    }
+
+    private static void DragonAgeCreaturePropertyOwnsExperienceMutation()
+    {
+        Expect(DragonAgeOriginsCreatureProperty.TryApplyExperience(
+                   DragonAgeOriginsCreatureProperty.SetAction,
+                   DragonAgeOriginsCreatureProperty.Experience, 2001,
+                   DragonAgeOriginsCreatureProperty.BaseValue, 50,
+                   out var setExperience, out _) && setExperience == 2001,
+            "DAO SetCreatureProperty did not set source experience property");
+        Expect(DragonAgeOriginsCreatureProperty.TryApplyExperience(
+                   DragonAgeOriginsCreatureProperty.UpdateAction,
+                   DragonAgeOriginsCreatureProperty.Experience, 1951,
+                   DragonAgeOriginsCreatureProperty.CurrentValue, 50,
+                   out var updatedExperience, out _) && updatedExperience == 2001,
+            "DAO UpdateCreatureProperty did not update source experience property");
+        Expect(!DragonAgeOriginsCreatureProperty.TryApplyExperience(
+                   DragonAgeOriginsCreatureProperty.GetAction,
+                   DragonAgeOriginsCreatureProperty.Experience, 0,
+                   DragonAgeOriginsCreatureProperty.TotalValue, 50,
+                   out _, out var actionReason) &&
+               actionReason == "creature-property-action-unsupported",
+            "DAO read action was accepted as an experience mutation");
+        Expect(!DragonAgeOriginsCreatureProperty.TryApplyExperience(
+                   DragonAgeOriginsCreatureProperty.SetAction, 18, 2001,
+                   DragonAgeOriginsCreatureProperty.BaseValue, 50,
+                   out _, out var propertyReason) &&
+               propertyReason == "creature-property-not-experience",
+            "DAO non-experience property leaked into shared progression");
+    }
+
+    private static void DragonAgeNcsDecoderOwnsInstalledInstructionLayout()
+    {
+        byte[] script =
+        [
+            0x4e, 0x43, 0x53, 0x20, 0x56, 0x31, 0x2e, 0x30, 0x42,
+            0x00, 0x00, 0x00, 0x1a,
+            0x04, 0x03, 0x00, 0x00, 0x00, 0x13,
+            0x05, 0x00, 0x02, 0xe4, 0x04,
+            0x20, 0x00
+        ];
+        var decoded = DragonAgeOriginsNcsDecoder.Decode(script);
+        Expect(decoded.Succeeded && decoded.Instructions.Count == 3,
+            "DAO NCS instruction stream did not decode");
+        Expect(decoded.Instructions[0].Address == 13 &&
+               decoded.Instructions[0].Opcode == 0x04 &&
+               Convert.ToInt32(decoded.Instructions[0].Arguments.Single()) == 19,
+            "DAO NCS big-endian constant layout drifted");
+        Expect(decoded.Instructions[1].Address == 19 &&
+               decoded.Instructions[1].Opcode == 0x05 &&
+               Convert.ToInt32(decoded.Instructions[1].Arguments[0]) == 740 &&
+               Convert.ToInt32(decoded.Instructions[1].Arguments[1]) == 4,
+            "DAO NCS action layout drifted");
+        var truncated = DragonAgeOriginsNcsDecoder.Decode(script[..^1]);
+        Expect(!truncated.Succeeded && truncated.Error == "ncs-size-mismatch",
+            "DAO NCS size mismatch did not fail closed");
+    }
+
+    private static void DragonAgeNcsExecutorPreservesActionArgumentOrder()
+    {
+        byte[] script =
+        [
+            0x4e, 0x43, 0x53, 0x20, 0x56, 0x31, 0x2e, 0x30, 0x42,
+            0x00, 0x00, 0x00, 0x2c,
+            0x04, 0x03, 0x00, 0x00, 0x00, 0x02,
+            0x04, 0x04, 0x44, 0xfa, 0x20, 0x00,
+            0x04, 0x03, 0x00, 0x00, 0x00, 0x13,
+            0x04, 0x06, 0x00, 0x00, 0x00, 0x00,
+            0x05, 0x00, 0x02, 0xe4, 0x04,
+            0x20, 0x00
+        ];
+        var invoked = false;
+        var result = DragonAgeOriginsNcsExecutor.Execute(script, (action, values) =>
+        {
+            invoked = true;
+            Expect(action == DragonAgeOriginsCreatureProperty.SetAction && values.Count == 4,
+                "DAO NCS action dispatch identity drifted");
+            Expect(Convert.ToInt32(values[0].Value) == 0 &&
+                   Convert.ToInt32(values[1].Value) == 19 &&
+                   Convert.ToSingle(values[2].Value) == 2001f &&
+                   Convert.ToInt32(values[3].Value) == 2,
+                "DAO NCS right-to-left action argument order drifted");
+            return DragonAgeNcsActionResult.Complete();
+        });
+        Expect(result.Succeeded && invoked && result.InvokedActions.SequenceEqual([740]),
+            "DAO NCS action program did not execute");
     }
 
     private static void KotorProbeAcceptsCompleteSyntheticInstall(string suiteRoot)
@@ -142,6 +326,35 @@ internal static partial class Program
         Expect(!result.IsValid, "incomplete KOTOR fixture passed");
         Expect(result.Markers.Single(marker => marker.RelativePath == "chitin.key").Present == false,
             "missing marker was not reported");
+    }
+
+    private static void Kotor2ProbeAcceptsCompleteSyntheticInstall(string suiteRoot)
+    {
+        var profile = new Kotor2GameProfile();
+        var root = Path.Combine(suiteRoot, "kotor2-complete");
+        MaterializeMarkers(root, profile.Descriptor);
+        var executableBytes = new byte[] { 0x4d, 0x5a, 0x02, 0x00 };
+        File.WriteAllBytes(Resolve(root, profile.Descriptor.ExecutableRelativePath), executableBytes);
+
+        var result = GameInstallProber.Probe(profile, root);
+        Expect(result.IsValid, "complete KOTOR II fixture was rejected");
+        Expect(result.ProfileId == Kotor2GameProfile.ProfileId,
+            "KOTOR II profile identity changed");
+        Expect(result.EngineFamily == "Odyssey", "KOTOR II left the Odyssey family");
+        Expect(result.ExecutableSha256 == Convert.ToHexString(SHA256.HashData(executableBytes)),
+            "KOTOR II executable hash was not source-bound");
+    }
+
+    private static void Kotor2ProfileDoesNotAcceptKotorInstall(string suiteRoot)
+    {
+        var kotor = new KotorGameProfile();
+        var root = Path.Combine(suiteRoot, "kotor-is-not-kotor2");
+        MaterializeMarkers(root, kotor.Descriptor);
+
+        var result = GameInstallProber.Probe(new Kotor2GameProfile(), root);
+        Expect(!result.IsValid, "KOTOR II profile accepted a KOTOR installation");
+        Expect(result.Markers.Single(marker => marker.RelativePath == "swkotor2.exe").Present == false,
+            "KOTOR II probe did not report its missing executable");
     }
 
     private static void DragonAgeProfileRemainsIndependent(string suiteRoot)
@@ -998,7 +1211,31 @@ internal static partial class Program
                 "k_pend_map",
                 KotorScriptContractKind.RevealMap,
                 "3AE3A04CBA861141A7F12D729DFED129442FDEB424CEEC253EB37B2C4E30DD2A",
-                8)
+                8),
+            new KotorScriptContract(
+                "a_room_anim",
+                KotorScriptContractKind.RoomAnimationFromParameters,
+                new string('D', 64),
+                184),
+            new KotorScriptContract(
+                "a_start",
+                KotorScriptContractKind.ModuleStartPresentation,
+                new string('E', 64),
+                56,
+                MoveTargetTag: "WP_player_start",
+                FadeInWaitSeconds: 1.0f,
+                FadeInLengthSeconds: 2.0f,
+                MusicRestartDelaySeconds: 10.0f),
+            new KotorScriptContract(
+                "a_playsndobj",
+                KotorScriptContractKind.PlaySoundObjectFromParameters,
+                new string('F', 64),
+                31),
+            new KotorScriptContract(
+                "a_intro_autosave",
+                KotorScriptContractKind.NoOp,
+                new string('0', 64),
+                3)
         };
         const string baseItemsSha256 =
             "E9D031FAF0A5D3D4E9CCF33AEE5233FDA8F781A58B30FA722E7CF12B78C85C95";
@@ -1022,6 +1259,17 @@ internal static partial class Program
             (int)(KotorEquipmentSlot.RightHand | KotorEquipmentSlot.LeftHand),
             "w_Shortswrd", 0,
             "w_Shortswrd_001", "iw_sword");
+        var experienceTable = new KotorExperienceTable(
+            new string('A', 64),
+            [
+                new KotorLevelThreshold(1, 0),
+                new KotorLevelThreshold(2, 1000),
+                new KotorLevelThreshold(3, 3000)
+            ]);
+        Expect(experienceTable.ResolveLevel(999) == 1 &&
+               experienceTable.ResolveLevel(1000) == 2 &&
+               experienceTable.MinimumExperienceFor(2) == 1000,
+            "Odyssey level-two threshold drifted from exptable semantics");
         var simulation = new KotorGameplaySimulation(
             contracts,
             [
@@ -1044,6 +1292,7 @@ internal static partial class Program
                     new KotorPartyMemberDefinition(
                         "end_trask", "Trask", 30, 36, 12, IsPlayer: false)
                 ]),
+            experienceTable,
             triggers: [new KotorTriggerDefinition(
                 "trigger:0000",
                 "end_trig02",
@@ -1096,7 +1345,8 @@ internal static partial class Program
                 0,
                 0,
                 [new KotorPartyMemberDefinition(
-                    "healing-player", "Healing Player", 5, 20, 10, IsPlayer: true)]));
+                    "healing-player", "Healing Player", 5, 20, 10, IsPlayer: true)]),
+            experienceTable);
         healingSimulation.UsePlaceable("placeable:healing");
         var healed = healingSimulation.UseMedpac(
             "g_i_medeqpmnt01", wisdomModifier: 1, treatInjurySkill: 2);
@@ -1222,6 +1472,47 @@ internal static partial class Program
         Expect(revealedMap.After.MapRevealed &&
                revealedMap.Events.OfType<KotorMapRevealed>().Single().After,
             "journal line did not reveal the module map");
+
+        var roomAnimation = simulation.ExecuteScript(
+            "a_room_anim",
+            new KotorScriptInvocation(2, 0, 0, 0, 0, "101per2b"));
+        var roomAnimationRequest = roomAnimation.Events
+            .OfType<KotorRoomAnimationRequested>().Single();
+        Expect(roomAnimationRequest.RoomModel == "101per2b" &&
+               roomAnimationRequest.AnimationIndex == 2 &&
+               roomAnimation.Events.OfType<KotorScriptExecuted>().Single().Contract.Resref ==
+               "a_room_anim",
+            "parameterized room-animation script did not preserve its source invocation");
+
+        var moduleStart = simulation.ExecuteScript("a_start");
+        var startEvents = moduleStart.Events;
+        Expect(startEvents.Count == 6 &&
+               startEvents[0] is KotorGlobalFadeRequested { FadeIn: false,
+                   DelaySeconds: 0, LengthSeconds: 0 } &&
+               startEvents[1] is KotorPlayerMoveRequested {
+                   WaypointTag: "WP_player_start" } &&
+               startEvents[2] is KotorGlobalFadeRequested { FadeIn: true,
+                   DelaySeconds: 1.0f, LengthSeconds: 2.0f } &&
+               startEvents[3] is KotorBackgroundMusicRequested {
+                   Playing: false, DelaySeconds: 0 } &&
+               startEvents[4] is KotorBackgroundMusicRequested {
+                   Playing: true, DelaySeconds: 10.0f } &&
+               startEvents[5] is KotorScriptExecuted,
+            "module-start presentation did not preserve fade, move, and music order");
+
+        var soundObject = simulation.ExecuteScript(
+            "a_playsndobj",
+            new KotorScriptInvocation(1, 0, 0, 0, 0, "FloorMonitors"));
+        Expect(soundObject.Events.Count == 2 &&
+               soundObject.Events[0] is KotorSoundObjectPlayRequested {
+                   Tag: "FloorMonitors", DelaySeconds: 1.0f } &&
+               soundObject.Events[1] is KotorScriptExecuted,
+            "parameterized sound-object script did not preserve tag and delay");
+
+        var noOp = simulation.ExecuteScript("a_intro_autosave");
+        Expect(noOp.Events.Single() is KotorScriptExecuted executedNoOp &&
+               executedNoOp.Contract.Kind == KotorScriptContractKind.NoOp,
+            "verified Odyssey no-op script did not execute as a no-op contract");
 
         var dialogue = simulation.ExecuteScript("k_pend_traskdl40");
         Expect(dialogue.Before.PlayerExperience == 50 && dialogue.After.PlayerExperience == 150,
@@ -1363,10 +1654,10 @@ internal static partial class Program
     {
         var source = KotorEnvironmentMaterialPolicy.LightmapTransfer(enhanced: false);
         var enhanced = KotorEnvironmentMaterialPolicy.LightmapTransfer(enhanced: true);
-        Expect(source.Formula == "surface-times-clamped-lightmap" &&
+        Expect(source.Formula == "surface-times-max-clamped-lightmap-authored-ambient" &&
                source.DynamicLightAlbedoWeight == 0 &&
                source.BakedEmissionWeight == 1 &&
-               source.DynamicAmbientEmissionWeight == 0 &&
+               source.DynamicAmbientEmissionWeight == 1 &&
                !source.DynamicLightsEnabled,
             "KOTOR source lightmap transfer can double-light a baked surface");
 
@@ -1375,16 +1666,17 @@ internal static partial class Program
         var sourceDark = source.ComputeEmission(
             surface, lightmap, System.Numerics.Vector3.Zero);
         var sourceBrightAmbient = source.ComputeEmission(
-            surface, lightmap, new System.Numerics.Vector3(4, 3, 2));
+            surface, lightmap, new System.Numerics.Vector3(.7f, .7f, .7f));
         Expect(System.Numerics.Vector3.Distance(
                    sourceDark, new System.Numerics.Vector3(.8f, .2f, 0)) < .000001f &&
-               sourceBrightAmbient == sourceDark,
-            "KOTOR source transfer is not direct surface times clamped lightmap");
+               System.Numerics.Vector3.Distance(sourceBrightAmbient,
+                   new System.Numerics.Vector3(.8f, .28f, .84f)) < .000001f,
+            "KOTOR source transfer lost the authored ambient floor");
 
         Expect(enhanced.Formula == "baked-preserving-bounded-dynamic" &&
                enhanced.DynamicLightAlbedoWeight == .12f &&
                enhanced.BakedEmissionWeight == 1.0f &&
-               enhanced.DynamicAmbientEmissionWeight == .15f &&
+               enhanced.DynamicAmbientEmissionWeight == 1.0f &&
                enhanced.DynamicLightsEnabled,
             "KOTOR enhanced transfer no longer preserves its bounded dynamic response");
         var enhancedDark = enhanced.ComputeEmission(
@@ -1536,6 +1828,34 @@ internal static partial class Program
             () => KotorModulePresentationPolicy.RequireCreaturePresentation(
                 complete with { UnsupportedEffectSemantics = 1 }),
             "KOTOR presentation accepted unsupported actor effect semantics");
+    }
+
+    private static void KotorCreatureEffectsPreserveBurstOverlapAndAtlasBounds()
+    {
+        var poolSize = KotorCreatureEffectPolicy.RequiredBurstPoolSize(
+            [new KotorCreatureEffectSchedule(0.3, [0.0, 0.1, 0.2])],
+            lifetime: 0.25);
+        Expect(poolSize == 3,
+            $"KOTOR overlapping creature bursts require three instances, got {poolSize}");
+
+        var fixedFrame = KotorCreatureEffectPolicy.RequireAtlasPlayback(
+            columns: 2, rows: 2, frameStart: 1, frameEnd: 1,
+            framesPerSecond: 16, lifetime: 1, loop: 0);
+        Expect(Math.Abs(fixedFrame.Offset - 0.25f) < 0.0001f &&
+               fixedFrame.Cycles == 0 && !fixedFrame.Loop,
+            "KOTOR fixed-frame spark atlas acquired unintended playback");
+
+        var fullAtlas = KotorCreatureEffectPolicy.RequireAtlasPlayback(
+            columns: 2, rows: 2, frameStart: 0, frameEnd: 3,
+            framesPerSecond: 16, lifetime: 0.1f, loop: 0);
+        Expect(Math.Abs(fullAtlas.Cycles - 0.4f) < 0.0001f,
+            "KOTOR full actor-effect atlas lost source FPS/lifetime transfer");
+
+        ExpectThrows<InvalidDataException>(
+            () => KotorCreatureEffectPolicy.RequireAtlasPlayback(
+                columns: 4, rows: 4, frameStart: 2, frameEnd: 7,
+                framesPerSecond: 16, lifetime: 1, loop: 0),
+            "KOTOR actor effects accepted an unsupported partial atlas range");
     }
 
     private static void KotorRigIdentityRecognizesSourceBodyFamilies()

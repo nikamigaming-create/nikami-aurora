@@ -28,6 +28,16 @@ def _quaternion_matrix_xyzw(value: Any) -> np.ndarray:
     return trimesh.transformations.quaternion_matrix(quaternion)
 
 
+def _gltf_quaternion_xyzw(value: Any) -> list[float]:
+    quaternion = np.asarray(
+        [float(value.x), float(value.y), float(value.z), float(value.w)],
+        dtype=np.float64)
+    magnitude = float(np.linalg.norm(quaternion))
+    if not math.isfinite(magnitude) or magnitude <= 1e-12:
+        return [0.0, 0.0, 0.0, 1.0]
+    return [float(item) for item in quaternion / magnitude]
+
+
 def _node_matrix(node: Any) -> np.ndarray:
     transform = _quaternion_matrix_xyzw(node.orientation)
     transform[:3, 3] = [float(node.position.x), float(node.position.y), float(node.position.z)]
@@ -113,8 +123,7 @@ class ActorSceneBuilder:
                 self.nodes_by_name[key] = scene_name
             self.rest_trs[scene_name] = (
                 [float(node.position.x), float(node.position.y), float(node.position.z)],
-                [float(node.orientation.x), float(node.orientation.y),
-                 float(node.orientation.z), float(node.orientation.w)],
+                _gltf_quaternion_xyzw(node.orientation),
                 [1.0, 1.0, 1.0],
             )
 
@@ -146,7 +155,16 @@ class ActorSceneBuilder:
             )
             attributes: dict[str, np.ndarray] = {}
             skin = node.skin
+            used_slots = []
             if skin is not None and len(skin.vertex_bones) == len(vertices):
+                used_slots = sorted({
+                    int(index)
+                    for bone_vertex in skin.vertex_bones
+                    for index, weight in zip(
+                        bone_vertex.vertex_indices, bone_vertex.vertex_weights)
+                    if float(weight) > 0 and float(index) >= 0
+                })
+            if used_slots:
                 joints = np.zeros((len(vertices), 4), dtype=np.uint16)
                 weights = np.zeros((len(vertices), 4), dtype=np.float32)
                 for vertex_index, bone_vertex in enumerate(skin.vertex_bones):
@@ -190,12 +208,6 @@ class ActorSceneBuilder:
                     for source_index, slot in enumerate(skin.bonemap)
                     if int(slot) >= 0
                 }
-                used_slots = sorted({
-                    int(index)
-                    for bone_vertex in skin.vertex_bones
-                    for index, weight in zip(bone_vertex.vertex_indices, bone_vertex.vertex_weights)
-                    if float(weight) > 0 and float(index) >= 0
-                })
                 if used_slots and used_slots != list(range(max(used_slots) + 1)):
                     raise RuntimeError(f"Non-contiguous skin slots in {model_name}:{node.name}: {used_slots}")
                 joint_names: list[str] = []
@@ -338,7 +350,6 @@ def patch_actor_glb(
             "name": f"skin::{spec.mesh_node}",
             "joints": joint_indices,
             "inverseBindMatrices": inverse_accessor,
-            "skeleton": joint_indices[0] if joint_indices else None,
         })
         document["nodes"][mesh_node_index]["skin"] = skin_index
 
@@ -431,6 +442,7 @@ def export_actor(
     animation_names: tuple[str, ...],
     material_factory: Callable[[Any, str | None], Any],
     weapon_hook: str = "rhand",
+    require_head_skin: bool = True,
 ) -> dict[str, Any]:
     builder = ActorSceneBuilder(material_factory)
     head_skin_count = 0
@@ -462,7 +474,7 @@ def export_actor(
 
         prefer_head_animation_nodes(head_model.root)
         head_skin_count = len(builder.skin_specs) - skin_count_before_head
-        if head_skin_count <= 0:
+        if require_head_skin and head_skin_count <= 0:
             raise RuntimeError(f"Hook-bound head has no skin: {head_name}")
         if not builder.nodes_by_name.get("head_g", "").startswith("head::"):
             raise RuntimeError(f"Hook-bound head animation target was not isolated: {head_name}")

@@ -8,6 +8,7 @@ public sealed partial class KotorModuleBoot
 {
     private sealed record ModuleManifest(
         string Schema,
+        string ProfileId,
         string Module,
         string ContentMode,
         string MissingSourceAssetPolicy,
@@ -17,6 +18,8 @@ public sealed partial class KotorModuleBoot
         AreaLightingRecord Lighting,
         CameraStyleRecord CameraStyle,
         KotorRuntimeConfiguration RuntimeConfiguration,
+        ExperienceTableRecord ExperienceTable,
+        CombatExperienceTableRecord CombatExperienceTable,
         KotorUiRecord Ui,
         PlayerRecord Player,
         IReadOnlyList<RoomRecord> Rooms,
@@ -26,10 +29,21 @@ public sealed partial class KotorModuleBoot
         IReadOnlyList<DoorRecord> Doors,
         IReadOnlyList<PlaceableRecord> Placeables,
         IReadOnlyList<TriggerRecord> Triggers,
+        IReadOnlyList<WaypointRecord> Waypoints,
         IReadOnlyList<CameraRecord> Cameras,
+        IReadOnlyList<SoundObjectRecord> SoundObjects,
+        AreaMusicRecord? AreaMusic,
         FirstEncounterRecord? FirstEncounter,
+        OpeningDialogueRecord? OpeningDialogue,
         IReadOnlyList<ScriptContractRecord> ScriptContracts,
         CountRecord Counts);
+
+    private sealed record ExperienceTableRecord(
+        string SourceSha256,
+        IReadOnlyList<KotorLevelThreshold> Thresholds);
+    private sealed record CombatExperienceTableRecord(
+        string SourceSha256,
+        IReadOnlyList<KotorCombatExperienceRow> Rows);
 
     private sealed record UnresolvedTextureReferenceRecord(
         string Room,
@@ -62,6 +76,8 @@ public sealed partial class KotorModuleBoot
         int Height);
 
     private sealed record EntryRecord(IReadOnlyList<float> Position, float DirectionRadians);
+    private sealed record WaypointRecord(
+        string Template, string Tag, IReadOnlyList<float> Position, float Bearing);
     private sealed record TargetRecord(string ExecutableSha256);
     private sealed record AreaLightingRecord(IReadOnlyList<float> DynamicAmbient, bool Shadows,
         int ShadowOpacity, string SourceSha256);
@@ -72,7 +88,9 @@ public sealed partial class KotorModuleBoot
         int HeadIndex, string HeadModel, float Height, float WalkDistance, float RunDistance,
         IReadOnlyList<float>? TalkOffset, IReadOnlyList<float>? CameraOffset,
         PlayerAnimationRecord Animation,
-        IReadOnlyList<PlayerEquipmentVariantRecord>? EquipmentVariants);
+        IReadOnlyList<PlayerEquipmentVariantRecord>? EquipmentVariants,
+        PlayerCombatRecord? Combat = null,
+        string RigKind = "humanoid");
     private sealed record PlayerAnimationRecord(int MeshCount, int VertexCount, int TriangleCount,
         int SkinCount, int HeadSkinCount, IReadOnlyList<string> Animations,
         IReadOnlyList<float>? BoundsMinimum = null,
@@ -101,7 +119,15 @@ public sealed partial class KotorModuleBoot
         IReadOnlyList<IReadOnlyList<IReadOnlyList<float>>>? WalkmeshTriangles,
         IReadOnlyList<LightRecord>? Lights,
         IReadOnlyList<RoomEmitterRecord>? Emitters,
-        bool SourcePlaceholder = false);
+        bool SourcePlaceholder = false,
+        IReadOnlyList<RoomAlphaNodeRecord>? AlphaNodes = null,
+        IReadOnlyList<RoomAlphaAnimationRecord>? AlphaAnimations = null);
+    private sealed record RoomAlphaNodeRecord(string NodeName, float BaseAlpha);
+    private sealed record RoomAlphaAnimationRecord(
+        string Name, float Length, IReadOnlyList<RoomAlphaTrackRecord> Tracks);
+    private sealed record RoomAlphaTrackRecord(
+        string NodeName, IReadOnlyList<RoomAlphaKeyRecord> Keys);
+    private sealed record RoomAlphaKeyRecord(float Time, float Value);
     private sealed record RoomEmitterRecord(
         string Schema,
         string NodePath,
@@ -185,6 +211,22 @@ public sealed partial class KotorModuleBoot
         string OnUserDefined,
         string UtpSha256,
         DialogueReference Dialogue);
+    private sealed record PlayerCombatRecord(
+        int ClassId,
+        string ClassLabel,
+        string ClassesSha256,
+        string AttackTableSha256,
+        int CurrentHitPoints,
+        int MaxHitPoints,
+        double ChallengeRating,
+        int Strength,
+        int Dexterity,
+        int NaturalArmorClass,
+        int Defense,
+        int BaseAttackBonus,
+        int AttackBonus,
+        IReadOnlyList<CreatureClassLevelRecord> ClassLevels,
+        CreatureCombatWeaponRecord Weapon);
     private sealed record FirstEncounterParticipant(
         string Template,
         string Tag,
@@ -197,7 +239,40 @@ public sealed partial class KotorModuleBoot
         int MaxHitPoints,
         bool MinimumOneHitPoint,
         bool NoPermanentDeath,
+        CreatureCombatRecord Combat,
         PlayerAnimationRecord Animation);
+    private sealed record CreatureCombatRecord(
+        double ChallengeRating,
+        int Strength,
+        int Dexterity,
+        int NaturalArmorClass,
+        int Defense,
+        int BaseAttackBonus,
+        int AttackBonus,
+        IReadOnlyList<CreatureClassLevelRecord> ClassLevels,
+        CreatureCombatWeaponRecord? Weapon);
+    private sealed record CreatureClassLevelRecord(
+        int ClassId,
+        int Level,
+        int BaseAttackBonus);
+    private sealed record CreatureCombatWeaponRecord(
+        string Resref,
+        string UtiSha256,
+        int BaseItem,
+        string BaseItemsSha256,
+        int BaseDiceCount,
+        int BaseDieSides,
+        int AttackModifier,
+        int CriticalThreat,
+        int CriticalMultiplier,
+        bool Ranged,
+        int DamageFlags,
+        IReadOnlyList<CreatureBonusDamageRecord> BonusDamage);
+    private sealed record CreatureBonusDamageRecord(
+        int DamageType,
+        int Flat,
+        int DiceCount,
+        int DieSides);
     private sealed record FirstEncounterWaypoint(
         string Template,
         string Tag,
@@ -279,6 +354,30 @@ public sealed partial class KotorModuleBoot
         string PayloadSha256,
         int ByteCount,
         string PayloadEncoding);
+    private sealed record AreaMusicRecord(
+        string Schema,
+        string AmbientMusicSha256,
+        int StandardMusicId,
+        int MusicDelayMilliseconds,
+        FirstEncounterAudioSource BackgroundMusic);
+    private sealed record SoundObjectRecord(
+        string Schema,
+        string Template,
+        string Tag,
+        IReadOnlyList<float> Position,
+        bool Active,
+        bool Continuous,
+        bool Looping,
+        bool Positional,
+        int Volume,
+        float MinDistance,
+        float MaxDistance,
+        float PitchVariation,
+        string UtsSha256,
+        FirstEncounterAudioSource Audio);
+    private sealed record MaterializedSoundObject(
+        SoundObjectRecord Source,
+        Node Player);
     private sealed record FirstEncounterScript(
         string Resref,
         string SourceSha256,
@@ -428,14 +527,22 @@ public sealed partial class KotorModuleBoot
         bool Infinite);
     private sealed record DialogueReference(string Path, string SourceSha256, int StarterCount,
         int NodeCount, int OpeningStarter);
+    private sealed record OpeningDialogueRecord(
+        string Schema, string ActorTag, string Conversation, DialogueReference Dialogue);
     private sealed record DialogueGraph(string Schema, int OpeningStarter,
         IReadOnlyList<DialogueLink> Starters, IReadOnlyDictionary<string, DialogueNode> Nodes);
     private sealed record DialogueNode(string Kind, string Text, string Speaker, string Sound,
         string Voice,
         string Script1, string Script2,
+        DialogueScriptParameters? Script1Parameters,
+        DialogueScriptParameters? Script2Parameters,
         int CameraAngle, int? CameraId, float? CameraFov, float? CameraHeight,
+        float DelaySeconds, int FadeType, IReadOnlyList<float>? FadeColor,
+        float? FadeDelaySeconds, float? FadeLengthSeconds,
         IReadOnlyList<DialogueAnimation> Animations, DialogueMedia? Media,
         IReadOnlyList<DialogueLink> Links);
+    private sealed record DialogueScriptParameters(
+        int Int1, int Int2, int Int3, int Int4, int Int5, string String6);
     private sealed record DialogueAnimation(
         int AnimationId,
         string AnimationName,
@@ -456,7 +563,8 @@ public sealed partial class KotorModuleBoot
         string? ActorTag, int? UserEvent, float? InputLockSeconds, float? DelaySeconds,
         string? Conversation, int? DialogueStarter, string? ActorScriptSourceSha256,
         int? ActorScriptInstructionCount, string? ConditionScriptSourceSha256,
-        int? ConditionScriptInstructionCount);
+        int? ConditionScriptInstructionCount, float? FadeInWaitSeconds,
+        float? FadeInLengthSeconds, float? MusicRestartDelaySeconds);
     private sealed class LipRig(KotorLipModifier modifier, Animation animation,
         IReadOnlyList<KotorLipModifier.TrackBinding> tracks)
     {
@@ -557,14 +665,15 @@ public sealed partial class KotorModuleBoot
     }
     private sealed class CreatureEffectRig(
         IReadOnlyDictionary<string, GpuParticles3D> emitters,
+        IReadOnlyDictionary<string, IReadOnlyList<GpuParticles3D>> explosionPools,
         IReadOnlyDictionary<string, OmniLight3D> lights,
         IReadOnlyDictionary<string, CreatureEffectAnimationRecord> animations)
     {
         public IReadOnlyDictionary<string, GpuParticles3D> Emitters { get; } = emitters;
-        public IReadOnlyList<GpuParticles3D> ExplosionEmitters { get; } =
-            emitters.Values.Where(candidate =>
-                candidate.GetMeta("source_update").AsString().Equals(
-                    "Explosion", StringComparison.OrdinalIgnoreCase)).ToArray();
+        public IReadOnlyDictionary<string, IReadOnlyList<GpuParticles3D>> ExplosionPools
+            { get; } = explosionPools;
+        public Dictionary<string, int> ExplosionPoolCursors { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
         public IReadOnlyDictionary<string, OmniLight3D> Lights { get; } = lights;
         public IReadOnlyDictionary<string, CreatureEffectAnimationRecord> Animations { get; } =
             animations;

@@ -27,6 +27,21 @@ public sealed partial class KotorModuleBoot
             PresentDialogueStarter(graph, graph.OpeningStarter);
     }
 
+    private void LoadOpeningDialogue(
+        OpeningDialogueRecord opening,
+        string manifestDirectory)
+    {
+        if (opening.Schema != "nikami-aurora-kotor-opening-dialogue-v1" ||
+            string.IsNullOrWhiteSpace(opening.ActorTag) ||
+            string.IsNullOrWhiteSpace(opening.Conversation))
+            throw new InvalidDataException("Opening dialogue manifest is incomplete");
+        dialogueOwnerActor = opening.ActorTag;
+        dialogueManifestDirectory = manifestDirectory;
+        openingDialogueConversation = opening.Conversation;
+        openingDialogueGraph = ReadDialogueGraph(opening.Dialogue, manifestDirectory);
+        currentDialogueConversation = openingDialogueConversation;
+    }
+
     private static DialogueGraph ReadDialogueGraph(
         DialogueReference reference,
         string manifestDirectory)
@@ -44,6 +59,8 @@ public sealed partial class KotorModuleBoot
     {
         if (starterIndex < 0 || starterIndex >= graph.Starters.Count)
             throw new InvalidDataException($"Dialogue starter is out of range: {starterIndex}");
+        dialogueSequenceActive = true;
+        UpdateFlatUiVisibility();
         PresentDialogueNode(
             graph, graph.Starters[starterIndex].Target, new HashSet<string>(), 0);
     }
@@ -803,10 +820,27 @@ public sealed partial class KotorModuleBoot
         currentDialogueNodeKey = key;
         GD.Print($"NIKAMI_AURORA_DIALOGUE_NODE status=presented key={key} " +
                  $"kind={node.Kind} speaker={node.Speaker} sound={node.Sound}");
-        ExecuteScript(node.Script1);
-        ExecuteScript(node.Script2);
+        ExecuteScript(node.Script1, node.Script1Parameters);
+        ExecuteScript(node.Script2, node.Script2Parameters);
         ApplyDialogueAnimations(node);
         ApplyDialogueCamera(node);
+        ApplyDialogueFade(node);
+        if (IsStageDirection(node.Text))
+        {
+            dialoguePanel.Visible = false;
+            UpdateXrHudVisibility();
+            var performanceActor = ResolveDialogueActor(node) ?? dialogueOwnerActor;
+            if (node.Media?.AudioPath is { Length: > 0 })
+                PlayDialoguePerformance(node, performanceActor);
+            if (node.Links.Count == 0)
+            {
+                FinishDialogue();
+                return;
+            }
+            AdvanceCinematicDialogueAfterDelay(
+                graph, key, node.Links[0].Target, Math.Max(0, node.DelaySeconds));
+            return;
+        }
         if (string.IsNullOrWhiteSpace(node.Text))
         {
             if (node.Links.Count > 0)
@@ -831,7 +865,9 @@ public sealed partial class KotorModuleBoot
         else if (node.Speaker.Equals("end_trask", StringComparison.OrdinalIgnoreCase))
             lastDialogueSpeaker = "TRASK ULGO";
         else if (!string.IsNullOrWhiteSpace(node.Speaker))
-            lastDialogueSpeaker = node.Speaker.ToUpperInvariant();
+            lastDialogueSpeaker = node.Speaker.EndsWith("Inv", StringComparison.OrdinalIgnoreCase)
+                ? node.Speaker[..^3].ToUpperInvariant()
+                : node.Speaker.ToUpperInvariant();
         dialogueSpeaker.Text = lastDialogueSpeaker;
         dialogueText.Text = node.Text;
         foreach (var child in dialogueChoices.GetChildren())
@@ -890,6 +926,61 @@ public sealed partial class KotorModuleBoot
         }
     }
 
+    private static bool IsStageDirection(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var depth = 0;
+        foreach (var character in text.Trim())
+        {
+            if (character == '{') depth++;
+            else if (character == '}') depth--;
+            else if (depth == 0 && !char.IsWhiteSpace(character)) return false;
+            if (depth < 0) return false;
+        }
+        return depth == 0;
+    }
+
+    private async void AdvanceCinematicDialogueAfterDelay(
+        DialogueGraph graph,
+        string sourceKey,
+        string targetKey,
+        double delaySeconds)
+    {
+        if (delaySeconds > 0)
+        {
+            var timer = GetTree().CreateTimer(delaySeconds);
+            await ToSignal(timer, SceneTreeTimer.SignalName.Timeout);
+        }
+        if (!currentDialogueNodeKey.Equals(sourceKey, StringComparison.OrdinalIgnoreCase)) return;
+        automaticDialogueTransitionCount++;
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_AUTO status=advanced " +
+                 $"target={targetKey} count={automaticDialogueTransitionCount} " +
+                 $"delay={delaySeconds:F3}");
+        FollowDialogueChoice(graph, targetKey);
+    }
+
+    private void ApplyDialogueFade(DialogueNode node)
+    {
+        if (node.FadeType is not (3 or 4)) return;
+        dialogueFadeTween?.Kill();
+        var source = node.FadeColor is { Count: >= 3 }
+            ? new Color(node.FadeColor[0], node.FadeColor[1], node.FadeColor[2], 1)
+            : Colors.Black;
+        var fadeIn = node.FadeType == 3;
+        cinematicFade.Color = new Color(source.R, source.G, source.B, fadeIn ? 1 : 0);
+        cinematicFade.Visible = true;
+        var tween = cinematicFade.CreateTween();
+        dialogueFadeTween = tween;
+        var delay = Math.Max(0, node.FadeDelaySeconds ?? 0);
+        var length = Math.Max(0, node.FadeLengthSeconds ?? 0);
+        if (delay > 0) tween.TweenInterval(delay);
+        tween.TweenProperty(cinematicFade, "color:a", fadeIn ? 0.0f : 1.0f, length);
+        if (fadeIn)
+            tween.TweenCallback(Callable.From(() => cinematicFade.Visible = false));
+        GD.Print($"NIKAMI_AURORA_DIALOGUE_FADE status=active type={node.FadeType} " +
+                 $"delay={delay:F3} length={length:F3}");
+    }
+
     private static bool TryGetAutomaticDialogueTarget(
         DialogueGraph graph,
         DialogueNode node,
@@ -904,7 +995,7 @@ public sealed partial class KotorModuleBoot
             !string.IsNullOrWhiteSpace(link.Condition2) ||
             !graph.Nodes.TryGetValue(link.Target, out var reply) ||
             !reply.Kind.Equals("reply", StringComparison.OrdinalIgnoreCase) ||
-            !string.IsNullOrWhiteSpace(reply.Text))
+            (!string.IsNullOrWhiteSpace(reply.Text) && !IsStageDirection(reply.Text)))
             return false;
         target = link.Target;
         return true;
@@ -927,12 +1018,17 @@ public sealed partial class KotorModuleBoot
     private void FinishDialogue()
     {
         var completedConversation = currentDialogueConversation;
+        dialogueSequenceActive = false;
         dialoguePanel.Visible = false;
+        cinematicFade.Visible = false;
+        dialogueFadeTween?.Kill();
+        dialogueFadeTween = null;
         UpdateXrHudVisibility();
         StopDialoguePerformance();
         RestoreGameplayCamera();
         Input.MouseMode = Input.MouseModeEnum.Captured;
         currentDialogueConversation = "";
+        UpdateFlatUiVisibility();
         if (completedConversation.Equals("end_room3", StringComparison.OrdinalIgnoreCase))
             FinishFirstEncounter();
     }

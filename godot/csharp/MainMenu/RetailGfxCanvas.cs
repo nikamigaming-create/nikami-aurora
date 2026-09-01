@@ -146,6 +146,7 @@ internal sealed partial class RetailGfxCanvas : Control
             }
 
             commands.Add(new DrawCommand(
+                selected.Image.Name,
                 texture,
                 region,
                 BitmapTransform(selected.Fill).Concat(selected.Transform),
@@ -156,6 +157,29 @@ internal sealed partial class RetailGfxCanvas : Control
     }
 
     internal int QuadCount => commands.Count;
+
+    internal Rect2? ReferenceBounds(string sourceName)
+    {
+        Rect2? combined = null;
+        foreach (var command in commands.Where(command =>
+                     command.SourceName.Equals(sourceName, StringComparison.OrdinalIgnoreCase)))
+        {
+            var transform = ToGodot(command.Transform);
+            var size = command.Source.Size;
+            var points = new[]
+            {
+                transform * Vector2.Zero,
+                transform * new Vector2(size.X, 0),
+                transform * new Vector2(0, size.Y),
+                transform * size
+            };
+            var minimum = points.Skip(1).Aggregate(points[0], (value, point) => value.Min(point));
+            var maximum = points.Skip(1).Aggregate(points[0], (value, point) => value.Max(point));
+            var bounds = new Rect2(minimum, maximum - minimum);
+            combined = combined is null ? bounds : combined.Value.Merge(bounds);
+        }
+        return combined;
+    }
 
     internal Vector2 StageSize => new((float)stage.Width, (float)stage.Height);
 
@@ -201,6 +225,7 @@ internal sealed partial class RetailGfxCanvas : Control
         new Vector2((float)value.TranslateX, (float)value.TranslateY));
 
     private sealed record DrawCommand(
+        string SourceName,
         Texture2D Texture,
         Rect2 Source,
         GfxMatrix Transform,

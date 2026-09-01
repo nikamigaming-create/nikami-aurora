@@ -16,9 +16,9 @@ using Nikami.Aurora.GodotRuntime.Presentation.Cinematics;
 namespace Nikami.Aurora.GodotRuntime.Bootstrap;
 
 /// <summary>
-/// Explicit City Elf composition root owned by the Aurora DAO adapter. This
-/// replaces the legacy general-purpose DI package with one auditable object
-/// graph containing only services exercised by the accepted opening slice.
+/// Shared composition root owned by the Aurora DAO adapter. Origin identities
+/// and behavior stay in the DAO profile while every route uses this same
+/// runtime object graph.
 /// </summary>
 internal sealed class DaoRuntimeServices : IDisposable
 {
@@ -47,12 +47,15 @@ internal sealed class DaoRuntimeServices : IDisposable
         var waterMaterials = new DaoWaterMaterialFactory(store);
         var batches = new StaticWorldBatchBuilder(scheduler, characterMaterials);
         var story = new StoryState();
+        var areaStoryContracts = new DaoAreaStoryContractProvider(store, environment);
+        var scriptBytecode = new DaoScriptBytecodeProvider(environment);
         var worldLoader = new GodotWorldContentLoader(store, modelCache, batches,
             terrainMaterials, waterMaterials, navigation, blockers, lighting,
-            story, scheduler);
+            areaStoryContracts, story, scheduler);
         var abilityCatalog = new GdaAbilityCatalog(store);
         var areaPresentation = new DaoAreaPresentationProvider(store);
         var characterLoadouts = new GdaCharacterAbilityLoadoutProvider(store, environment);
+        var experienceTables = new GdaExperienceTableProvider(store, environment);
         var abilities = new AbilityState(clock);
         var abilityInitializer = new CharacterAbilityInitializer(
             characterLoadouts, abilityCatalog, abilities);
@@ -83,6 +86,9 @@ internal sealed class DaoRuntimeServices : IDisposable
         Add<IAbilityCatalog>(abilityCatalog);
         Add<IAreaPresentationProvider>(areaPresentation);
         Add<ICharacterAbilityLoadoutProvider>(characterLoadouts);
+        Add<GdaExperienceTableProvider>(experienceTables);
+        Add(areaStoryContracts);
+        Add(scriptBytecode);
         Add(abilityInitializer);
         Add(storyInitializer);
         Add(abilities);

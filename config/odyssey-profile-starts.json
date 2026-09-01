@@ -1,0 +1,18 @@
+{
+  "schema": "nikami-aurora-odyssey-profile-starts-v1",
+  "profiles": {
+    "kotor2": {
+      "001ebo": {
+        "playerTemplate": "p_t3m4"
+      },
+      "101per": {
+        "openingSequence": {
+          "triggerTemplate": "newgeneric020",
+          "triggerScript": "k_awaken",
+          "actorTag": "inv_talker",
+          "conversation": "101awake"
+        }
+      }
+    }
+  }
+}

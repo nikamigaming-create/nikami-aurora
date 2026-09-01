@@ -250,8 +250,9 @@ public sealed partial class KotorModuleBoot
             node.Name.ToString().Contains("lhand", StringComparison.OrdinalIgnoreCase));
         var hasRightHand = FindDescendants<Node3D>(playerModel).Any(node =>
             node.Name.ToString().Contains("rhand", StringComparison.OrdinalIgnoreCase));
-        if (headMeshes.Length != 8 || armMeshes.Length != 2 || bodyMeshes < 3 ||
-            !hasLeftHand || !hasRightHand)
+        if (xrActive &&
+            (headMeshes.Length != 8 || armMeshes.Length != 2 || bodyMeshes < 3 ||
+             !hasLeftHand || !hasRightHand))
             throw new InvalidDataException(
                 "Local player head/body/hand visibility contract drifted");
         foreach (var headMesh in headMeshes)

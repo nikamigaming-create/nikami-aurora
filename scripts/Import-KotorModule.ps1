@@ -3,6 +3,9 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$GameRoot = $env:NIKAMI_KOTOR_ROOT,
 
+    [ValidateSet('kotor', 'kotor2')]
+    [string]$Profile = 'kotor',
+
     [ValidatePattern('^[A-Za-z0-9_]{1,16}$')]
     [string]$Module = "end_m01aa",
 
@@ -18,6 +21,9 @@ param(
     [ValidateRange(0, 65535)]
     [int]$PlayerPortraitId = 18,
 
+    [ValidateRange(0, 255)]
+    [int]$PlayerClassId = 0,
+
     [string]$Python = "py"
 )
 
@@ -28,7 +34,7 @@ if ([string]::IsNullOrWhiteSpace($GameRoot)) {
     throw "Pass -GameRoot or set NIKAMI_KOTOR_ROOT."
 }
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $OutputRoot = Join-Path $repo "local\kotor\$Module"
+    $OutputRoot = Join-Path $repo "local\$Profile\$Module"
 }
 if ([string]::IsNullOrWhiteSpace($MdlOps)) {
     $MdlOps = Join-Path $repo "local\tools\mdlops\mdlops.exe"
@@ -50,12 +56,14 @@ if ((Split-Path -Leaf $Python) -ieq "py" -or (Split-Path -Leaf $Python) -ieq "py
 $arguments += @(
     (Join-Path $PSScriptRoot "import_kotor_module.py"),
     "--game-root", $GameRoot,
+    "--profile", $Profile,
     "--module", $Module,
     "--output", $OutputRoot,
     "--mdlops", $MdlOps,
     "--runtime-config", $RuntimeConfig,
     "--player-appearance-id", $PlayerAppearanceId,
-    "--player-portrait-id", $PlayerPortraitId
+    "--player-portrait-id", $PlayerPortraitId,
+    "--player-class-id", $PlayerClassId
 )
 
 & $Python @arguments

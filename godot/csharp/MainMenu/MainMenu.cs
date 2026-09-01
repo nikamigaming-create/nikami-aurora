@@ -660,6 +660,7 @@ public partial class MainMenu : Control
 
             var requestedOrigin = OS.GetEnvironment("OPENDAO_ACCEPTANCE_ORIGIN");
             if (requestedOrigin.Length == 0) requestedOrigin = "city-elf";
+            var requestedRace = OS.GetEnvironment("OPENDAO_ACCEPTANCE_RACE").ToLowerInvariant();
             var requestedClass = OS.GetEnvironment("OPENDAO_ACCEPTANCE_CLASS").ToLowerInvariant();
             var preferredClass = CharacterProfileRules.Classes.Any(value =>
                 value.Id.Equals(requestedClass, StringComparison.OrdinalIgnoreCase))
@@ -670,12 +671,18 @@ public partial class MainMenu : Control
                     "city-elf" or "dalish-elf" or "dwarf-commoner" => "rogue",
                     _ => "warrior"
                 };
-            var identity = CharacterProfileRules.Races
+            var legalIdentities = CharacterProfileRules.Races
                 .Select(race => (Race: race.Id, Class: preferredClass))
-                .FirstOrDefault(value => CharacterProfileRules.OriginsFor(value.Race, value.Class)
-                    .Any(origin => origin.Id.Equals(requestedOrigin, StringComparison.OrdinalIgnoreCase)));
+                .Where(value => CharacterProfileRules.OriginsFor(value.Race, value.Class)
+                    .Any(origin => origin.Id.Equals(requestedOrigin, StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            var identity = requestedRace.Length > 0
+                ? legalIdentities.FirstOrDefault(value =>
+                    value.Race.Equals(requestedRace, StringComparison.OrdinalIgnoreCase))
+                : legalIdentities.FirstOrDefault();
             if (identity == default)
-                throw new InvalidDataException("Acceptance origin is not legal: " + requestedOrigin);
+                throw new InvalidDataException(
+                    $"Acceptance origin/race is not legal: {requestedOrigin}/{requestedRace}");
             var requestedGender = OS.GetEnvironment("OPENDAO_ACCEPTANCE_GENDER").ToLowerInvariant();
             if (requestedGender is not ("male" or "female")) requestedGender = "female";
             var requestedName = OS.GetEnvironment("OPENDAO_ACCEPTANCE_NAME");

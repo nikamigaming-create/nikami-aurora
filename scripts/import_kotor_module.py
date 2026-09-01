@@ -43,6 +43,7 @@ try:
     from pykotor.resource.generics.uti import read_uti
     from pykotor.resource.generics.utp import read_utp
     from pykotor.resource.generics.utt import read_utt
+    from pykotor.resource.generics.uts import read_uts
     from pykotor.resource.type import ResourceType
     from pykotor.tools import creature as creature_tools
     from pykotor.tools import door as door_tools
@@ -55,6 +56,10 @@ except ImportError as exc:
 
 SCHEMA = "nikami-aurora-kotor-module-v1"
 ENDAR_MODULE = "end_m01aa"
+ODYSSEY_EXECUTABLES = {
+    "kotor": "swkotor.exe",
+    "kotor2": "swkotor2.exe",
+}
 SOURCE_ROOM_PLACEHOLDER = "****"
 GENERIC_WORLD_MODE = "generic-world"
 ENDAR_OPENING_MODE = "endar-opening"
@@ -63,6 +68,54 @@ KOTOR_TO_GODOT = trimesh.transformations.rotation_matrix(-math.pi / 2.0, [1.0, 0
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest().upper()
+
+
+def export_experience_table(installation: Installation) -> dict[str, Any]:
+    resource = installation.resource("exptable", ResourceType.TwoDA)
+    if resource is None:
+        raise RuntimeError("exptable.2da could not be resolved")
+    data = resource_data(resource)
+    table = read_2da(data)
+    thresholds = []
+    for row in range(table.get_height()):
+        experience = str(table.get_cell(row, "xp")).strip()
+        if experience.casefold() == "0xffffffff":
+            if row != table.get_height() - 1:
+                raise RuntimeError("exptable.2da terminator is not the final row")
+            break
+        thresholds.append({
+            "level": int(table.get_cell(row, "level")),
+            "minimumExperience": int(experience),
+        })
+    if (not thresholds or thresholds[0] != {"level": 1, "minimumExperience": 0} or
+            any(right["level"] != left["level"] + 1 or
+                right["minimumExperience"] <= left["minimumExperience"]
+                for left, right in zip(thresholds, thresholds[1:]))):
+        raise RuntimeError("exptable.2da thresholds are inconsistent")
+    return {
+        "sourceSha256": sha256_bytes(data),
+        "thresholds": thresholds,
+    }
+
+
+def export_combat_experience_table(installation: Installation) -> dict[str, Any]:
+    resource = installation.resource("xptable", ResourceType.TwoDA)
+    if resource is None:
+        raise RuntimeError("xptable.2da could not be resolved")
+    data = resource_data(resource)
+    table = read_2da(data)
+    challenge_columns = [f"c{value}" for value in range(21)]
+    if (table.get_headers() != ["level", *challenge_columns] or
+            table.get_height() <= 0):
+        raise RuntimeError("xptable.2da layout is unsupported")
+    rows = []
+    for row in range(table.get_height()):
+        level = int(table.get_cell(row, "level"))
+        rewards = [int(table.get_cell(row, column)) for column in challenge_columns]
+        if level != row + 1 or any(value < 0 for value in rewards):
+            raise RuntimeError("xptable.2da values are inconsistent")
+        rows.append({"playerLevel": level, "rewards": rewards})
+    return {"sourceSha256": sha256_bytes(data), "rows": rows}
 
 
 def sha256_file(path: Path) -> str:
@@ -258,6 +311,41 @@ def load_runtime_configuration(path: Path) -> dict[str, Any]:
     return configuration
 
 
+def load_profile_starts() -> dict[str, Any]:
+    path = Path(__file__).resolve().parents[1] / "config" / "odyssey-profile-starts.json"
+    configuration = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(configuration, dict) or
+            configuration.get("schema") != "nikami-aurora-odyssey-profile-starts-v1" or
+            not isinstance(configuration.get("profiles"), dict)):
+        raise RuntimeError("Unsupported Odyssey profile-start configuration")
+    profiles = configuration["profiles"]
+    for profile_id, modules in profiles.items():
+        if profile_id not in ODYSSEY_EXECUTABLES or not isinstance(modules, dict):
+            raise RuntimeError(f"Invalid Odyssey profile start configuration: {profile_id}")
+        for module_id, start in modules.items():
+            normalize_module_id(module_id)
+            if not isinstance(start, dict):
+                raise RuntimeError(
+                    f"Invalid Odyssey player start configuration: {profile_id}/{module_id}")
+            player_template = start.get("playerTemplate")
+            if (player_template is not None and
+                    (not isinstance(player_template, str) or not player_template.strip())):
+                raise RuntimeError(
+                    f"Invalid Odyssey player start configuration: {profile_id}/{module_id}")
+            opening = start.get("openingSequence")
+            if opening is not None:
+                required = ("triggerTemplate", "triggerScript", "actorTag", "conversation")
+                if (not isinstance(opening, dict) or
+                        any(not isinstance(opening.get(key), str) or
+                            not opening[key].strip() for key in required)):
+                    raise RuntimeError(
+                        f"Invalid Odyssey opening sequence: {profile_id}/{module_id}")
+            if player_template is None and opening is None:
+                raise RuntimeError(
+                    f"Empty Odyssey profile start configuration: {profile_id}/{module_id}")
+    return profiles
+
+
 def canonical_resref(value: Any) -> str:
     return str(value).strip()
 
@@ -331,6 +419,85 @@ def read_owned_mdl(mdl_bytes: bytes, mdx_bytes: bytes) -> Any:
     reader._reader = BinaryReader.from_auto(  # noqa: SLF001
         mdl_bytes, offset=12, size=len(mdl_bytes) - 12)
     return reader.load()
+
+
+def read_mdl_ascii_preserving_lightmaps(ascii_path: Path) -> Any:
+    """Restore MDLOps ``bitmap2`` data omitted by PyKotor's ASCII reader.
+
+    PyKotor reads KOTOR II geometry and both UV sets from MDLOps ASCII, but its
+    ASCII grammar currently ignores the secondary texture declaration.  Keep
+    the conversion boundary shared and source-driven by joining each parsed
+    mesh to its declaration in the same ASCII node order.
+    """
+    text = ascii_path.read_text(encoding="ascii", errors="strict")
+    secondary_textures: list[str] = []
+    in_node = False
+    has_mesh_bitmap = False
+    secondary_texture = ""
+    for source_line in text.splitlines():
+        line = source_line.strip()
+        keyword, _, value = line.partition(" ")
+        keyword = keyword.casefold()
+        if keyword == "node":
+            if in_node:
+                raise RuntimeError(f"Nested MDLOps ASCII node in {ascii_path}")
+            in_node = True
+            has_mesh_bitmap = False
+            secondary_texture = ""
+        elif in_node and keyword == "bitmap":
+            has_mesh_bitmap = True
+        elif in_node and keyword == "bitmap2":
+            secondary_texture = value.strip()
+        elif keyword == "endnode" and in_node:
+            if has_mesh_bitmap:
+                secondary_textures.append(secondary_texture)
+            in_node = False
+    if in_node:
+        raise RuntimeError(f"Unterminated MDLOps ASCII node in {ascii_path}")
+
+    model = read_mdl(ascii_path)
+    mesh_nodes = [node for node in model.all_nodes() if node.mesh is not None]
+    if len(mesh_nodes) != len(secondary_textures):
+        raise RuntimeError(
+            f"MDLOps ASCII mesh/lightmap join drifted for {ascii_path}: "
+            f"meshes={len(mesh_nodes)} declarations={len(secondary_textures)}")
+    for node, texture in zip(mesh_nodes, secondary_textures, strict=True):
+        node.mesh.texture_2 = texture
+    return model
+
+
+def read_owned_mdl_via_mdlops(
+    mdl_bytes: bytes,
+    mdx_bytes: bytes,
+    model_name: str,
+    mdlops: Path,
+    cache_root: Path,
+) -> Any:
+    """Use the existing local Odyssey converter for KOTOR II MDX layouts."""
+    cache_root.mkdir(parents=True, exist_ok=True)
+    stem = model_name.lower()
+    mdl_path = cache_root / f"{stem}.mdl"
+    mdx_path = cache_root / f"{stem}.mdx"
+    ascii_path = cache_root / f"{stem}.mdl.ascii"
+    stamp_path = cache_root / f"{stem}.sha256"
+    source_hash = sha256_bytes(mdl_bytes + mdx_bytes)
+    cached_hash = stamp_path.read_text(encoding="ascii").strip() if stamp_path.is_file() else ""
+    if not ascii_path.is_file() or cached_hash != source_hash:
+        mdl_path.write_bytes(mdl_bytes)
+        mdx_path.write_bytes(mdx_bytes)
+        completed = subprocess.run(
+            [str(mdlops), "--use-ascii-extension", str(mdl_path)],
+            cwd=cache_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0 or not ascii_path.is_file():
+            raise RuntimeError(
+                f"MDLOps failed for KOTOR II room {model_name}: "
+                f"{completed.stdout}\n{completed.stderr}")
+        stamp_path.write_text(source_hash + "\n", encoding="ascii")
+    return read_mdl_ascii_preserving_lightmaps(ascii_path)
 
 
 def find_module_resource(installation: Installation, module: str, restype: str) -> Any:
@@ -419,12 +586,12 @@ def camera_vectors(camera: Any) -> tuple[list[float], list[float]]:
 
 TXI_RENDERED_DIRECTIVES = frozenset({
     "blending", "bumpmapscaling", "bumpmaptexture", "bumpyshinytexture",
-    "decal", "envmaptexture",
+    "decal", "envmaptexture", "fps", "numx", "numy",
 })
 TXI_UNSUPPORTED_PRESENTATION_DIRECTIVES = frozenset({
     "channelscale", "channeltranslate",
-    "defaultheight", "defaultwidth", "distort", "distortionamplitude", "fps",
-    "height", "numx", "numy", "proceduretype", "speed", "wateralpha", "width",
+    "defaultheight", "defaultwidth", "distort", "distortionamplitude",
+    "height", "proceduretype", "speed", "wateralpha", "width",
 })
 TXI_SAMPLING_OR_METADATA_DIRECTIVES = frozenset({
     "alphamean", "arturoheight", "arturowidth", "clamp", "compresstexture",
@@ -463,6 +630,12 @@ def parse_txi_directives(source: str) -> dict[str, list[str]]:
             # canonical Odyssey/PyKotor property is bumpmapscaling.
             key = "bumpmapscaling"
         value = parts[1] if len(parts) > 1 else ""
+        if key in {"decal0", "decal1"} and not value:
+            # TSL's embedded TXI footers also encode the boolean as a
+            # presence-only suffixed token. PyKotor canonicalizes the same
+            # source to `decal 0|1`; preserve that exact engine meaning.
+            value = key[-1]
+            key = "decal"
         if key in TXI_FOUR_CHANNEL_CONTINUATIONS and index + 4 < len(lines):
             continuation = lines[index + 1:index + 5]
             try:
@@ -744,7 +917,12 @@ class TextureCache:
                 f"Conflicting KOTOR bump-map scale semantics for {name}: {values}")
         return parsed[-1], True
 
-    def material_semantics(self, diffuse: str, lightmap: str) -> dict[str, Any]:
+    def material_semantics(
+        self,
+        diffuse: str,
+        lightmap: str,
+        mesh_transparency_hint: bool = False,
+    ) -> dict[str, Any]:
         diffuse_image = self.image(diffuse)
         lightmap_image = self.image(lightmap)
         environment_map = self.source_environment_map(diffuse)
@@ -767,7 +945,9 @@ class TextureCache:
         lightmap_resref = lightmap if lightmap_key and lightmap_key != "null" else None
         source_decal = self.is_source_decal(diffuse)
         blend = "additive" if self.is_source_additive(diffuse) else (
-            "alpha" if self.is_source_transparent(diffuse) else "opaque")
+            "alpha"
+            if self.is_source_transparent(diffuse) or mesh_transparency_hint
+            else "opaque")
         return {
             "diffuseTexture": diffuse_resref,
             "lightmapTexture": lightmap_resref,
@@ -788,7 +968,8 @@ class TextureCache:
             "materialName": material_name(
                 diffuse, blend == "additive", environment_map,
                 bump_scale if bump_map and bump_scale_authored else None,
-                source_decal),
+                source_decal,
+                mesh_transparency_hint),
             "sourceTxi": self.source_txi(diffuse),
         }
 
@@ -891,6 +1072,8 @@ def export_kotor_ui(
     inventory_items: list[dict[str, Any]],
     runtime_configuration: dict[str, Any],
     include_endar_party: bool = True,
+    gui_suffix: str = "",
+    loading_music_resref: str = "mus_loadscreen",
 ) -> dict[str, Any]:
     """Export source GUI contracts and owned textures for the flat runtime shell."""
     talktable = installation.talktable()
@@ -1224,11 +1407,23 @@ def export_kotor_ui(
                 found.update(referenced_textures(child))
         return found
 
-    loading_layout, loading_controls = load_gui("loadscreen")
-    inventory_layout, inventory_controls = load_gui("inventory")
-    equipment_layout, equipment_controls = load_gui("equip")
-    top_layout, top_controls = load_gui("top")
-    hud_layout, hud_controls = load_gui("mipc8x6")
+    loading_layout, loading_controls = load_gui("loadscreen" + gui_suffix)
+    inventory_layout, inventory_controls = load_gui("inventory" + gui_suffix)
+    equipment_layout, equipment_controls = load_gui("equip" + gui_suffix)
+    top_layout, top_controls = load_gui("top" + gui_suffix)
+    navigation_screens = {}
+    for screen_name in ("character", "abilities", "journal", "map", "messages"):
+        screen_layout, screen_controls = load_gui(screen_name + gui_suffix)
+        navigation_screens[screen_name] = {
+            "layout": screen_layout,
+            "controls": screen_controls,
+        }
+    # TSL does not use KOTOR's mipc8x6 HUD with a platform suffix.  It ships a
+    # distinct PC overlay (mipc28x6_p) whose authored action bar and portrait
+    # groups occupy the retail bottom-left and bottom-right corners.  Loading
+    # mipc8x6_p silently swaps those groups even though every referenced
+    # texture is valid.
+    hud_layout, hud_controls = load_gui(odyssey_hud_layout_resref(gui_suffix))
     (module_loading_resref, loading_background_selection,
      loading_background_table_sha256) = source_loading_background(
         installation, module, area)
@@ -1295,19 +1490,27 @@ def export_kotor_ui(
         }
 
     loading_music = installation.sounds(
-        {"mus_loadscreen"}, [SearchLocation.MUSIC]).get("mus_loadscreen")
-    if not loading_music or not loading_music.startswith(b"RIFF"):
-        raise RuntimeError("KOTOR loading music could not be decoded as WAV")
-    loading_music_relative = "audio/mus_loadscreen.wav"
+        {loading_music_resref}, [SearchLocation.MUSIC]).get(loading_music_resref)
+    if not loading_music:
+        raise RuntimeError(f"Odyssey loading music could not be decoded: {loading_music_resref}")
+    if loading_music.startswith(b"RIFF"):
+        loading_music_format = "wav"
+    elif (loading_music.startswith(b"ID3") or
+          (len(loading_music) >= 2 and loading_music[0] == 0xFF and
+           loading_music[1] & 0xE0 == 0xE0)):
+        loading_music_format = "mp3"
+    else:
+        raise RuntimeError(f"Unsupported Odyssey loading music format: {loading_music_resref}")
+    loading_music_relative = f"audio/{loading_music_resref}.{loading_music_format}"
     loading_music_path = output_root / loading_music_relative
     loading_music_path.parent.mkdir(parents=True, exist_ok=True)
     loading_music_path.write_bytes(loading_music)
-    loading_music_source_path = installation.streammusic_path() / "mus_loadscreen.wav"
+    loading_music_source_path = installation.streammusic_path() / f"{loading_music_resref}.wav"
     loading_music_source = loading_music_source_path.read_bytes()
     loading_music_record = {
-        "resref": "mus_loadscreen",
+        "resref": loading_music_resref,
         "path": loading_music_relative,
-        "format": "wav",
+        "format": loading_music_format,
         "sourceSha256": sha256_bytes(loading_music_source),
         "sourceByteCount": len(loading_music_source),
         "payloadSha256": sha256_bytes(loading_music),
@@ -1320,7 +1523,11 @@ def export_kotor_ui(
         raise RuntimeError("loadscreenhints.2da could not be resolved")
     loadscreen_hints_bytes = resource_data(loadscreen_hints_resource)
     loadscreen_hints = read_2da(loadscreen_hints_bytes)
-    story_hint_strref = int(loadscreen_hints.get_cell(0, "storyhint"))
+    hint_column = (
+        "storyhint" if "storyhint" in loadscreen_hints.get_headers()
+        else "gameplayhint"
+    )
+    story_hint_strref = int(loadscreen_hints.get_cell(0, hint_column))
 
     item_records: list[dict[str, Any]] = []
     for item in inventory_items:
@@ -1382,14 +1589,14 @@ def export_kotor_ui(
             "background": export_texture(module_loading_resref),
             "backgroundSelection": loading_background_selection,
             "backgroundTableSha256": loading_background_table_sha256,
-            "logo": export_texture("logo_sw_02"),
-            "progress": export_texture("bluefill"),
+            "logo": export_texture("kotor2logo" if gui_suffix else "logo_sw_02"),
+            "progress": export_texture("uibit_fill_16g" if gui_suffix else "bluefill"),
             "loadingText": talktable.string(42493),
             "loadingStrref": 42493,
             "hintText": talktable.string(story_hint_strref),
             "hintStrref": story_hint_strref,
             "hintsSourceSha256": sha256_bytes(loadscreen_hints_bytes),
-            "musicResref": "mus_loadscreen",
+            "musicResref": loading_music_resref,
             "music": loading_music_record,
         },
         "inventory": {
@@ -1397,7 +1604,7 @@ def export_kotor_ui(
             "controls": inventory_controls,
             "topLayout": top_layout,
             "topControls": top_controls,
-            "background": export_texture("lbl_invent"),
+            "background": export_texture("pnl_pause_pc" if gui_suffix else "lbl_invent"),
             "portrait": export_texture(portrait_resref),
             "partyPortraits": party_portraits,
             "partyPortraitsSourceSha256": sha256_bytes(portraits_bytes),
@@ -1413,7 +1620,7 @@ def export_kotor_ui(
             "controls": equipment_controls,
             "topLayout": top_layout,
             "topControls": top_controls,
-            "background": export_texture("lbl_equip"),
+            "background": export_texture("pnl_pause_pc" if gui_suffix else "lbl_equip"),
             "portrait": export_texture(portrait_resref),
             "partyPortraits": party_portraits,
             "partyPortraitsSourceSha256": sha256_bytes(portraits_bytes),
@@ -1450,6 +1657,7 @@ def export_kotor_ui(
                 "Implant": {"text": talktable.string(31388), "strref": 31388},
             },
         },
+        "screens": navigation_screens,
         "hud": {
             "layout": hud_layout,
             "controls": hud_controls,
@@ -1474,6 +1682,10 @@ def export_kotor_ui(
     ui_contract["textures"] = sorted(
         exported_textures.values(), key=lambda record: record["resref"].lower())
     return ui_contract
+
+
+def odyssey_hud_layout_resref(gui_suffix: str) -> str:
+    return "mipc28x6_p" if gui_suffix == "_p" else "mipc8x6"
 
 
 def export_first_encounter_effects(
@@ -1614,7 +1826,8 @@ def export_first_encounter_effects(
 def material_name(texture_name: str, source_additive: bool,
                   environment_map: str | None,
                   authored_bump_scale: float | None = None,
-                  source_decal: bool = False) -> str:
+                  source_decal: bool = False,
+                  mesh_transparency_hint: bool = False) -> str:
     name = texture_name or "untextured"
     if environment_map:
         name += f"__aurora_envmap_{environment_map}"
@@ -1624,17 +1837,29 @@ def material_name(texture_name: str, source_additive: bool,
         name += "__aurora_additive"
     if source_decal:
         name += "__aurora_decal"
+    if mesh_transparency_hint:
+        name += "__aurora_transparency_hint"
     return name
 
 
-def material_for(mesh: Any, textures: TextureCache, override_texture: str | None = None) -> Any:
+def material_for(
+    mesh: Any,
+    textures: TextureCache,
+    override_texture: str | None = None,
+    source_node_alpha: float = 1.0,
+) -> Any:
     texture_name = str(override_texture or mesh.texture_1 or "").strip()
     image = textures.image(texture_name)
     lightmap_name = str(mesh.texture_2 or "").strip()
     lightmap = textures.image(lightmap_name)
     source_additive = image is not None and textures.is_source_additive(texture_name)
     source_decal = image is not None and textures.is_source_decal(texture_name)
-    source_transparent = image is not None and textures.is_source_transparent(texture_name)
+    if not math.isfinite(source_node_alpha) or source_node_alpha < 0 or source_node_alpha > 1:
+        raise RuntimeError(f"Invalid source node alpha: {source_node_alpha}")
+    mesh_transparency_hint = bool(mesh.transparency_hint)
+    source_transparent = (
+        image is not None and textures.is_source_transparent(texture_name)
+    ) or mesh_transparency_hint or source_node_alpha < 1.0
     environment_map = textures.source_environment_map(texture_name)
     _, bump_map_name = textures.source_bump_map(texture_name)
     bump_scale, bump_scale_authored = textures.source_bump_scale(texture_name)
@@ -1651,18 +1876,19 @@ def material_for(mesh: Any, textures: TextureCache, override_texture: str | None
         max(0, min(255, round(float(diffuse.r) * 255))),
         max(0, min(255, round(float(diffuse.g) * 255))),
         max(0, min(255, round(float(diffuse.b) * 255))),
-        255,
+        max(0, min(255, round(source_node_alpha * 255))),
     ]
     if image is not None:
         # Static room materials expect the retail lightmap pass. For this
         # diffuse-only proof, preserve the authored texture without multiplying
         # it by a dark pre-lighting material factor.
-        color = [255, 255, 255, 255]
+        color = [255, 255, 255, max(0, min(255, round(source_node_alpha * 255)))]
     return trimesh.visual.material.PBRMaterial(
         name=material_name(
             texture_name, source_additive, environment_map,
             bump_scale if bump_map is not None and bump_scale_authored else None,
-            source_decal),
+            source_decal,
+            mesh_transparency_hint),
         baseColorTexture=image,
         baseColorFactor=color,
         emissiveTexture=lightmap,
@@ -1941,7 +2167,7 @@ ROOM_EMITTER_COLLISION_BOUNCE_FLAG = 0x0010
 # is handled separately through a static authored child target. P2P_SEL without
 # P2P is only a mode selector; TINTED and RANDOM are rendered below.
 UNSUPPORTED_ROOM_EMITTER_FLAGS = (
-    0x0004 |  # wind
+    0x0004 |  # linked particle/render behavior
     0x0080 |  # parent velocity inheritance
     0x0200 |  # collision splat
     0x0400 |  # particle inheritance
@@ -1970,8 +2196,9 @@ def room_emitter_visual_safety_reasons(emitter: dict[str, Any]) -> tuple[str, ..
     if (not math.isfinite(frame_start) or not math.isfinite(frame_end) or
             frame_start != math.trunc(frame_start) or
             frame_end != math.trunc(frame_end) or
-            frame_start < minimum_frame or frame_end > maximum_frame or
-            frame_start > frame_end or not math.isfinite(fps) or fps < 0):
+            frame_start < minimum_frame or
+            frame_end > maximum_frame or
+            not math.isfinite(fps) or fps < 0):
         reasons.add("atlas_range")
 
     sizes = [
@@ -2091,7 +2318,7 @@ def room_emitter_unsupported_reasons(
         reasons.add("grid")
     birth_rate = float(emitter["birthRate"])
     life_expectancy = float(emitter["lifeExpectancy"])
-    if update == "fountain" and (birth_rate <= 0 or life_expectancy <= 0):
+    if update == "fountain" and (birth_rate < 0 or life_expectancy <= 0):
         reasons.add("lifetime")
     if update == "single":
         frame_count = max(1, authored_x_grid) * max(1, authored_y_grid)
@@ -2128,7 +2355,16 @@ def validate_room_emitter_semantics(emitter: dict[str, Any], identity: str) -> N
         raise RuntimeError(
             f"Unsupported KOTOR room-emitter semantic: {identity} "
             f"reasons={','.join(reasons)} update={emitter['update']} "
-            f"render={emitter['render']} blend={emitter['blend']}")
+            f"render={emitter['render']} blend={emitter['blend']} "
+            f"flags={emitter.get('flags')} spawnType={emitter.get('spawnType')} "
+            f"frameBlender={emitter.get('frameBlender')} "
+            f"depthTexture={emitter.get('depthTexture')!r} "
+            f"renderOrder={emitter.get('renderOrder')} "
+            f"birthRate={emitter.get('birthRate')} life={emitter.get('lifeExpectancy')} "
+            f"frames={emitter.get('frameStart')}..{emitter.get('frameEnd')} "
+            f"grid={emitter.get('xGrid')}x{emitter.get('yGrid')} "
+            f"sizes={emitter.get('sizeStart')}/{emitter.get('sizeMid')}/"
+            f"{emitter.get('sizeEnd')}")
 
 
 def patch_glb_texture_channels(
@@ -2174,11 +2410,23 @@ def patch_glb_texture_channels(
     return bytes(rebuilt)
 
 
+def gltf_lightmap_uv(items: list[Any]) -> np.ndarray:
+    # Trimesh converts its primary TextureVisuals UVs from Odyssey's bottom-up
+    # convention to glTF's texture convention.  Custom vertex attributes bypass
+    # that conversion, so TEXCOORD_1 must apply the same V transform explicitly.
+    return np.asarray(
+        [[float(item.x), 1.0 - float(item.y)] for item in items],
+        dtype=np.float32,
+    )
+
+
 def export_room(
     installation: Installation,
     model_name: str,
     output_path: Path,
     textures: TextureCache,
+    mdlops: Path | None = None,
+    model_cache: Path | None = None,
 ) -> dict[str, Any]:
     mdl_resource = installation.resource(model_name, ResourceType.MDL)
     mdx_resource = installation.resource(model_name, ResourceType.MDX)
@@ -2187,7 +2435,12 @@ def export_room(
 
     mdl_bytes = resource_data(mdl_resource)
     mdx_bytes = resource_data(mdx_resource)
-    model = read_owned_mdl(mdl_bytes, mdx_bytes)
+    model = (
+        read_owned_mdl_via_mdlops(
+            mdl_bytes, mdx_bytes, model_name, mdlops, model_cache)
+        if mdlops is not None and model_cache is not None
+        else read_owned_mdl(mdl_bytes, mdx_bytes)
+    )
     scene = trimesh.Scene(base_frame="kotor_model")
     mesh_count = 0
     vertex_count = 0
@@ -2198,6 +2451,8 @@ def export_room(
     lights: list[dict[str, Any]] = []
     emitters: list[dict[str, Any]] = []
     walkmesh_triangles: list[list[list[float]]] = []
+    render_node_names: dict[str, list[str]] = {}
+    render_node_base_alpha: dict[str, float] = {}
 
     def visit(node: Any, parent_transform: np.ndarray, parent_path: str) -> None:
         nonlocal mesh_count, vertex_count, triangle_count
@@ -2300,13 +2555,24 @@ def export_room(
                     walkable = False
                 indices = (face.v1, face.v2, face.v3)
                 if walkable and all(0 <= index < len(local_vertices) for index in indices):
-                    walkmesh_triangles.append([
+                    triangle = [
                         [float(local_vertices[index][0]), float(local_vertices[index][1]),
                          float(local_vertices[index][2])]
                         for index in indices
-                    ])
+                    ]
+                    denominator = (
+                        (triangle[1][1] - triangle[2][1]) *
+                        (triangle[0][0] - triangle[2][0]) +
+                        (triangle[2][0] - triangle[1][0]) *
+                        (triangle[0][1] - triangle[2][1])
+                    )
+                    if (all(math.isfinite(value) for vertex in triangle for value in vertex)
+                            and abs(denominator) >= 0.000001):
+                        walkmesh_triangles.append(triangle)
         if (mesh is not None and bool(mesh.render) and not collision_only and
                 mesh.vertex_positions and mesh.faces):
+            source_node_alpha = float(controller_value(
+                node, MDLControllerType.ALPHA, [1.0])[0])
             vertices = np.asarray(
                 [[float(vertex.x), float(vertex.y), float(vertex.z)] for vertex in mesh.vertex_positions],
                 dtype=np.float32,
@@ -2330,12 +2596,13 @@ def export_room(
                     uv = np.asarray([[float(item.x), float(item.y)] for item in mesh.vertex_uv1], dtype=np.float32)
                 visual = trimesh.visual.texture.TextureVisuals(
                     uv=uv,
-                    material=material_for(mesh, textures),
+                    material=material_for(
+                        mesh, textures, source_node_alpha=source_node_alpha),
                 )
                 vertex_attributes = {}
                 if len(mesh.vertex_uv2) == len(vertices) and str(mesh.texture_2 or "").strip():
-                    vertex_attributes["_TEXCOORD_1"] = np.asarray(
-                        [[float(item.x), float(item.y)] for item in mesh.vertex_uv2], dtype=np.float32)
+                    vertex_attributes["_TEXCOORD_1"] = gltf_lightmap_uv(
+                        mesh.vertex_uv2)
                 geometry = trimesh.Trimesh(
                     vertices=vertices,
                     faces=faces,
@@ -2354,16 +2621,21 @@ def export_room(
                     texture_name.lower(), lightmap_name.lower(),
                     int(mesh.transparency_hint), bool(mesh.animate_uv),
                     bool(mesh.background_geometry), bool(mesh.tangent_space),
+                    source_node_alpha,
                 )
                 if contract_key not in material_contracts:
                     contract = textures.material_semantics(
-                        texture_name, lightmap_name)
+                        texture_name,
+                        lightmap_name,
+                        bool(mesh.transparency_hint),
+                    )
                     contract.update({
                         "meshCount": 0,
                         "meshTransparencyHint": int(mesh.transparency_hint),
                         "animateUv": bool(mesh.animate_uv),
                         "backgroundGeometry": bool(mesh.background_geometry),
                         "tangentSpace": bool(mesh.tangent_space),
+                        "sourceNodeAlpha": source_node_alpha,
                     })
                     material_contracts[contract_key] = contract
                 material_contracts[contract_key]["meshCount"] += 1
@@ -2377,10 +2649,50 @@ def export_room(
                     geom_name=f"{model_name}_{mesh_count}",
                     transform=KOTOR_TO_GODOT @ world_transform,
                 )
+                render_node_names.setdefault(str(node.name).casefold(), []).append(
+                    f"{node.name}_{mesh_count}")
+                render_node_base_alpha[f"{node.name}_{mesh_count}"] = source_node_alpha
         for child in node.children:
             visit(child, world_transform, node_path)
 
     visit(model.root, np.identity(4, dtype=np.float64), "")
+    alpha_animations = []
+    animated_render_nodes: set[str] = set()
+    for animation in model.anims:
+        tracks = []
+        for animation_node in animation.all_nodes():
+            rendered = render_node_names.get(str(animation_node.name).casefold(), [])
+            alpha_controllers = [
+                controller for controller in animation_node.controllers
+                if controller.controller_type == MDLControllerType.ALPHA
+            ]
+            if not alpha_controllers:
+                continue
+            if len(rendered) != 1:
+                raise RuntimeError(
+                    f"Room alpha animation node is not uniquely rendered: "
+                    f"{model_name}/{animation.name}/{animation_node.name}")
+            for controller in alpha_controllers:
+                animated_render_nodes.add(rendered[0])
+                keys = [
+                    {"time": float(row.time), "value": float(row.data[0])}
+                    for row in controller.rows
+                ]
+                if any(not math.isfinite(key["time"]) or key["time"] < 0 or
+                       not math.isfinite(key["value"]) or
+                       key["value"] < 0 or key["value"] > 1
+                       for key in keys):
+                    raise RuntimeError(
+                        f"Invalid room alpha animation: "
+                        f"{model_name}/{animation.name}/{animation_node.name}")
+                tracks.append({"nodeName": rendered[0], "keys": keys})
+        animation_name = str(animation.name)
+        if tracks or animation_name.casefold().startswith("scriptloop"):
+            alpha_animations.append({
+                "name": animation_name,
+                "length": float(animation.length),
+                "tracks": tracks,
+            })
     record = {
         "model": model_name,
         "glb": None,
@@ -2399,6 +2711,11 @@ def export_room(
         ),
         "lights": lights,
         "emitters": emitters,
+        "alphaNodes": [
+            {"nodeName": node_name, "baseAlpha": render_node_base_alpha[node_name]}
+            for node_name in sorted(animated_render_nodes, key=str.casefold)
+        ],
+        "alphaAnimations": alpha_animations,
         "walkmeshTriangles": walkmesh_triangles,
     }
     if mesh_count > 0:
@@ -2513,7 +2830,7 @@ def load_animation_supermodel(
             raise RuntimeError(
                 f"MDLOps failed for {model_name}: {completed.stdout}\n{completed.stderr}")
         stamp_path.write_text(source_hash + "\n", encoding="ascii")
-    return read_mdl(ascii_path), source_hash
+    return read_mdl_ascii_preserving_lightmaps(ascii_path), source_hash
 
 
 def add_actor_model(
@@ -2685,6 +3002,94 @@ def export_humanoid_actor(
         animation_names=animation_names,
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
     )
+
+    right_item = next(
+        (item for slot, item in utc.equipment.items() if int(slot.value) == 0x00010),
+        None)
+    weapon = None
+    if right_item is not None:
+        weapon_resref = canonical_resref(right_item.resref)
+        weapon_resource = None
+        if module:
+            try:
+                weapon_resource = find_named_module_resource(
+                    installation, module, weapon_resref, "UTI")
+            except RuntimeError:
+                weapon_resource = None
+        if weapon_resource is None:
+            weapon_resource = installation.resource(weapon_resref, ResourceType.UTI)
+        if weapon_resource is None:
+            raise RuntimeError(f"Combat weapon could not be resolved: {weapon_resref}")
+        weapon_bytes = resource_data(weapon_resource)
+        weapon_uti = read_uti(weapon_bytes)
+        base_row = int(weapon_uti.base_item)
+        base_dice_count = int(baseitems.get_cell(base_row, "numdice") or 0)
+        base_die_sides = int(baseitems.get_cell(base_row, "dietoroll") or 0)
+        attack_modifier = 0
+        bonus_damage = []
+        suppress_base_damage = False
+        negative_modifiers = table("iprp_neg5cost")
+        damage_cost = table("iprp_damagecost")
+        for item_property in weapon_uti.properties:
+            if item_property.property_name == 8:
+                attack_modifier += int(negative_modifiers.get_cell(
+                    int(item_property.cost_value), "value"))
+            elif item_property.property_name == 11:
+                damage_row = int(item_property.cost_value)
+                bonus_damage.append({
+                    "damageType": int(item_property.subtype),
+                    "flat": int(damage_cost.get_cell(damage_row, "rank") or 0)
+                    if not damage_cost.get_cell(damage_row, "numdice") else 0,
+                    "diceCount": int(damage_cost.get_cell(damage_row, "numdice") or 0),
+                    "dieSides": int(damage_cost.get_cell(damage_row, "die") or 0),
+                })
+            elif item_property.property_name == 31:
+                suppress_base_damage = True
+        weapon = {
+            "resref": weapon_resref,
+            "utiSha256": sha256_bytes(weapon_bytes),
+            "baseItem": base_row,
+            "baseItemsSha256": sha256_bytes(resource_data(
+                installation.resource("baseitems", ResourceType.TwoDA, order))),
+            "baseDiceCount": 0 if suppress_base_damage else base_dice_count,
+            "baseDieSides": 0 if suppress_base_damage else base_die_sides,
+            "attackModifier": attack_modifier,
+            "criticalThreat": int(baseitems.get_cell(base_row, "critthreat")),
+            "criticalMultiplier": int(baseitems.get_cell(base_row, "crithitmult")),
+            "ranged": bool(baseitems.get_cell(base_row, "rangedweapon")),
+            "damageFlags": int(baseitems.get_cell(base_row, "damageflags")),
+            "bonusDamage": bonus_damage,
+        }
+
+    classes = table("classes")
+    class_levels = []
+    base_attack_bonus = 0
+    for class_entry in utc.classes:
+        attack_table_name = str(classes.get_cell(
+            int(class_entry.class_id), "attackbonustable"))
+        attack_table = table(attack_table_name)
+        level = int(class_entry.class_level)
+        class_bonus = int(attack_table.get_cell(level - 1, "bab"))
+        base_attack_bonus += class_bonus
+        class_levels.append({
+            "classId": int(class_entry.class_id),
+            "level": level,
+            "baseAttackBonus": class_bonus,
+        })
+    dexterity_modifier = (int(utc.dexterity) - 10) // 2
+    strength_modifier = (int(utc.strength) - 10) // 2
+    combat = {
+        "challengeRating": float(utc.challenge_rating),
+        "strength": int(utc.strength),
+        "dexterity": int(utc.dexterity),
+        "naturalArmorClass": int(utc.natural_ac),
+        "defense": 10 + dexterity_modifier + int(utc.natural_ac),
+        "baseAttackBonus": base_attack_bonus,
+        "attackBonus": base_attack_bonus +
+        (dexterity_modifier if weapon and weapon["ranged"] else strength_modifier),
+        "classLevels": class_levels,
+        "weapon": weapon,
+    }
     return {
         "glb": f"actors/{output_path.name}",
         "tag": str(utc.tag),
@@ -2696,6 +3101,7 @@ def export_humanoid_actor(
         "maxHitPoints": int(utc.max_hp),
         "minimumOneHitPoint": bool(utc.min1_hp),
         "noPermanentDeath": bool(utc.no_perm_death),
+        "combat": combat,
         "models": model_records,
         "effects": effect_records,
         "animationSource": animation_sources[0]["model"],
@@ -2714,6 +3120,9 @@ def export_source_creature_actor(
     textures: TextureCache,
     mdlops: Path,
     animation_cache: Path,
+    profile_id: str = "kotor",
+    allow_global_template: bool = False,
+    required_animation_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Assemble one placed creature from its module UTC and owned model graph.
 
@@ -2722,10 +3131,20 @@ def export_source_creature_actor(
     failed resolution is reported by the caller and is never substituted with
     a different creature.
     """
-    utc_resource = find_named_module_resource(
-        installation, module, utc_resref, "UTC")
+    try:
+        utc_resource = find_named_module_resource(
+            installation, module, utc_resref, "UTC")
+    except RuntimeError:
+        if not allow_global_template:
+            raise
+        utc_resource = None
+    if utc_resource is None and allow_global_template:
+        utc_resource = installation.resource(
+            utc_resref, ResourceType.UTC,
+            [SearchLocation.OVERRIDE, SearchLocation.CHITIN])
     if utc_resource is None:
-        raise RuntimeError(f"{utc_resref}.utc could not be resolved in {module}")
+        scope = "module or global resources" if allow_global_template else module
+        raise RuntimeError(f"{utc_resref}.utc could not be resolved in {scope}")
     utc_bytes = resource_data(utc_resource)
     utc = read_utc(utc_bytes)
     order = [SearchLocation.OVERRIDE, SearchLocation.CHITIN]
@@ -2740,6 +3159,7 @@ def export_source_creature_actor(
     appearance, appearance_bytes = table("appearance")
     heads, heads_bytes = table("heads")
     baseitems, baseitems_bytes = table("baseitems")
+    portraits, portraits_bytes = table("portraits")
     body_name, body_texture = creature_tools.get_body_model(
         utc, installation, appearance=appearance, baseitems=baseitems)
     head_name, head_texture = creature_tools.get_head_model(
@@ -2750,15 +3170,36 @@ def export_source_creature_actor(
         raise RuntimeError(f"{utc_resref} body model could not be resolved")
 
     body, body_mdl, body_mdx = load_model_pair(installation, body_name)
+    model_cache = animation_cache.parent / "creature-models"
+    if profile_id == "kotor2":
+        body = read_owned_mdl_via_mdlops(
+            body_mdl, body_mdx, body_name, mdlops, model_cache)
     head = head_mdl = head_mdx = None
     if head_name:
         head, head_mdl, head_mdx = load_model_pair(installation, head_name)
+        if profile_id == "kotor2":
+            head = read_owned_mdl_via_mdlops(
+                head_mdl, head_mdx, head_name, mdlops, model_cache)
     right = right_mdl = right_mdx = None
     if right_name:
         right, right_mdl, right_mdx = load_model_pair(installation, right_name)
+        if profile_id == "kotor2":
+            right = read_owned_mdl_via_mdlops(
+                right_mdl, right_mdx, right_name, mdlops, model_cache)
     left = left_mdl = left_mdx = None
     if left_name:
         left, left_mdl, left_mdx = load_model_pair(installation, left_name)
+        if profile_id == "kotor2":
+            left = read_owned_mdl_via_mdlops(
+                left_mdl, left_mdx, left_name, mdlops, model_cache)
+
+    # Utility droids carry combat equipment in their UTC, but their authored
+    # body model renders its built-in weapon and deliberately has no humanoid
+    # hand attachment hook. Do not fabricate a root-mounted floating weapon.
+    if right is not None and find_node_transform(body, "rhand") is None:
+        right_name = right = right_mdl = right_mdx = None
+    if left is not None and find_node_transform(body, "lhand") is None:
+        left_name = left = left_mdl = left_mdx = None
 
     animation_models = [body]
     animation_sources = [{
@@ -2835,8 +3276,18 @@ def export_source_creature_actor(
         animation_model)
     exported_animation_names = tuple(dict.fromkeys([
         *([idle_animation] if idle_animation else []),
+        *(animations_by_name[name.casefold()].name for name in required_animation_names
+          if name.casefold() in animations_by_name),
         *(record["name"] for record in effect_records["animations"]),
     ]))
+    missing_required_animations = [
+        name for name in required_animation_names
+        if name.casefold() not in animations_by_name
+    ]
+    if missing_required_animations:
+        raise RuntimeError(
+            f"{utc_resref} lacks required player animations: "
+            f"{missing_required_animations}")
     animation_report = export_actor(
         output_path,
         body_model=body,
@@ -2853,6 +3304,7 @@ def export_source_creature_actor(
         animation_names=exported_animation_names,
         material_factory=lambda mesh, override: material_for(
             mesh, textures, override),
+        require_head_skin=profile_id == "kotor",
     )
     talk_offset = None
     if head is not None:
@@ -2861,6 +3313,13 @@ def export_source_creature_actor(
         if head_hook is not None and talk_dummy is not None:
             talk_offset = [
                 float(item) for item in (head_hook @ talk_dummy)[:3, 3]]
+    elif (talk_dummy := find_node_transform(body, "talkdummy")) is not None:
+        talk_offset = [float(item) for item in talk_dummy[:3, 3]]
+    camera_hook = find_node_transform(body, "camerahook")
+    camera_offset = (
+        [float(item) for item in camera_hook[:3, 3]]
+        if camera_hook is not None else None
+    )
 
     return {
         "renderImportSchema": "nikami-aurora-kotor-source-creature-v1",
@@ -2869,9 +3328,19 @@ def export_source_creature_actor(
         "sourceTemplate": normalize_module_id(utc_resref),
         "utcSha256": sha256_bytes(utc_bytes),
         "appearanceId": int(utc.appearance_id),
+        "portraitId": int(utc.portrait_id),
+        "portraitResref": str(portraits.get_cell(int(utc.portrait_id), "baseresref")),
+        "bodyModel": body_name,
+        "bodyTexture": body_texture or "",
+        "headModel": head_name or "",
+        "headTexture": head_texture or "",
+        "height": float(appearance.get_cell(int(utc.appearance_id), "height")),
+        "walkDistance": float(appearance.get_cell(int(utc.appearance_id), "walkdist")),
+        "runDistance": float(appearance.get_cell(int(utc.appearance_id), "rundist")),
         "appearanceTableSha256": sha256_bytes(appearance_bytes),
         "headsTableSha256": sha256_bytes(heads_bytes),
         "baseItemsTableSha256": sha256_bytes(baseitems_bytes),
+        "portraitsTableSha256": sha256_bytes(portraits_bytes),
         "models": model_records,
         "effects": effect_records,
         "animationSources": animation_sources,
@@ -2880,6 +3349,54 @@ def export_source_creature_actor(
         "idleAnimation": idle_animation,
         "renderExtent": animation_report["extent"],
         "talkOffset": talk_offset,
+        "cameraOffset": camera_offset,
+    }
+
+
+def export_profile_player_actor(
+    installation: Installation,
+    module: str,
+    template: str,
+    output_root: Path,
+    textures: TextureCache,
+    mdlops: Path,
+    profile_id: str,
+) -> dict[str, Any]:
+    source = export_source_creature_actor(
+        installation,
+        module,
+        template,
+        output_root / "actors" / "player.glb",
+        textures,
+        mdlops,
+        output_root / "_cache" / "animations",
+        profile_id,
+        allow_global_template=True,
+        required_animation_names=("walk", "run"),
+    )
+    return {
+        "schema": "nikami-aurora-kotor-player-v1",
+        "glb": source["glb"],
+        "portraitId": source["portraitId"],
+        "portraitResref": source["portraitResref"],
+        "appearanceId": source["appearanceId"],
+        "appearanceLabel": source["sourceTemplate"],
+        "bodyModel": source["bodyModel"],
+        "bodyTexture": source["bodyTexture"],
+        "headIndex": -1,
+        "headModel": source["headModel"],
+        "height": source["height"],
+        "walkDistance": source["walkDistance"],
+        "runDistance": source["runDistance"],
+        "talkOffset": source["talkOffset"],
+        "cameraOffset": source["cameraOffset"],
+        "animation": source["animation"],
+        "equipmentVariants": [],
+        "rigKind": "rigid",
+        "sourceTemplate": source["sourceTemplate"],
+        "utcSha256": source["utcSha256"],
+        "models": source["models"],
+        "effects": source["effects"],
     }
 
 
@@ -2890,6 +3407,8 @@ def export_source_creature_records(
     output_root: Path,
     textures: TextureCache,
     mdlops: Path,
+    profile_id: str = "kotor",
+    allow_global_templates: bool = False,
 ) -> list[dict[str, Any]]:
     exports: dict[str, dict[str, Any]] = {}
     records: list[dict[str, Any]] = []
@@ -2906,6 +3425,8 @@ def export_source_creature_records(
                     textures,
                     mdlops,
                     output_root / "_cache" / "animations",
+                    profile_id,
+                    allow_global_template=allow_global_templates,
                 )
             except Exception as exc:
                 exports[key] = {
@@ -3007,6 +3528,7 @@ def export_player_actor(
     animation_cache: Path,
     appearance_id: int = 137,
     portrait_id: int = 18,
+    player_class_id: int = 0,
 ) -> dict[str, Any]:
     appearance_resource = installation.resource("appearance", ResourceType.TwoDA)
     heads_resource = installation.resource("heads", ResourceType.TwoDA)
@@ -3053,7 +3575,7 @@ def export_player_actor(
         weapon_model=None,
         weapon_name=None,
         animation_model=animation_model,
-        animation_names=("pause1", "walk", "run", "talk"),
+        animation_names=("pause1", "walk", "run", "talk", "c2a1", "g2d1", "die", "dead"),
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
     )
 
@@ -3118,7 +3640,7 @@ def export_player_actor(
             weapon_model=variant_weapon,
             weapon_name=variant_weapon_name,
             animation_model=animation_model,
-            animation_names=("pause1", "walk", "run", "talk"),
+            animation_names=("pause1", "walk", "run", "talk", "c2a1", "g2d1", "die", "dead"),
             material_factory=lambda mesh, override: material_for(mesh, textures, override),
             weapon_hook=weapon_hook,
         )
@@ -3257,6 +3779,51 @@ def export_player_actor(
             right_hand_item,
         ),
     ]
+    classes_resource = installation.resource("classes", ResourceType.TwoDA)
+    baseitems_resource = installation.resource("baseitems", ResourceType.TwoDA)
+    if classes_resource is None or baseitems_resource is None:
+        raise RuntimeError("Player combat tables could not be resolved")
+    classes_bytes = resource_data(classes_resource)
+    baseitems_bytes = resource_data(baseitems_resource)
+    classes = read_2da(classes_bytes)
+    baseitems = read_2da(baseitems_bytes)
+    if player_class_id < 0 or player_class_id >= len(classes) or not bool(
+            int(classes.get_cell(player_class_id, "playerclass"))):
+        raise RuntimeError(f"Unsupported KOTOR player class row: {player_class_id}")
+    attack_table_name = str(classes.get_cell(player_class_id, "attackbonustable"))
+    attack_resource = installation.resource(attack_table_name, ResourceType.TwoDA)
+    if attack_resource is None:
+        raise RuntimeError(f"Player attack table could not be resolved: {attack_table_name}")
+    attack_bytes = resource_data(attack_resource)
+    attack_table = read_2da(attack_bytes)
+    strength = int(classes.get_cell(player_class_id, "str"))
+    dexterity = int(classes.get_cell(player_class_id, "dex"))
+    constitution = int(classes.get_cell(player_class_id, "con"))
+    hit_die = int(classes.get_cell(player_class_id, "hitdie"))
+    base_attack_bonus = int(attack_table.get_cell(0, "bab"))
+    player_hit_points = hit_die + (constitution - 10) // 2
+    player_weapon = dict(right_hand_item["combatWeapon"])
+    player_combat = {
+        "classId": player_class_id,
+        "classLabel": str(classes.get_cell(player_class_id, "label")),
+        "classesSha256": sha256_bytes(classes_bytes),
+        "attackTableSha256": sha256_bytes(attack_bytes),
+        "currentHitPoints": player_hit_points,
+        "maxHitPoints": player_hit_points,
+        "challengeRating": 0.0,
+        "strength": strength,
+        "dexterity": dexterity,
+        "naturalArmorClass": 0,
+        "defense": 10 + (dexterity - 10) // 2,
+        "baseAttackBonus": base_attack_bonus,
+        "attackBonus": base_attack_bonus + (strength - 10) // 2,
+        "classLevels": [{
+            "classId": player_class_id,
+            "level": 1,
+            "baseAttackBonus": base_attack_bonus,
+        }],
+        "weapon": player_weapon,
+    }
     return {
         "schema": "nikami-aurora-kotor-player-v1",
         "glb": f"actors/{output_path.name}",
@@ -3297,6 +3864,7 @@ def export_player_actor(
             },
         ],
         "equipmentVariants": equipment_variants,
+        "combat": player_combat,
     }
 
 
@@ -3308,6 +3876,8 @@ def export_generic_player_actor(
     animation_cache: Path,
     appearance_id: int = 137,
     portrait_id: int = 18,
+    require_head_skin: bool = True,
+    additional_animation_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Export the source-bound base avatar without Endar locker variants."""
     appearance_resource = installation.resource("appearance", ResourceType.TwoDA)
@@ -3341,8 +3911,26 @@ def export_generic_player_actor(
     head_name = str(heads.get_cell(head_index, "head"))
     body, body_mdl, body_mdx = load_model_pair(installation, body_name)
     head, head_mdl, head_mdx = load_model_pair(installation, head_name)
-    animation_model, animation_source_hash = load_animation_supermodel(
-        installation, mdlops, animation_cache)
+    if not require_head_skin:
+        model_cache = animation_cache.parent / "player-models"
+        body = read_owned_mdl_via_mdlops(
+            body_mdl, body_mdx, body_name, mdlops, model_cache)
+        head = read_owned_mdl_via_mdlops(
+            head_mdl, head_mdx, head_name, mdlops, model_cache)
+    animation_models = []
+    animation_source_hashes = []
+    for animation_supermodel in ("S_Male01", "S_Male02"):
+        model, source_hash = load_animation_supermodel(
+            installation, mdlops, animation_cache, animation_supermodel)
+        animation_models.append(model)
+        animation_source_hashes.append(source_hash)
+    animations_by_name = {}
+    for model in animation_models:
+        for animation in model.anims:
+            animations_by_name.setdefault(animation.name.lower(), animation)
+    animation_model = SimpleNamespace(anims=list(animations_by_name.values()))
+    requested_animations = tuple(dict.fromkeys(
+        ("pause1", "walk", "run", "talk", *additional_animation_names)))
     animation_report = export_actor(
         output_path,
         body_model=body,
@@ -3354,9 +3942,17 @@ def export_generic_player_actor(
         weapon_model=None,
         weapon_name=None,
         animation_model=animation_model,
-        animation_names=("pause1", "walk", "run", "talk"),
+        animation_names=requested_animations,
         material_factory=lambda mesh, override: material_for(mesh, textures, override),
+        require_head_skin=require_head_skin,
     )
+    missing_animations = [
+        name for name in requested_animations
+        if name.lower() not in {item.lower() for item in animation_report["animations"]}
+    ]
+    if missing_animations:
+        raise RuntimeError(
+            f"Player source animations could not be exported: {missing_animations}")
     head_hook = find_node_transform(body, "headhook")
     talk_dummy = find_node_transform(head, "talkdummy")
     camera_hook = find_node_transform(body, "camerahook")
@@ -3383,8 +3979,10 @@ def export_generic_player_actor(
             [float(item) for item in camera_hook[:3, 3]]
             if camera_hook is not None else None
         ),
-        "animationSource": "S_Male02",
-        "animationSourceSha256": animation_source_hash,
+        "rigKind": "humanoid" if require_head_skin else "rigid-humanoid",
+        "animationSource": "S_Male01+S_Male02",
+        "animationSourceSha256": sha256_bytes(
+            "".join(animation_source_hashes).encode("ascii")),
         "animation": animation_report,
         "appearanceTableSha256": sha256_bytes(appearance_bytes),
         "headsTableSha256": sha256_bytes(heads_bytes),
@@ -3438,17 +4036,31 @@ def export_dialogue(
 
     def animation_record(animation: Any) -> dict[str, Any]:
         animation_id = int(animation.animation_id)
+        animation_row = animation_id % 1000
+        if animation_row < 0 or animation_row >= animations.get_height():
+            raise RuntimeError(
+                f"Dialogue animation {animation_id} does not resolve in animations.2da")
         return {
             "animationId": animation_id,
-            "animationName": str(animations.get_cell(animation_id, "name")),
-            "looping": bool(int(animations.get_cell(animation_id, "looping"))),
-            "fireForget": bool(int(animations.get_cell(animation_id, "fireforget"))),
+            "animationName": str(animations.get_cell(animation_row, "name")),
+            "looping": bool(int(animations.get_cell(animation_row, "looping"))),
+            "fireForget": bool(int(animations.get_cell(animation_row, "fireforget"))),
             "participant": str(animation.participant),
         }
 
     def media_resref(node: Any) -> str:
         sound = canonical_resref(getattr(node, "sound", ""))
         return sound or canonical_resref(getattr(node, "vo_resref", ""))
+
+    def script_parameters(node: Any, slot: int) -> dict[str, Any]:
+        return {
+            "int1": int(getattr(node, f"script{slot}_param1", 0)),
+            "int2": int(getattr(node, f"script{slot}_param2", 0)),
+            "int3": int(getattr(node, f"script{slot}_param3", 0)),
+            "int4": int(getattr(node, f"script{slot}_param4", 0)),
+            "int5": int(getattr(node, f"script{slot}_param5", 0)),
+            "string6": str(getattr(node, f"script{slot}_param6", "")),
+        }
 
     sound_names = {
         media_resref(node)
@@ -3547,9 +4159,19 @@ def export_dialogue(
             "cameraId": getattr(node, "camera_id", None),
             "cameraFov": getattr(node, "camera_fov", None),
             "cameraHeight": getattr(node, "camera_height", None),
+            "delaySeconds": float(getattr(node, "delay", -1)),
+            "fadeType": int(getattr(node, "fade_type", 0)),
+            "fadeColor": (
+                color3(node.fade_color) if getattr(node, "fade_color", None) is not None
+                else None
+            ),
+            "fadeDelaySeconds": getattr(node, "fade_delay", None),
+            "fadeLengthSeconds": getattr(node, "fade_length", None),
             "animations": [animation_record(item) for item in getattr(node, "animations", [])],
             "script1": canonical_resref(getattr(node, "script1", "")),
             "script2": canonical_resref(getattr(node, "script2", "")),
+            "script1Parameters": script_parameters(node, 1),
+            "script2Parameters": script_parameters(node, 2),
             "links": [link_record(link) for link in node.links],
         }
 
@@ -3782,6 +4404,12 @@ def export_opening_locker(
         raise RuntimeError("baseitems.2da could not be resolved")
     baseitems_bytes = resource_data(baseitems_resource)
     baseitems = read_2da(baseitems_bytes)
+    negative_cost_resource = installation.resource("iprp_neg5cost", ResourceType.TwoDA)
+    damage_cost_resource = installation.resource("iprp_damagecost", ResourceType.TwoDA)
+    if negative_cost_resource is None or damage_cost_resource is None:
+        raise RuntimeError("Opening weapon property tables could not be resolved")
+    negative_modifiers = read_2da(resource_data(negative_cost_resource))
+    damage_cost = read_2da(resource_data(damage_cost_resource))
     model_name = str(placeables.get_cell(int(utp.appearance_id), "modelname"))
     if not model_name:
         raise RuntimeError("Opening locker model could not be resolved")
@@ -3809,6 +4437,45 @@ def export_opening_locker(
                 return "" if value == "****" else value
 
             slots_text = base_cell("equipableslots")
+            equipable_slots = int(slots_text, 0) if slots_text else 0
+            combat_weapon = None
+            if equipable_slots & (0x00010 | 0x00020):
+                attack_modifier = 0
+                bonus_damage = []
+                suppress_base_damage = False
+                for item_property in uti.properties:
+                    if item_property.property_name == 8:
+                        attack_modifier += int(negative_modifiers.get_cell(
+                            int(item_property.cost_value), "value"))
+                    elif item_property.property_name == 11:
+                        damage_row = int(item_property.cost_value)
+                        dice_text = str(damage_cost.get_cell(
+                            damage_row, "numdice")).strip()
+                        bonus_damage.append({
+                            "damageType": int(item_property.subtype),
+                            "flat": int(damage_cost.get_cell(damage_row, "rank") or 0)
+                            if not dice_text or dice_text == "****" else 0,
+                            "diceCount": 0 if dice_text in ("", "****") else int(dice_text),
+                            "dieSides": int(damage_cost.get_cell(damage_row, "die") or 0),
+                        })
+                    elif item_property.property_name == 31:
+                        suppress_base_damage = True
+                combat_weapon = {
+                    "resref": resref,
+                    "utiSha256": sha256_bytes(uti_bytes),
+                    "baseItem": base_item,
+                    "baseItemsSha256": sha256_bytes(baseitems_bytes),
+                    "baseDiceCount": 0 if suppress_base_damage else int(
+                        base_cell("numdice") or "0"),
+                    "baseDieSides": 0 if suppress_base_damage else int(
+                        base_cell("dietoroll") or "0"),
+                    "attackModifier": attack_modifier,
+                    "criticalThreat": int(base_cell("critthreat")),
+                    "criticalMultiplier": int(base_cell("crithitmult")),
+                    "ranged": bool(base_cell("rangedweapon")),
+                    "damageFlags": int(base_cell("damageflags") or "0"),
+                    "bonusDamage": bonus_damage,
+                }
             item_definitions[resref.lower()] = {
                 "resref": resref,
                 "displayName": installation.string(uti.name, resref),
@@ -3821,7 +4488,7 @@ def export_opening_locker(
                 "modelVariation": int(uti.model_variation),
                 "bodyVariation": int(uti.body_variation),
                 "textureVariation": int(uti.texture_variation),
-                "equipableSlots": int(slots_text, 0) if slots_text else 0,
+                "equipableSlots": equipable_slots,
                 "plot": bool(uti.plot),
                 "itemClass": base_cell("itemclass"),
                 "modelType": int(base_cell("modeltype") or "0"),
@@ -3830,6 +4497,7 @@ def export_opening_locker(
                 "bodyVar": base_cell("bodyvar"),
                 "utiSha256": sha256_bytes(uti_bytes),
                 "baseItemsSha256": sha256_bytes(baseitems_bytes),
+                "combatWeapon": combat_weapon,
             }
         if key not in item_stacks:
             item_stacks[key] = {
@@ -4213,6 +4881,119 @@ def export_opening_script_contracts(
     ]
 
 
+def export_area_music(
+    installation: Installation,
+    git: Any,
+    output_root: Path,
+) -> dict[str, Any]:
+    table_resource = installation.resource("ambientmusic", ResourceType.TwoDA)
+    if table_resource is None:
+        raise RuntimeError("ambientmusic.2da could not be resolved")
+    table_bytes = resource_data(table_resource)
+    table = read_2da(table_bytes)
+    music_id = int(git.music_standard_id)
+    resref = canonical_resref(table.get_cell(music_id, "resource"))
+    source_path = installation.streammusic_path() / f"{resref}.wav"
+    if not source_path.is_file():
+        raise RuntimeError(f"Area streammusic could not be resolved: {resref}")
+    source = source_path.read_bytes()
+    offsets = [source.find(marker) for marker in (
+        b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")]
+    candidates = [candidate for candidate in offsets if candidate >= 0]
+    if not candidates:
+        raise RuntimeError(f"Area streammusic MP3 header was not found: {resref}")
+    offset = min(candidates)
+    payload = source[offset:]
+    relative = f"audio/{resref}.mp3"
+    destination = output_root / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(payload)
+    return {
+        "schema": "nikami-aurora-kotor-area-music-v1",
+        "ambientMusicSha256": sha256_bytes(table_bytes),
+        "standardMusicId": music_id,
+        "musicDelayMilliseconds": int(git.music_delay),
+        "backgroundMusic": {
+            "resref": resref,
+            "path": relative,
+            "format": "mp3",
+            "sourceSha256": sha256_bytes(source),
+            "sourceByteCount": len(source),
+            "sourceEncoding": "kotor-wrapped-mp3",
+            "payloadSha256": sha256_bytes(payload),
+            "byteCount": len(payload),
+            "payloadEncoding": "mp3",
+        },
+    }
+
+
+def export_referenced_sound_objects(
+    installation: Installation,
+    placements: list[Any],
+    referenced_tags: set[str],
+    output_root: Path,
+) -> list[dict[str, Any]]:
+    if not referenced_tags:
+        return []
+    records: list[dict[str, Any]] = []
+    remaining = {tag.casefold(): tag for tag in referenced_tags}
+    for placement in placements:
+        template = canonical_resref(placement.resref)
+        resource = installation.resource(template, ResourceType.UTS)
+        if resource is None:
+            raise RuntimeError(f"Sound-object template could not be resolved: {template}.uts")
+        template_bytes = resource_data(resource)
+        source = read_uts(template_bytes)
+        key = str(source.tag).casefold()
+        if key not in remaining:
+            continue
+        if len(source.sounds) != 1:
+            raise RuntimeError(
+                f"Referenced sound object requires one deterministic source: {source.tag}")
+        sound_resref = canonical_resref(source.sounds[0])
+        sound_bytes = installation.sound(sound_resref)
+        if not sound_bytes:
+            raise RuntimeError(f"Sound-object audio could not be resolved: {sound_resref}")
+        playable, source_encoding, payload_encoding = normalize_wav_for_godot(
+            sound_bytes, sound_resref)
+        relative = f"audio/{sound_resref}.wav"
+        destination = output_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(playable)
+        records.append({
+            "schema": "nikami-aurora-kotor-sound-object-v1",
+            "template": template,
+            "tag": str(source.tag),
+            "position": vector3(placement.position),
+            "active": bool(source.active),
+            "continuous": bool(source.continuous),
+            "looping": bool(source.looping),
+            "positional": bool(source.positional),
+            "volume": int(source.volume),
+            "minDistance": float(source.min_distance),
+            "maxDistance": float(source.max_distance),
+            "pitchVariation": float(source.pitch_variation),
+            "utsSha256": sha256_bytes(template_bytes),
+            "audio": {
+                "resref": sound_resref,
+                "path": relative,
+                "format": "wav",
+                "sourceSha256": sha256_bytes(sound_bytes),
+                "sourceByteCount": len(sound_bytes),
+                "sourceEncoding": source_encoding,
+                "payloadSha256": sha256_bytes(playable),
+                "byteCount": len(playable),
+                "payloadEncoding": payload_encoding,
+            },
+        })
+        remaining.pop(key)
+    if remaining:
+        raise RuntimeError(
+            "Referenced sound objects were not found: " +
+            ", ".join(sorted(remaining.values())))
+    return records
+
+
 def _import_generic_module(
     game_root: Path,
     module: str,
@@ -4221,11 +5002,15 @@ def _import_generic_module(
     runtime_configuration_path: Path,
     player_appearance_id: int = 137,
     player_portrait_id: int = 18,
+    profile_id: str = "kotor",
 ) -> Path:
     module = normalize_module_id(module)
     if module == ENDAR_MODULE:
         raise RuntimeError("Generic KOTOR world importer cannot omit Endar story semantics")
-    executable = game_root / "swkotor.exe"
+    executable_name = ODYSSEY_EXECUTABLES.get(profile_id)
+    if executable_name is None:
+        raise RuntimeError(f"Unsupported Odyssey profile: {profile_id}")
+    executable = game_root / executable_name
     if not executable.is_file():
         raise RuntimeError(f"KOTOR executable not found: {executable}")
     installation = Installation(game_root)
@@ -4268,21 +5053,207 @@ def _import_generic_module(
         else:
             filename = f"{model_name.lower()}.glb"
             record = export_room(
-                installation, model_name, rooms_root / filename, textures)
+                installation,
+                model_name,
+                rooms_root / filename,
+                textures,
+                mdlops if profile_id == "kotor2" else None,
+                output_root / "_cache" / "rooms" if profile_id == "kotor2" else None,
+            )
             if record["glb"] is not None:
                 record["glb"] = f"rooms/{filename}"
         record["position"] = vector3(room.position)
         room_records.append(record)
 
-    player_actor = export_generic_player_actor(
-        installation,
-        output_root / "actors" / "player.glb",
-        textures,
-        mdlops,
-        output_root / "_cache" / "animations",
-        appearance_id=player_appearance_id,
-        portrait_id=player_portrait_id,
+    profile_start = load_profile_starts().get(profile_id, {}).get(module)
+    opening_sequence = profile_start.get("openingSequence") if profile_start else None
+    opening_dialogue = None
+    script_contracts: list[dict[str, Any]] = []
+    referenced_sound_tags: set[str] = set()
+    area_music = export_area_music(installation, git, output_root)
+    opening_animation_names: tuple[str, ...] = ()
+    if opening_sequence is not None:
+        lip_path = game_root / "lips" / f"{module}_loc.mod"
+        lip_capsule = Capsule(lip_path) if lip_path.is_file() else None
+        dialogue_reference = export_dialogue(
+            installation,
+            opening_sequence["conversation"],
+            output_root / "dialogues" / f"{opening_sequence['conversation'].lower()}.json",
+            lip_capsule,
+        )
+        dialogue_path = output_root / dialogue_reference["path"]
+        dialogue_graph = json.loads(dialogue_path.read_text(encoding="utf-8"))
+        opening_animation_names = tuple(dict.fromkeys(
+            animation["animationName"]
+            for node in dialogue_graph["nodes"].values()
+            for animation in node["animations"]
+            if animation["participant"].upper() == "PLAYER"
+        ))
+        trigger_resource = find_named_module_resource(
+            installation, module, opening_sequence["triggerScript"], "NCS")
+        trigger_bytes = resource_data(trigger_resource)
+        trigger_ncs = read_ncs(trigger_bytes)
+        trigger_actions = [
+            tuple(instruction.args)
+            for instruction in trigger_ncs.instructions
+            if instruction.ins_type.name == "ACTION"
+        ]
+        trigger_strings = {
+            str(instruction.args[0]).lower()
+            for instruction in trigger_ncs.instructions
+            if instruction.ins_type.name == "CONSTS" and instruction.args
+        }
+        if ((204, 15) not in trigger_actions or
+                opening_sequence["conversation"].lower() not in trigger_strings or
+                opening_sequence["actorTag"].lower() not in trigger_strings):
+            raise RuntimeError(
+                f"Opening dialogue script drifted: {opening_sequence['triggerScript']}")
+        opening_dialogue = {
+            "schema": "nikami-aurora-kotor-opening-dialogue-v1",
+            "actorTag": opening_sequence["actorTag"],
+            "conversation": opening_sequence["conversation"],
+            "dialogue": dialogue_reference,
+        }
+        script_contracts.append({
+            "schema": "nikami-aurora-kotor-script-contract-v1",
+            "resref": opening_sequence["triggerScript"],
+            "kind": "trigger-dialogue",
+            "sourceSha256": sha256_bytes(trigger_bytes),
+            "instructionCount": len(trigger_ncs.instructions),
+            "triggerTemplate": opening_sequence["triggerTemplate"],
+            "actorTag": opening_sequence["actorTag"],
+            "userEvent": 0,
+            "inputLockSeconds": 0.0,
+            "delaySeconds": 0.0,
+            "conversation": opening_sequence["conversation"],
+            "dialogueStarter": int(dialogue_reference["openingStarter"]),
+        })
+        dialogue_scripts = sorted({
+            node[key].lower()
+            for node in dialogue_graph["nodes"].values()
+            for key in ("script1", "script2")
+            if node[key]
+        })
+        for dialogue_script in dialogue_scripts:
+            script_resource = installation.resource(dialogue_script, ResourceType.NCS)
+            if script_resource is None:
+                continue
+            script_bytes = resource_data(script_resource)
+            script_ncs = read_ncs(script_bytes)
+            actions = {
+                tuple(instruction.args)
+                for instruction in script_ncs.instructions
+                if instruction.ins_type.name == "ACTION"
+            }
+            strings = [
+                str(instruction.args[0])
+                for instruction in script_ncs.instructions
+                if instruction.ins_type.name == "CONSTS" and instruction.args
+            ]
+            waypoint_strings = [value for value in strings if value.lower().startswith("wp_")]
+            start_actions = [
+                tuple(instruction.args)
+                for instruction in script_ncs.instructions
+                if instruction.ins_type.name == "ACTION"
+            ]
+            if (start_actions == [
+                    (720, 5), (548, 0), (200, 2), (213, 1), (214, 1),
+                    (6, 2), (719, 5), (582, 4), (24, 1), (426, 1),
+                    (582, 4), (7, 2), (24, 1), (425, 1), (7, 2),
+                ] and waypoint_strings == ["WP_player_start"] and
+                    len(script_ncs.instructions) == 56 and
+                    all(ncs_signature(script_ncs.instructions[index]) ==
+                        ("CONSTF", (0.0,)) for index in range(2, 7)) and
+                    ncs_signature(script_ncs.instructions[25]) ==
+                        ("CONSTF", (2.0,)) and
+                    ncs_signature(script_ncs.instructions[26]) ==
+                        ("CONSTF", (1.0,)) and
+                    ncs_signature(script_ncs.instructions[52]) ==
+                        ("CONSTF", (10.0,))):
+                script_contracts.append({
+                    "schema": "nikami-aurora-kotor-script-contract-v1",
+                    "resref": dialogue_script,
+                    "kind": "module-start-presentation",
+                    "sourceSha256": sha256_bytes(script_bytes),
+                    "instructionCount": len(script_ncs.instructions),
+                    "moveTargetTag": waypoint_strings[0],
+                    "fadeInWaitSeconds": float(script_ncs.instructions[26].args[0]),
+                    "fadeInLengthSeconds": float(script_ncs.instructions[25].args[0]),
+                    "musicRestartDelaySeconds": float(
+                        script_ncs.instructions[52].args[0]),
+                })
+            elif [ncs_signature(item) for item in script_ncs.instructions] == [
+                    ("JSR", ()), ("RETN", ()), ("RETN", ())]:
+                script_contracts.append({
+                    "schema": "nikami-aurora-kotor-script-contract-v1",
+                    "resref": dialogue_script,
+                    "kind": "no-op",
+                    "sourceSha256": sha256_bytes(script_bytes),
+                    "instructionCount": len(script_ncs.instructions),
+                })
+            elif (start_actions == [
+                    (768, 1), (831, 0), (200, 2), (42, 1),
+                    (413, 1), (230, 1), (7, 2),
+                ] and len(script_ncs.instructions) == 31):
+                script_contracts.append({
+                    "schema": "nikami-aurora-kotor-script-contract-v1",
+                    "resref": dialogue_script,
+                    "kind": "play-sound-object-from-parameters",
+                    "sourceSha256": sha256_bytes(script_bytes),
+                    "instructionCount": len(script_ncs.instructions),
+                })
+                for node in dialogue_graph["nodes"].values():
+                    for slot in (1, 2):
+                        if node[f"script{slot}"].lower() != dialogue_script:
+                            continue
+                        parameters = node[f"script{slot}Parameters"]
+                        if int(parameters["int1"]) < 0 or not parameters["string6"]:
+                            raise RuntimeError(
+                                f"Sound-object invocation drifted: {dialogue_script}")
+                        referenced_sound_tags.add(str(parameters["string6"]))
+            elif ({(200, 2), (213, 1), (313, 1), (680, 3)}.issubset(actions) and
+                    len(waypoint_strings) == 1):
+                script_contracts.append({
+                    "schema": "nikami-aurora-kotor-script-contract-v1",
+                    "resref": dialogue_script,
+                    "kind": "move-player-to-waypoint",
+                    "sourceSha256": sha256_bytes(script_bytes),
+                    "instructionCount": len(script_ncs.instructions),
+                    "moveTargetTag": waypoint_strings[0],
+                })
+            elif {(768, 1), (738, 2)}.issubset(actions):
+                script_contracts.append({
+                    "schema": "nikami-aurora-kotor-script-contract-v1",
+                    "resref": dialogue_script,
+                    "kind": "room-animation-from-parameters",
+                    "sourceSha256": sha256_bytes(script_bytes),
+                    "instructionCount": len(script_ncs.instructions),
+                })
+    player_actor = (
+        export_profile_player_actor(
+            installation,
+            module,
+            profile_start["playerTemplate"],
+            output_root,
+            textures,
+            mdlops,
+            profile_id,
+        )
+        if profile_start is not None and profile_start.get("playerTemplate") is not None
+        else export_generic_player_actor(
+            installation,
+            output_root / "actors" / "player.glb",
+            textures,
+            mdlops,
+            output_root / "_cache" / "animations",
+            appearance_id=player_appearance_id,
+            portrait_id=player_portrait_id,
+            require_head_skin=profile_id == "kotor",
+            additional_animation_names=opening_animation_names,
+        )
     )
+    sound_objects = export_referenced_sound_objects(
+        installation, git.sounds, referenced_sound_tags, output_root)
     ui_contract = export_kotor_ui(
         installation,
         module,
@@ -4294,9 +5265,12 @@ def _import_generic_module(
         [],
         runtime_configuration,
         include_endar_party=False,
+        gui_suffix="_p" if profile_id == "kotor2" else "",
+        loading_music_resref="mus_main" if profile_id == "kotor2" else "mus_loadscreen",
     )
     creatures = export_source_creature_records(
-        installation, module, git, output_root, textures, mdlops)
+        installation, module, git, output_root, textures, mdlops, profile_id,
+        allow_global_templates=True)
     doors = [
         {
             "template": canonical_resref(door.resref),
@@ -4421,7 +5395,7 @@ def _import_generic_module(
     }
     manifest = {
         "schema": SCHEMA,
-        "profileId": "kotor",
+        "profileId": profile_id,
         "engineFamily": "Odyssey",
         "module": module,
         "contentMode": GENERIC_WORLD_MODE,
@@ -4454,6 +5428,8 @@ def _import_generic_module(
             "sourceSha256": sha256_bytes(camera_style_bytes),
         },
         "runtimeConfiguration": runtime_configuration,
+        "experienceTable": export_experience_table(installation),
+        "combatExperienceTable": export_combat_experience_table(installation),
         "ui": ui_contract,
         "player": player_actor,
         "rooms": room_records,
@@ -4465,8 +5441,11 @@ def _import_generic_module(
         "triggers": triggers,
         "waypoints": waypoints,
         "cameras": cameras,
+        "soundObjects": sound_objects,
+        "areaMusic": area_music,
         "firstEncounter": None,
-        "scriptContracts": [],
+        "openingDialogue": opening_dialogue,
+        "scriptContracts": script_contracts,
         "counts": {
             "rooms": len(room_records),
             "sourceRoomPlaceholders": sum(
@@ -4529,6 +5508,7 @@ def _import_endar_module(
     runtime_configuration_path: Path,
     player_appearance_id: int = 137,
     player_portrait_id: int = 18,
+    player_class_id: int = 0,
 ) -> Path:
     module = normalize_module_id(module)
     if module != ENDAR_MODULE:
@@ -4650,7 +5630,7 @@ def _import_endar_module(
         module,
     )
     encounter_animation_names = (
-        "pause1", "walk", "run", "talk", "c3d4", "b7a1", "die", "dead")
+        "pause1", "walk", "run", "talk", "c3d4", "g5d1", "b7a1", "die", "dead")
     encounter_actors = {
         "end_repsol004": export_humanoid_actor(
             installation, "end_repsol004", output_root / "actors" / "end_sith2.glb",
@@ -4680,7 +5660,12 @@ def _import_endar_module(
         output_root / "_cache" / "animations",
         appearance_id=player_appearance_id,
         portrait_id=player_portrait_id,
+        player_class_id=player_class_id,
     )
+    player_party = runtime_configuration["gameplay"]["playerPartyMember"]
+    player_party["currentVitality"] = player_actor["combat"]["currentHitPoints"]
+    player_party["maximumVitality"] = player_actor["combat"]["maxHitPoints"]
+    player_party["defense"] = player_actor["combat"]["defense"]
     ui_contract = export_kotor_ui(
         installation,
         module,
@@ -5110,6 +6095,8 @@ def _import_endar_module(
             "sourceSha256": sha256_bytes(resource_data(camera_style_resource)),
         },
         "runtimeConfiguration": runtime_configuration,
+        "experienceTable": export_experience_table(installation),
+        "combatExperienceTable": export_combat_experience_table(installation),
         "ui": ui_contract,
         "player": player_actor,
         "rooms": room_records,
@@ -5181,14 +6168,20 @@ def import_module(
     runtime_configuration_path: Path,
     player_appearance_id: int = 137,
     player_portrait_id: int = 18,
+    profile_id: str = "kotor",
+    player_class_id: int = 0,
 ) -> Path:
     normalized_module = normalize_module_id(module)
+    if profile_id not in ODYSSEY_EXECUTABLES:
+        raise RuntimeError(f"Unsupported Odyssey profile: {profile_id}")
+    if profile_id != "kotor" and normalized_module == ENDAR_MODULE:
+        raise RuntimeError("The Endar story importer belongs only to the KOTOR profile")
     importer = (
         _import_endar_module
         if normalized_module == ENDAR_MODULE
         else _import_generic_module
     )
-    return importer(
+    arguments = [
         game_root,
         normalized_module,
         output_root,
@@ -5196,17 +6189,24 @@ def import_module(
         runtime_configuration_path,
         player_appearance_id,
         player_portrait_id,
-    )
+    ]
+    if importer is _import_generic_module:
+        arguments.append(profile_id)
+    else:
+        arguments.append(player_class_id)
+    return importer(*arguments)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--game-root", type=Path, required=True)
+    parser.add_argument("--profile", choices=sorted(ODYSSEY_EXECUTABLES), default="kotor")
     parser.add_argument("--module", default="end_m01aa")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mdlops", type=Path, required=True)
     parser.add_argument("--player-appearance-id", type=int, default=137)
     parser.add_argument("--player-portrait-id", type=int, default=18)
+    parser.add_argument("--player-class-id", type=int, default=0)
     parser.add_argument(
         "--runtime-config",
         type=Path,
@@ -5226,6 +6226,8 @@ def main() -> int:
             args.runtime_config.resolve(),
             args.player_appearance_id,
             args.player_portrait_id,
+            args.profile,
+            args.player_class_id,
         )
     except Exception as exc:
         print(f"KOTOR_IMPORT_FAIL: {exc}", file=sys.stderr)

@@ -31,7 +31,6 @@ public sealed partial class KotorModuleBoot : Node3D
     private const int EmitterTintedFlag = 0x0008;
     private const int EmitterCollisionBounceFlag = 0x0010;
     private const int UnsupportedRoomEmitterFlags =
-        0x0004 | // wind
         0x0080 | // parent velocity inheritance
         0x0200 | // collision splat
         0x0400 | // particle inheritance
@@ -51,6 +50,7 @@ public sealed partial class KotorModuleBoot : Node3D
             shader_type spatial;
             render_mode depth_draw_opaque, diffuse_lambert, specular_schlick_ggx;
             uniform sampler2D albedo_texture : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+            uniform vec4 albedo_tint : source_color = vec4(1.0);
             uniform sampler2D lightmap_texture : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
             uniform sampler2D normal_texture : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
             uniform bool has_normal_texture = false;
@@ -62,7 +62,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform float dielectric_specular;
             uniform float material_roughness = 1.0;
             void fragment() {
-                vec4 base = texture(albedo_texture, UV);
+                vec4 base = texture(albedo_texture, UV) * albedo_tint;
                 vec3 lightmap = texture(lightmap_texture, UV2).rgb;
                 ALBEDO = base.rgb * dynamic_light_albedo_weight;
                 vec3 baked = clamp(lightmap, vec3(0.0), vec3(1.0)) * baked_emission_weight;
@@ -114,6 +114,7 @@ public sealed partial class KotorModuleBoot : Node3D
             shader_type spatial;
             render_mode depth_draw_never, cull_disabled, diffuse_lambert, specular_schlick_ggx;
             uniform sampler2D albedo_texture : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+            uniform vec4 albedo_tint : source_color = vec4(1.0);
             uniform sampler2D lightmap_texture : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
             uniform sampler2D normal_texture : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
             uniform bool has_normal_texture = false;
@@ -125,7 +126,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform float dielectric_specular;
             uniform float material_roughness = 1.0;
             void fragment() {
-                vec4 base = texture(albedo_texture, UV);
+                vec4 base = texture(albedo_texture, UV) * albedo_tint;
                 vec3 lightmap = texture(lightmap_texture, UV2).rgb;
                 ALBEDO = base.rgb * dynamic_light_albedo_weight;
                 vec3 baked = clamp(lightmap, vec3(0.0), vec3(1.0)) * baked_emission_weight;
@@ -148,6 +149,7 @@ public sealed partial class KotorModuleBoot : Node3D
             shader_type spatial;
             render_mode depth_draw_opaque, diffuse_lambert, specular_schlick_ggx;
             uniform sampler2D albedo_texture : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+            uniform vec4 albedo_tint : source_color = vec4(1.0);
             uniform sampler2D lightmap_texture : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
             uniform sampler2D normal_texture : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
             uniform bool has_normal_texture = false;
@@ -162,7 +164,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform float dielectric_specular;
             uniform float material_roughness = 1.0;
             void fragment() {
-                vec4 base = texture(albedo_texture, UV);
+                vec4 base = texture(albedo_texture, UV) * albedo_tint;
                 vec3 reflected_view = reflect(-VIEW, NORMAL);
                 vec3 reflected_world = normalize(mat3(INV_VIEW_MATRIX) * reflected_view);
                 // Imported geometry maps Odyssey (x,y,z) to Godot (x,z,-y).
@@ -172,7 +174,7 @@ public sealed partial class KotorModuleBoot : Node3D
                 float authored_weight = min(
                     base.a + base.a * (1.0 - base.a) * reflection_strength,
                     maximum_reflection_weight);
-                vec3 reflected_base = mix(base.rgb, environment, authored_weight);
+                vec3 reflected_base = base.rgb + environment * authored_weight;
                 vec3 lightmap = texture(lightmap_texture, UV2).rgb;
                 ALBEDO = reflected_base * dynamic_light_albedo_weight;
                 vec3 baked = clamp(lightmap, vec3(0.0), vec3(1.0)) * baked_emission_weight;
@@ -194,6 +196,7 @@ public sealed partial class KotorModuleBoot : Node3D
             shader_type spatial;
             render_mode depth_draw_never, cull_disabled, diffuse_lambert, specular_schlick_ggx;
             uniform sampler2D albedo_texture : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+            uniform vec4 albedo_tint : source_color = vec4(1.0);
             uniform sampler2D lightmap_texture : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
             uniform sampler2D normal_texture : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
             uniform bool has_normal_texture = false;
@@ -208,7 +211,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform float dielectric_specular;
             uniform float material_roughness = 1.0;
             void fragment() {
-                vec4 base = texture(albedo_texture, UV);
+                vec4 base = texture(albedo_texture, UV) * albedo_tint;
                 vec3 reflected_view = reflect(-VIEW, NORMAL);
                 vec3 reflected_world = normalize(mat3(INV_VIEW_MATRIX) * reflected_view);
                 vec3 odyssey_direction = vec3(
@@ -217,7 +220,7 @@ public sealed partial class KotorModuleBoot : Node3D
                 float authored_weight = min(
                     base.a + base.a * (1.0 - base.a) * reflection_strength,
                     maximum_reflection_weight);
-                vec3 reflected_base = mix(base.rgb, environment, authored_weight);
+                vec3 reflected_base = base.rgb + environment * authored_weight;
                 vec3 lightmap = texture(lightmap_texture, UV2).rgb;
                 ALBEDO = reflected_base * dynamic_light_albedo_weight;
                 vec3 baked = clamp(lightmap, vec3(0.0), vec3(1.0)) * baked_emission_weight;
@@ -257,7 +260,7 @@ public sealed partial class KotorModuleBoot : Node3D
                 float authored_weight = min(
                     base.a + base.a * (1.0 - base.a) * reflection_strength,
                     maximum_reflection_weight);
-                ALBEDO = mix(base.rgb, environment, authored_weight);
+                ALBEDO = base.rgb + environment * authored_weight;
                 if (has_normal_texture) {
                     NORMAL_MAP = texture(normal_texture, UV).rgb;
                     NORMAL_MAP_DEPTH = normal_scale;
@@ -290,7 +293,7 @@ public sealed partial class KotorModuleBoot : Node3D
                 float authored_weight = min(
                     base.a + base.a * (1.0 - base.a) * reflection_strength,
                     maximum_reflection_weight);
-                ALBEDO = mix(base.rgb, environment, authored_weight);
+                ALBEDO = base.rgb + environment * authored_weight;
                 if (has_normal_texture) {
                     NORMAL_MAP = texture(normal_texture, UV).rgb;
                     NORMAL_MAP_DEPTH = normal_scale;
@@ -307,13 +310,14 @@ public sealed partial class KotorModuleBoot : Node3D
             shader_type spatial;
             render_mode unshaded, blend_add, depth_draw_never, cull_disabled;
             uniform sampler2D albedo_texture : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+            uniform vec4 albedo_tint : source_color = vec4(1.0);
             uniform sampler2D lightmap_texture : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
             uniform vec3 dynamic_ambient;
             uniform float dynamic_light_albedo_weight;
             uniform float baked_emission_weight;
             uniform float dynamic_ambient_emission_weight;
             void fragment() {
-                vec4 base = texture(albedo_texture, UV);
+                vec4 base = texture(albedo_texture, UV) * albedo_tint;
                 vec3 baked = clamp(texture(lightmap_texture, UV2).rgb, vec3(0.0), vec3(1.0)) * baked_emission_weight;
                 vec3 transfer = max(
                     baked, max(dynamic_ambient, vec3(0.0)) * dynamic_ambient_emission_weight);
@@ -342,7 +346,7 @@ public sealed partial class KotorModuleBoot : Node3D
                 float authored_weight = min(
                     base.a + base.a * (1.0 - base.a) * reflection_strength,
                     maximum_reflection_weight);
-                ALBEDO = mix(base.rgb, environment, authored_weight);
+                ALBEDO = base.rgb + environment * authored_weight;
                 ALPHA = base.a;
             }
             """
@@ -353,6 +357,7 @@ public sealed partial class KotorModuleBoot : Node3D
             shader_type spatial;
             render_mode unshaded, blend_add, depth_draw_never, cull_disabled;
             uniform sampler2D albedo_texture : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+            uniform vec4 albedo_tint : source_color = vec4(1.0);
             uniform sampler2D lightmap_texture : source_color, repeat_disable, filter_linear_mipmap_anisotropic;
             uniform samplerCube environment_map : source_color, filter_linear_mipmap_anisotropic;
             uniform vec3 dynamic_ambient;
@@ -362,7 +367,7 @@ public sealed partial class KotorModuleBoot : Node3D
             uniform float baked_emission_weight;
             uniform float dynamic_ambient_emission_weight;
             void fragment() {
-                vec4 base = texture(albedo_texture, UV);
+                vec4 base = texture(albedo_texture, UV) * albedo_tint;
                 vec3 reflected_view = reflect(-VIEW, NORMAL);
                 vec3 reflected_world = normalize(mat3(INV_VIEW_MATRIX) * reflected_view);
                 vec3 odyssey_direction = vec3(
@@ -371,7 +376,7 @@ public sealed partial class KotorModuleBoot : Node3D
                 float authored_weight = min(
                     base.a + base.a * (1.0 - base.a) * reflection_strength,
                     maximum_reflection_weight);
-                vec3 surface = mix(base.rgb, environment, authored_weight);
+                vec3 surface = base.rgb + environment * authored_weight;
                 vec3 baked = clamp(texture(lightmap_texture, UV2).rgb, vec3(0.0), vec3(1.0)) * baked_emission_weight;
                 vec3 transfer = max(
                     baked, max(dynamic_ambient, vec3(0.0)) * dynamic_ambient_emission_weight);
@@ -434,6 +439,8 @@ public sealed partial class KotorModuleBoot : Node3D
     private Label status = null!;
     private Label details = null!;
     private ColorRect loadingBackdrop = null!;
+    private ColorRect cinematicFade = null!;
+    private Tween? dialogueFadeTween;
     private PanelContainer dialoguePanel = null!;
     private Label dialogueSpeaker = null!;
     private Label dialogueText = null!;
@@ -450,6 +457,12 @@ public sealed partial class KotorModuleBoot : Node3D
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Node3D> actorModels =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Node3D> roomModels =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RoomRecord> roomRecords =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Tween> roomAlphaTweens =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CreatureRecord> actorRecords =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CreatureEffectRig> actorEffectRigs =
@@ -461,6 +474,10 @@ public sealed partial class KotorModuleBoot : Node3D
     private readonly Dictionary<string, LipRig> actorLipRigs =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, CameraRecord> dialogueCameras = [];
+    private readonly Dictionary<string, WaypointRecord> moduleWaypoints =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, MaterializedSoundObject> moduleSoundObjects =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> reportedUnsupportedScripts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> playedDialogueMedia = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Cubemap> environmentMapTextures =
@@ -487,6 +504,11 @@ public sealed partial class KotorModuleBoot : Node3D
     private string loadedModuleId = "";
     private KotorModuleContentMode moduleContentMode = KotorModuleContentMode.GenericWorld;
     private KotorGameplaySimulation? gameplaySimulation;
+    private KotorCombatSimulation? firstEncounterCombat;
+    private KotorCombatExperienceTable? combatExperienceTable;
+    private PlayerCombatRecord? playerCombat;
+    private string selectedCombatTarget = "end_sith2";
+    private readonly Random combatRandom = new(0x4B4F544F);
     private int capturedFrames;
     private int captureMatchedFrames;
     private int captureTargetFrame;
@@ -504,6 +526,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool automatedCorridorTriggerVerified;
     private bool automatedCorridorTransmissionVerified;
     private bool automatedFirstEncounterVerified;
+    private int nextAutomatedCombatFrame;
     private bool showcaseRouteEnabled;
     private bool genericWorldShowcaseEnabled;
     private double genericWorldShowcaseSeconds;
@@ -520,6 +543,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private bool firstEncounterStarted;
     private bool firstEncounterCombatReady;
     private bool cinematicSequenceActive;
+    private bool dialogueSequenceActive;
     private bool dialogueCameraActive;
     private bool dialogueCameraWasDynamic;
     private float dialogueFieldOfView = 55.0f;
@@ -551,6 +575,7 @@ public sealed partial class KotorModuleBoot : Node3D
     private int roomSparkEmitterCount;
     private bool damagedEndSmokeReady;
     private string currentMusicResref = "";
+    private int areaMusicRequestGeneration;
     private string captureDialogueNode = "";
     private ulong inputLockedUntilMsec;
     private string currentVoiceActor = "";
@@ -632,7 +657,7 @@ public sealed partial class KotorModuleBoot : Node3D
         var sprinting = Input.IsKeyPressed(Key.Shift) ||
                         (xrActive && xrLeftHand.IsButtonPressed("primary_click"));
         var intent = KotorMovementIntent.FromAxes(rightIntent, forwardIntent, sprinting);
-        var movementResult = !dialoguePanel.Visible && !cinematicSequenceActive
+        var movementResult = !dialogueSequenceActive && !cinematicSequenceActive
             ? StepPlayer(intent, (float)delta)
             : new KotorMovementResult(
                 simulationPlayerPosition, true, false, KotorLocomotionMode.Idle);
@@ -649,9 +674,10 @@ public sealed partial class KotorModuleBoot : Node3D
             KotorLocomotionMode.Run => "run",
             _ => "pause1"
         };
-        PlayPlayerAnimation(!string.IsNullOrWhiteSpace(forcedPlayerAnimation)
-            ? forcedPlayerAnimation
-            : requestedAnimation);
+        if (!dialogueSequenceActive)
+            PlayPlayerAnimation(!string.IsNullOrWhiteSpace(forcedPlayerAnimation)
+                ? forcedPlayerAnimation
+                : requestedAnimation);
         UpdateInteractionPrompt();
         UpdateLipSync();
 
@@ -994,12 +1020,16 @@ public sealed partial class KotorModuleBoot : Node3D
             }
             if (!firstEncounterStarted &&
                 readyFrames >= runtimeConfiguration.Automation.SceneReadyFrame &&
-                launchEnvironment.Get(
-                    "NIKAMI_AURORA_TEST_FIRST_ENCOUNTER") == "1")
+                (launchEnvironment.Get(
+                     "NIKAMI_AURORA_TEST_FIRST_ENCOUNTER") == "1" ||
+                 launchEnvironment.Get(
+                     "NIKAMI_AURORA_TEST_FIRST_COMBAT") == "1"))
                 StartFirstEncounter();
             if (firstEncounterCombatReady && !automatedFirstEncounterVerified &&
                 (launchEnvironment.Get(
                      "NIKAMI_AURORA_TEST_FIRST_ENCOUNTER") == "1" ||
+                 launchEnvironment.Get(
+                     "NIKAMI_AURORA_TEST_FIRST_COMBAT") == "1" ||
                  showcaseRouteEnabled))
             {
                 automatedFirstEncounterVerified = true;
@@ -1052,6 +1082,13 @@ public sealed partial class KotorModuleBoot : Node3D
                          $"impact_lights={encounterImpactLightCount} " +
                          "audio=positional sync=arrival parity_claim=none");
             }
+            if (firstEncounterCombatReady &&
+                launchEnvironment.Get("NIKAMI_AURORA_TEST_FIRST_COMBAT") == "1" &&
+                readyFrames >= nextAutomatedCombatFrame)
+            {
+                nextAutomatedCombatFrame = readyFrames + 12;
+                ResolveFirstEncounterPlayerTurn();
+            }
             var configuredChoice = launchEnvironment.Get("NIKAMI_AURORA_DIALOGUE_CHOICE");
             if (!automatedChoiceApplied &&
                 readyFrames >= runtimeConfiguration.Automation.ChoiceFrame &&
@@ -1080,6 +1117,13 @@ public sealed partial class KotorModuleBoot : Node3D
             if (readyFrames == runtimeConfiguration.Automation.CapturePreparationFrame &&
                 launchEnvironment.Get("NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP") == "1")
                 FrameLipSyncCloseup(dialogueOwnerActor);
+            if (readyFrames == runtimeConfiguration.Automation.CapturePreparationFrame &&
+                launchEnvironment.Get(
+                    "NIKAMI_AURORA_CAPTURE_CREATURE") is { Length: > 0 } effectActor &&
+                launchEnvironment.Get(
+                    "NIKAMI_AURORA_CAPTURE_CREATURE_EFFECT_ANIMATION")
+                    is { Length: > 0 } effectAnimation)
+                PlayActorAnimation(effectActor, effectAnimation, false);
             if (readyFrames == runtimeConfiguration.Automation.CapturePreparationFrame &&
                 launchEnvironment.Get(
                     "NIKAMI_AURORA_CAPTURE_CREATURE") is { Length: > 0 } creature)
@@ -1160,6 +1204,16 @@ public sealed partial class KotorModuleBoot : Node3D
         else if (inputEvent is InputEventKey interact && interact.Pressed && interact.Keycode == Key.E)
         {
             HandleInteraction(null);
+        }
+        else if (inputEvent is InputEventKey target && target.Pressed &&
+                 target.Keycode == Key.Tab && firstEncounterCombatReady)
+        {
+            CycleFirstEncounterTarget();
+        }
+        else if (inputEvent is InputEventKey attack && attack.Pressed &&
+                 attack.Keycode == Key.Space && firstEncounterCombatReady)
+        {
+            ResolveFirstEncounterPlayerTurn();
         }
         else if (inputEvent is InputEventKey equip && equip.Pressed && equip.Keycode == Key.Q)
         {
@@ -1346,12 +1400,11 @@ public sealed partial class KotorModuleBoot : Node3D
             "NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRIGGER",
             "NIKAMI_AURORA_TEST_FIRST_CORRIDOR_TRANSMISSION",
             "NIKAMI_AURORA_TEST_FIRST_ENCOUNTER",
+            "NIKAMI_AURORA_TEST_FIRST_COMBAT",
             "NIKAMI_AURORA_SHOWCASE_ROUTE",
             "NIKAMI_AURORA_CAPTURE_LIP_CLOSEUP",
             "NIKAMI_AURORA_CAPTURE_PLAYER_EQUIPMENT_CLOSEUP",
             "NIKAMI_AURORA_CAPTURE_CHAIR_CLOSEUP",
-            "NIKAMI_AURORA_TEST_INVENTORY_SCREEN",
-            "NIKAMI_AURORA_TEST_EQUIPMENT_SCREEN",
             "NIKAMI_AURORA_TEST_XR_DIALOGUE_CONTROLS"
         ];
         return variables.Any(variable =>
@@ -1383,11 +1436,15 @@ public sealed partial class KotorModuleBoot : Node3D
             KotorModulePresentationPolicy.RequireEndarAutomation(
                 moduleContentMode, EndarAutomationRequested());
             runtimeConfiguration = manifest.RuntimeConfiguration.Validate(requireSourceHash: true);
+            playerCombat = manifest.Player.Combat;
+            combatExperienceTable = new KotorCombatExperienceTable(
+                manifest.CombatExperienceTable.SourceSha256,
+                manifest.CombatExperienceTable.Rows);
             if (captureTargetFrame == 0)
                 captureTargetFrame = runtimeConfiguration.Automation.SceneReadyFrame;
 
             var manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
-            ConfigureFlatPresentation(manifest.Ui, manifestDirectory);
+            ConfigureFlatPresentation(manifest.Ui, manifestDirectory, manifest.ProfileId);
             UpdateLoadingProgress(runtimeConfiguration.Presentation.Loading.RoomLoadingStart);
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             if (await CaptureLoadingPresentationIfRequested())
@@ -1404,11 +1461,20 @@ public sealed partial class KotorModuleBoot : Node3D
                     out var configuredPlayerXp))
                 initialPlayerExperience = Math.Max(0, configuredPlayerXp);
             gameplaySimulation = CreateGameplaySimulation(manifest, initialPlayerExperience);
-            var supportedTriggers = gameplaySimulation.CaptureSnapshot().TriggerStates.Count;
+            moduleWaypoints.Clear();
+            foreach (var waypoint in manifest.Waypoints)
+            {
+                if (!string.IsNullOrWhiteSpace(waypoint.Tag))
+                    moduleWaypoints.TryAdd(waypoint.Tag, waypoint);
+            }
+            var initialGameplayState = gameplaySimulation.CaptureSnapshot();
+            var supportedTriggers = initialGameplayState.TriggerStates.Count;
             GD.Print($"NIKAMI_AURORA_GAMEPLAY_STATE status=ready scripts={manifest.ScriptContracts.Count} " +
-                     $"doors={manifest.Doors.Count} placeables={manifest.Placeables.Count} " +
-                     $"triggers={supportedTriggers}/{manifest.Triggers.Count} " +
-                     $"xp={initialPlayerExperience}");
+                      $"doors={manifest.Doors.Count} placeables={manifest.Placeables.Count} " +
+                      $"triggers={supportedTriggers}/{manifest.Triggers.Count} " +
+                      $"level={initialGameplayState.PlayerLevel} " +
+                      $"xp={initialPlayerExperience} " +
+                      $"next={initialGameplayState.NextLevelExperience}");
             ApplyAreaLighting(manifest.Lighting);
             environmentMapTextures.Clear();
             foreach (var pair in LoadOwnedEnvironmentMaps(
@@ -1522,6 +1588,10 @@ public sealed partial class KotorModuleBoot : Node3D
                 imported.Name = room.Model;
                 imported.Position = ToGodot(room.Position);
                 AddChild(imported);
+                if (!roomModels.TryAdd(room.Model, imported) ||
+                    !roomRecords.TryAdd(room.Model, room))
+                    throw new InvalidDataException(
+                        $"Duplicate materialized room model: {room.Model}");
                 var emitterReport = LoadRoomEmitters(
                     room, imported, manifestDirectory, roomEmitterTextures,
                     enhancedPresentation, ToColor(manifest.Lighting.DynamicAmbient));
@@ -1608,7 +1678,7 @@ public sealed partial class KotorModuleBoot : Node3D
                      $"dynamic_lights={(lightmapTransfer.DynamicLightsEnabled ? 1 : 0)} " +
                      $"double_light={(lightmapTransfer.DynamicLightsEnabled ? "bounded" : "0")} " +
                      $"materials={lightmappedOpaqueMaterials + lightmappedTransparentMaterials} " +
-                     "environment_variant=surface-mix-before-transfer " +
+                     "environment_variant=diffuse-plus-masked-cube-before-transfer " +
                      $"evidence={(enhancedPresentation ? "enhancement" : "source-contract")} " +
                       "parity_claim=none");
             var roomPbrCoverage = new KotorPbrCoverage(
@@ -1704,8 +1774,8 @@ public sealed partial class KotorModuleBoot : Node3D
                 .SelectMany(creature => creature.Models ?? [])
                 .ToArray();
             var equippedWeaponRecords = creatureModelRecords.Where(model =>
-                    model.Role.Equals("rightWeapon", StringComparison.Ordinal) ||
-                    model.Role.Equals("leftWeapon", StringComparison.Ordinal))
+                    string.Equals(model.Role, "rightWeapon", StringComparison.Ordinal) ||
+                    string.Equals(model.Role, "leftWeapon", StringComparison.Ordinal))
                 .ToArray();
             var equippedWeaponAdditiveSurfaces = equippedWeaponRecords.Sum(
                 model => model.AdditiveSurfaces);
@@ -1849,6 +1919,7 @@ public sealed partial class KotorModuleBoot : Node3D
             BuildNavigation(manifest.Rooms);
             var groundedCreatures = 0;
             var sourceHoverCreatures = 0;
+            var correctedCreatureFloors = 0;
             foreach (var creature in materializedCreatures)
             {
                 var boundsMinimum = creature.Source.Animation?.BoundsMinimum;
@@ -1864,24 +1935,35 @@ public sealed partial class KotorModuleBoot : Node3D
                         $"{creature.Source.Template}:{creature.Model.GlobalPosition}");
                 var sourceFoot = creature.Model.GlobalPosition.Y + boundsMinimum[1];
                 var clearance = sourceFoot - sourceFloor;
-                if (!float.IsFinite(clearance) || clearance < -0.06f)
+                if (!float.IsFinite(clearance))
                     throw new InvalidDataException(
-                        $"Creature source silhouette crosses its walkmesh floor: " +
-                        $"{creature.Source.Template} clearance={clearance:F3}");
+                        $"Creature source silhouette has non-finite floor clearance: " +
+                        $"{creature.Source.Template}");
+                var correctedFloor = clearance < -0.06f;
+                if (correctedFloor)
+                {
+                    var correction = -clearance;
+                    creature.Model.GlobalPosition += Vector3.Up * correction;
+                    sourceFoot += correction;
+                    clearance = sourceFoot - sourceFloor;
+                    correctedCreatureFloors++;
+                }
                 var grounded = clearance <= 0.22f;
                 groundedCreatures += grounded ? 1 : 0;
                 sourceHoverCreatures += grounded ? 0 : 1;
                 GD.Print($"NIKAMI_AURORA_CREATURE_GROUND status=ready " +
                          $"module={loadedModuleId} identity={creature.Source.Template} " +
                          $"source_floor={sourceFloor:F3} source_foot={sourceFoot:F3} " +
-                         $"clearance={clearance:F3} " +
-                         $"classification={(grounded ? "grounded" : "source-hover")} " +
+                          $"clearance={clearance:F3} " +
+                          $"alignment={(correctedFloor ? "bounds-grounded" : "source-origin")} " +
+                          $"classification={(grounded ? "grounded" : "source-hover")} " +
                          "silhouette=visual-review-required");
             }
             GD.Print($"NIKAMI_AURORA_CREATURE_GROUND_COVERAGE status=ready " +
                      $"module={loadedModuleId} expected={manifest.Counts.Creatures} " +
-                     $"projected={materializedCreatures.Count} grounded={groundedCreatures} " +
-                     $"source_hover={sourceHoverCreatures} below_floor=0");
+                      $"projected={materializedCreatures.Count} grounded={groundedCreatures} " +
+                      $"source_hover={sourceHoverCreatures} " +
+                      $"bounds_grounded={correctedCreatureFloors} below_floor=0");
             simulationPlayerPosition = ToNumerics(manifest.Entry.Position);
             var entry = ToGodot(manifest.Entry.Position);
             if (!TryProjectToWalkmesh(entry, out var entryGround))
@@ -1905,6 +1987,23 @@ public sealed partial class KotorModuleBoot : Node3D
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             loadingBackdrop.Visible = false;
             StopRetailLoadingMusic();
+            LoadModuleSoundObjects(manifest.SoundObjects ?? [], manifestDirectory);
+            if (manifest.AreaMusic is { } sourceMusic)
+            {
+                if (sourceMusic.Schema != "nikami-aurora-kotor-area-music-v1" ||
+                    sourceMusic.AmbientMusicSha256.Length != 64 ||
+                    !sourceMusic.AmbientMusicSha256.All(Uri.IsHexDigit) ||
+                    sourceMusic.StandardMusicId < 0 ||
+                    sourceMusic.MusicDelayMilliseconds < 0)
+                    throw new InvalidDataException("KOTOR area-music contract drifted");
+                areaMusic.Stream = LoadOwnedAudio(
+                    sourceMusic.BackgroundMusic, manifestDirectory);
+                areaMusic.Play();
+                currentMusicResref = sourceMusic.BackgroundMusic.Resref;
+                GD.Print($"NIKAMI_AURORA_AREA_MUSIC status=playing " +
+                         $"resref={currentMusicResref} row={sourceMusic.StandardMusicId} " +
+                         $"battleDelayMs={sourceMusic.MusicDelayMilliseconds}");
+            }
             status.Text = $"{loadedModuleId.ToUpperInvariant()}  •  {manifest.AreaResRef.ToUpperInvariant()}";
             details.Text = $"{manifest.Rooms.Count} authored / {loadedRooms} visual rooms  •  " +
                            $"{materializedActors} actor / {manifest.Counts.Creatures} creature placements  •  " +
@@ -1930,13 +2029,22 @@ public sealed partial class KotorModuleBoot : Node3D
             GD.Print($"NIKAMI_AURORA_NAV status=ready module={loadedModuleId} " +
                      $"triangles={navigationTriangles.Count} " +
                      $"entry={playerBody.GlobalPosition}");
-            var openingActor = manifest.Creatures.FirstOrDefault(creature => creature.Dialogue is not null);
-            if (openingActor is not null)
-                LoadOpeningDialogue(
-                    openingActor,
-                    manifestDirectory,
-                    launchEnvironment.Get(
-                        "NIKAMI_AURORA_SKIP_OPENING_DIALOGUE") != "1");
+            if (manifest.OpeningDialogue is not null)
+                LoadOpeningDialogue(manifest.OpeningDialogue, manifestDirectory);
+            else
+            {
+                var openingActor = manifest.Creatures.FirstOrDefault(creature => creature.Dialogue is not null);
+                if (openingActor is not null)
+                    LoadOpeningDialogue(
+                        openingActor,
+                        manifestDirectory,
+                        launchEnvironment.Get(
+                            "NIKAMI_AURORA_SKIP_OPENING_DIALOGUE") != "1");
+            }
+            if (manifest.OpeningDialogue is not null && gameplaySimulation is not null &&
+                launchEnvironment.Get("NIKAMI_AURORA_SKIP_OPENING_DIALOGUE") != "1")
+                ApplyGameplayTransition(gameplaySimulation.UpdateTriggers(
+                    simulationPlayerPosition, simulationPlayerPosition));
             firstEncounter = manifest.FirstEncounter;
             if (firstEncounter is not null)
             {
@@ -2259,6 +2367,17 @@ public sealed partial class KotorModuleBoot : Node3D
         loadingBackdrop.AddChild(status);
         loadingBackdrop.AddChild(details);
 
+        var cinematicFadeLayer = new CanvasLayer { Name = "CinematicFadeLayer", Layer = 50 };
+        AddChild(cinematicFadeLayer);
+        cinematicFade = new ColorRect
+        {
+            Color = new Color(0, 0, 0, 0),
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            Visible = false
+        };
+        cinematicFade.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        cinematicFadeLayer.AddChild(cinematicFade);
+
         interactionPrompt = new Label
         {
             Position = new Vector2(460, 610),
@@ -2366,6 +2485,14 @@ public sealed partial class KotorModuleBoot : Node3D
                     KotorScriptContractKind.PlotExperienceIfPlayerExperience,
                 "dialogue-open-door" => KotorScriptContractKind.DialogueOpenDoor,
                 "trigger-dialogue" => KotorScriptContractKind.TriggerDialogue,
+                "move-player-to-waypoint" => KotorScriptContractKind.MovePlayerToWaypoint,
+                "module-start-presentation" =>
+                    KotorScriptContractKind.ModuleStartPresentation,
+                "play-sound-object-from-parameters" =>
+                    KotorScriptContractKind.PlaySoundObjectFromParameters,
+                "no-op" => KotorScriptContractKind.NoOp,
+                "room-animation-from-parameters" =>
+                    KotorScriptContractKind.RoomAnimationFromParameters,
                 "global-number-add" => KotorScriptContractKind.GlobalNumberAdd,
                 "global-number-set" => KotorScriptContractKind.GlobalNumberSet,
                 "reveal-map" => KotorScriptContractKind.RevealMap,
@@ -2393,12 +2520,8 @@ public sealed partial class KotorModuleBoot : Node3D
                         contract.TriggerTemplate
                             ?? throw new InvalidDataException(
                                 $"Trigger contract {contract.Resref} has no template"),
-                        contract.GlobalName
-                            ?? throw new InvalidDataException(
-                                $"Trigger contract {contract.Resref} has no global"),
-                        contract.GlobalValue
-                            ?? throw new InvalidDataException(
-                                $"Trigger contract {contract.Resref} has no global value"),
+                        contract.GlobalName,
+                        contract.GlobalValue,
                         contract.ActorTag
                             ?? throw new InvalidDataException(
                                 $"Trigger contract {contract.Resref} has no actor"),
@@ -2417,21 +2540,16 @@ public sealed partial class KotorModuleBoot : Node3D
                         contract.DialogueStarter
                             ?? throw new InvalidDataException(
                                 $"Trigger contract {contract.Resref} has no starter"),
-                        contract.ActorScriptSourceSha256
-                            ?? throw new InvalidDataException(
-                                $"Trigger contract {contract.Resref} has no actor-script hash"),
-                        contract.ActorScriptInstructionCount
-                            ?? throw new InvalidDataException(
-                                $"Trigger contract {contract.Resref} has no actor-script count"),
-                        contract.ConditionScriptSourceSha256
-                            ?? throw new InvalidDataException(
-                                $"Trigger contract {contract.Resref} has no condition hash"),
-                        contract.ConditionScriptInstructionCount
-                            ?? throw new InvalidDataException(
-                                $"Trigger contract {contract.Resref} has no condition count"))
+                        contract.ActorScriptSourceSha256,
+                        contract.ActorScriptInstructionCount,
+                        contract.ConditionScriptSourceSha256,
+                        contract.ConditionScriptInstructionCount)
                     : null,
                 contract.GlobalName,
-                contract.GlobalValue);
+                contract.GlobalValue,
+                contract.FadeInWaitSeconds,
+                contract.FadeInLengthSeconds,
+                contract.MusicRestartDelaySeconds);
         }).ToArray();
         var contractResrefs = contracts.Select(contract => contract.Resref)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -2512,6 +2630,9 @@ public sealed partial class KotorModuleBoot : Node3D
                 initialPlayerExperience,
                 manifest.RuntimeConfiguration.Gameplay.PlayerCredits,
                 partyMembers),
+            new KotorExperienceTable(
+                manifest.ExperienceTable.SourceSha256,
+                manifest.ExperienceTable.Thresholds),
             triggers);
     }
 
@@ -2585,23 +2706,34 @@ public sealed partial class KotorModuleBoot : Node3D
     private static void ValidateBasePlayerPresentation(PlayerRecord player)
     {
         var animation = player.Animation;
-        if (player.AppearanceId < 0 || player.PortraitId < 0 || player.HeadIndex < 0 ||
+        var rigidPlayer = player.RigKind.Equals(
+            "rigid", StringComparison.OrdinalIgnoreCase);
+        var skinnedHumanoidPlayer = player.RigKind.Equals(
+            "humanoid", StringComparison.OrdinalIgnoreCase);
+        var rigidHumanoidPlayer = player.RigKind.Equals(
+            "rigid-humanoid", StringComparison.OrdinalIgnoreCase);
+        var humanoidPlayer = skinnedHumanoidPlayer || rigidHumanoidPlayer;
+        if ((!humanoidPlayer && !rigidPlayer) ||
+            player.AppearanceId < 0 || player.PortraitId < 0 ||
+            (!rigidPlayer && player.HeadIndex < 0) ||
             string.IsNullOrWhiteSpace(player.AppearanceLabel) ||
             string.IsNullOrWhiteSpace(player.BodyModel) ||
-            string.IsNullOrWhiteSpace(player.BodyTexture) ||
-            string.IsNullOrWhiteSpace(player.HeadModel) ||
+            (!rigidPlayer && string.IsNullOrWhiteSpace(player.BodyTexture)) ||
+            (!rigidPlayer && string.IsNullOrWhiteSpace(player.HeadModel)) ||
             !float.IsFinite(player.Height) || player.Height <= 0 ||
             !float.IsFinite(player.WalkDistance) || player.WalkDistance <= 0 ||
             !float.IsFinite(player.RunDistance) || player.RunDistance <= 0 ||
-            !ValidSourcePoint(player.TalkOffset) ||
-            !ValidSourcePoint(player.CameraOffset) ||
+            (!rigidPlayer && !ValidSourcePoint(player.TalkOffset)) ||
+            (!rigidPlayer && !ValidSourcePoint(player.CameraOffset)) ||
             animation.MeshCount <= 0 || animation.VertexCount <= 0 ||
-            animation.TriangleCount <= 0 || animation.SkinCount <= 0 ||
-            animation.HeadSkinCount <= 0 ||
+            animation.TriangleCount <= 0 ||
+            (skinnedHumanoidPlayer && animation.SkinCount <= 0) ||
+            (skinnedHumanoidPlayer && animation.HeadSkinCount <= 0) ||
             !animation.Animations.Contains("pause1", StringComparer.OrdinalIgnoreCase) ||
             !animation.Animations.Contains("walk", StringComparer.OrdinalIgnoreCase) ||
             !animation.Animations.Contains("run", StringComparer.OrdinalIgnoreCase) ||
-            !animation.Animations.Contains("talk", StringComparer.OrdinalIgnoreCase))
+            (!rigidPlayer &&
+             !animation.Animations.Contains("talk", StringComparer.OrdinalIgnoreCase)))
             throw new InvalidDataException(
                 "Base player appearance/body/head/animation contract is incomplete");
     }

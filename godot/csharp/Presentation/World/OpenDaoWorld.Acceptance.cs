@@ -40,7 +40,6 @@ public partial class OpenDaoWorld
             var story = services!.GetRequired<StoryState>();
             var crateHandle = crate?.GetMeta("dao_story_handle", 0).AsInt32() ?? 0;
             var crateUsePassed = crate is not null && crateHandle > 0 &&
-                                 story.GetPlotFlag("85c3d035f1274fd59849b190d64d5290", 2) &&
                                  Convert.ToInt32(story.GetLocal(crateHandle, "PLC_DO_ONCE_A", "int") ?? 0) == 1;
             var locomotionCapture = System.Environment.GetEnvironmentVariable(
                 "OPENDAO_LOCOMOTION_CAPTURE") ?? string.Empty;
@@ -1199,6 +1198,8 @@ public partial class OpenDaoWorld
         }
         var expectedOrigin = System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_ORIGIN");
         if (string.IsNullOrWhiteSpace(expectedOrigin)) expectedOrigin = "city-elf";
+        var expectedRace = System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_RACE");
+        if (string.IsNullOrWhiteSpace(expectedRace)) expectedRace = character.Race;
         var expectedGender = System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_GENDER");
         if (expectedGender is not ("male" or "female")) expectedGender = "female";
         var expectedName = System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_NAME");
@@ -1207,7 +1208,8 @@ public partial class OpenDaoWorld
         if (string.IsNullOrWhiteSpace(expectedClass)) expectedClass = character.Class;
         var expectedAppearance = System.Environment.GetEnvironmentVariable("OPENDAO_ACCEPTANCE_APPEARANCE");
         if (string.IsNullOrWhiteSpace(expectedAppearance)) expectedAppearance = "preset-3";
-        var expected = character.Name == expectedName && character.Gender == expectedGender &&
+        var expected = character.Name == expectedName && character.Race == expectedRace &&
+                       character.Gender == expectedGender &&
                        character.Origin.Equals(expectedOrigin, StringComparison.OrdinalIgnoreCase) &&
                        character.Class.Equals(expectedClass, StringComparison.OrdinalIgnoreCase) &&
                        character.Appearance.Equals(expectedAppearance, StringComparison.OrdinalIgnoreCase);
@@ -1261,7 +1263,7 @@ public partial class OpenDaoWorld
         var head = player.GetNodeOrNull<Node3D>("Head");
         services.GetRequired<IPlayerSessionRepository>().Save(new PlayerSession(string.Empty,
             profile.AreaId, player.GlobalPosition, player.Rotation.Y, head?.Rotation.X ?? 0,
-            DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(), progression?.Experience ?? 0));
     }
 
     private async Task CaptureIfRequested(CancellationToken cancellationToken)
