@@ -662,6 +662,11 @@ def txi_directive_class(directive: str, values: Iterable[str]) -> str:
             normalized and all(value in {"0", "1"} for value in normalized) and
             all(value == normalized[0] for value in normalized[1:])
         ) else "unsupported"
+    if key == "proceduretype":
+        normalized = [value.strip().lower() for value in source_values]
+        return "rendered" if (
+            normalized and all(value == "cycle" for value in normalized)
+        ) else "unsupported"
     if key in TXI_RENDERED_DIRECTIVES:
         return "rendered"
     if key in TXI_SAMPLING_OR_METADATA_DIRECTIVES:
@@ -917,6 +922,44 @@ class TextureCache:
                 f"Conflicting KOTOR bump-map scale semantics for {name}: {values}")
         return parsed[-1], True
 
+    def source_cycle(self, name: str) -> tuple[int, int, float] | None:
+        directives = parse_txi_directives(self.source_txi(name))
+        procedures = [
+            value.strip().lower()
+            for value in directives.get("proceduretype", [])
+        ]
+        if not procedures:
+            return None
+        if any(value != "cycle" for value in procedures):
+            raise RuntimeError(
+                f"Unsupported KOTOR procedure type for {name}: {procedures}")
+
+        def one_number(key: str) -> float:
+            values = directives.get(key, [])
+            if len(values) != 1:
+                raise RuntimeError(
+                    f"KOTOR cycle texture requires one {key} value: {name}")
+            try:
+                value = float(values[0])
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Invalid KOTOR cycle {key} value for {name}: {values[0]}") from exc
+            if not math.isfinite(value) or value <= 0:
+                raise RuntimeError(
+                    f"Invalid KOTOR cycle {key} value for {name}: {values[0]}")
+            return value
+
+        columns_value = one_number("numx")
+        rows_value = one_number("numy")
+        fps = one_number("fps")
+        columns = int(columns_value)
+        rows = int(rows_value)
+        if columns != columns_value or rows != rows_value or columns * rows > 256:
+            raise RuntimeError(
+                f"Invalid KOTOR cycle atlas dimensions for {name}: "
+                f"{columns_value}x{rows_value}")
+        return columns, rows, fps
+
     def material_semantics(
         self,
         diffuse: str,
@@ -928,6 +971,7 @@ class TextureCache:
         environment_map = self.source_environment_map(diffuse)
         bump_directive, bump_map = self.source_bump_map(diffuse)
         bump_scale, bump_scale_authored = self.source_bump_scale(diffuse)
+        cycle = self.source_cycle(diffuse)
         bump_image = self.image(bump_map or "")
         for role, name in (
             ("diffuse", diffuse),
@@ -964,12 +1008,15 @@ class TextureCache:
             "alphaTest": self.alpha_tests.get(key, 1.0),
             "blend": blend,
             "sourceDecal": source_decal,
+            "cycle": None if cycle is None else {
+                "columns": cycle[0], "rows": cycle[1], "fps": cycle[2]},
             "environmentMap": environment_map,
             "materialName": material_name(
                 diffuse, blend == "additive", environment_map,
                 bump_scale if bump_map and bump_scale_authored else None,
                 source_decal,
-                mesh_transparency_hint),
+                mesh_transparency_hint,
+                cycle),
             "sourceTxi": self.source_txi(diffuse),
         }
 
@@ -1827,7 +1874,8 @@ def material_name(texture_name: str, source_additive: bool,
                   environment_map: str | None,
                   authored_bump_scale: float | None = None,
                   source_decal: bool = False,
-                  mesh_transparency_hint: bool = False) -> str:
+                  mesh_transparency_hint: bool = False,
+                  cycle: tuple[int, int, float] | None = None) -> str:
     name = texture_name or "untextured"
     if environment_map:
         name += f"__aurora_envmap_{environment_map}"
@@ -1839,6 +1887,9 @@ def material_name(texture_name: str, source_additive: bool,
         name += "__aurora_decal"
     if mesh_transparency_hint:
         name += "__aurora_transparency_hint"
+    if cycle is not None:
+        name += (f"__aurora_cycle_{cycle[0]}_{cycle[1]}_"
+                 f"{format(cycle[2], '.9g')}")
     return name
 
 
@@ -1863,6 +1914,7 @@ def material_for(
     environment_map = textures.source_environment_map(texture_name)
     _, bump_map_name = textures.source_bump_map(texture_name)
     bump_scale, bump_scale_authored = textures.source_bump_scale(texture_name)
+    cycle = textures.source_cycle(texture_name)
     bump_map = textures.image(bump_map_name or "")
     for role, name in (
         ("diffuse", texture_name),
@@ -1888,7 +1940,8 @@ def material_for(
             texture_name, source_additive, environment_map,
             bump_scale if bump_map is not None and bump_scale_authored else None,
             source_decal,
-            mesh_transparency_hint),
+            mesh_transparency_hint,
+            cycle),
         baseColorTexture=image,
         baseColorFactor=color,
         emissiveTexture=lightmap,

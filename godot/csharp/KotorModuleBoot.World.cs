@@ -1505,7 +1505,7 @@ public sealed partial class KotorModuleBoot
         configuredAdditiveDynamicSurfaces += report.ConfiguredAdditive;
     }
 
-    private static DynamicMaterialReport ConfigureDynamicObjectMaterials(
+    private DynamicMaterialReport ConfigureDynamicObjectMaterials(
         Node node,
         bool enhanced)
     {
@@ -1525,6 +1525,8 @@ public sealed partial class KotorModuleBoot
                 surfaces++;
                 var sourceTransparent =
                     source.Transparency != BaseMaterial3D.TransparencyEnum.Disabled;
+                var cycle = KotorEnvironmentMaterialPolicy.CycleTexture(
+                    source.ResourceName.ToString());
                 var sourceAdditive =
                     source.BlendMode == BaseMaterial3D.BlendModeEnum.Add ||
                     source.ResourceName.ToString().Contains(
@@ -1536,10 +1538,12 @@ public sealed partial class KotorModuleBoot
                 additive += sourceAdditive ? 1 : 0;
                 var sourceNormalScale = ResolveNormalScale(source, out var hasAuthoredNormalScale);
                 authoredNormalScale += hasAuthoredNormalScale ? 1 : 0;
-                if (!enhanced && !sourceAdditive && !sourceDecal)
+                if (!enhanced && !sourceAdditive && !sourceDecal && cycle is null)
                     continue;
 
                 var material = (BaseMaterial3D)source.Duplicate();
+                material.AlbedoTexture = CreateCycleTexture(
+                    source.AlbedoTexture, source.ResourceName.ToString());
                 if (sourceAdditive)
                 {
                     // glTF has no additive alpha mode. The importer therefore
@@ -1664,7 +1668,7 @@ public sealed partial class KotorModuleBoot
         return new AuthoredLightReport(loaded, bakedOnly, ambientOnly, disabled);
     }
 
-    private static StaticMaterialReport ConfigureStaticRoomMaterials(
+    private StaticMaterialReport ConfigureStaticRoomMaterials(
         Node node,
         Color dynamicAmbient,
         IReadOnlyDictionary<string, Cubemap> environmentMaps,
@@ -1696,6 +1700,8 @@ public sealed partial class KotorModuleBoot
                     source.ResourceName.ToString());
                 var sourceTransparent =
                     source.Transparency != BaseMaterial3D.TransparencyEnum.Disabled;
+                var albedoTexture = CreateCycleTexture(
+                    source.AlbedoTexture, source.ResourceName.ToString());
                 if (sourceDecal && !sourceTransparent)
                     throw new InvalidDataException(
                         $"Source decal did not retain transparency: {source.ResourceName}");
@@ -1736,7 +1742,7 @@ public sealed partial class KotorModuleBoot
                             ? KotorEnvironmentMaterialPolicy.SourceDecalRenderPriority
                             : 0
                     };
-                    lightmapped.SetShaderParameter("albedo_texture", source.AlbedoTexture);
+                    lightmapped.SetShaderParameter("albedo_texture", albedoTexture!);
                     lightmapped.SetShaderParameter("albedo_tint", source.AlbedoColor);
                     lightmapped.SetShaderParameter("lightmap_texture", source.EmissionTexture);
                     lightmapped.SetShaderParameter("dynamic_ambient", new Vector3(
@@ -1810,6 +1816,7 @@ public sealed partial class KotorModuleBoot
                     continue;
                 }
                 var material = (BaseMaterial3D)source.Duplicate();
+                material.AlbedoTexture = albedoTexture;
                 var enhancedPbr = transfer.DynamicLightsEnabled && !sourceAdditive;
                 material.ShadingMode = enhancedPbr
                     ? BaseMaterial3D.ShadingModeEnum.PerPixel
@@ -1886,7 +1893,7 @@ public sealed partial class KotorModuleBoot
             "dynamic_ambient_emission_weight", transfer.DynamicAmbientEmissionWeight);
     }
 
-    private static ShaderMaterial CreateEnvironmentMaterial(
+    private ShaderMaterial CreateEnvironmentMaterial(
         BaseMaterial3D source,
         Cubemap environmentMap,
         float reflectionStrength,
@@ -1914,7 +1921,9 @@ public sealed partial class KotorModuleBoot
                 ? KotorEnvironmentMaterialPolicy.SourceDecalRenderPriority
                 : 0
         };
-        material.SetShaderParameter("albedo_texture", source.AlbedoTexture);
+        material.SetShaderParameter(
+            "albedo_texture",
+            CreateCycleTexture(source.AlbedoTexture, source.ResourceName.ToString())!);
         material.SetShaderParameter("environment_map", environmentMap);
         material.SetShaderParameter("albedo_tint", source.AlbedoColor);
         var normalTexture = source.NormalTexture;
@@ -1933,6 +1942,63 @@ public sealed partial class KotorModuleBoot
         return material;
     }
 
+    private Texture2D? CreateCycleTexture(Texture2D? source, string materialName)
+    {
+        var cycle = KotorEnvironmentMaterialPolicy.CycleTexture(materialName);
+        if (cycle is null)
+            return source;
+        if (source is null)
+            throw new InvalidDataException(
+                $"Cycle material lacks an albedo texture: {materialName}");
+        var sourceImage = source.GetImage();
+        var frameWidth = sourceImage.GetWidth() / cycle.Value.Columns;
+        var frameHeight = sourceImage.GetHeight() / cycle.Value.Rows;
+        if (frameWidth <= 0 || frameHeight <= 0 ||
+            frameWidth * cycle.Value.Columns != sourceImage.GetWidth() ||
+            frameHeight * cycle.Value.Rows != sourceImage.GetHeight())
+            throw new InvalidDataException(
+                $"Cycle atlas dimensions do not divide the source texture: {materialName}");
+        var frameCount = cycle.Value.Columns * cycle.Value.Rows;
+        var frames = new List<Image>(frameCount);
+        for (var frame = 0; frame < frameCount; frame++)
+            frames.Add(sourceImage.GetRegion(new Rect2I(
+                frame % cycle.Value.Columns * frameWidth,
+                frame / cycle.Value.Columns * frameHeight,
+                frameWidth,
+                frameHeight)));
+        var texture = ImageTexture.CreateFromImage(frames[0]);
+        texture.ResourceName = materialName;
+        cycleTextures.Add(new CycleTextureBinding(
+            texture, frames, cycle.Value.FramesPerSecond));
+        return texture;
+    }
+
+    private void AdvanceCycleTextures(double delta)
+    {
+        foreach (var binding in cycleTextures)
+        {
+            binding.Elapsed += delta;
+            var frame = (int)Math.Floor(
+                binding.Elapsed * binding.FramesPerSecond) % binding.Frames.Count;
+            if (frame == binding.CurrentFrame)
+                continue;
+            binding.CurrentFrame = frame;
+            binding.Texture.Update(binding.Frames[frame]);
+        }
+    }
+
+    private sealed class CycleTextureBinding(
+        ImageTexture texture,
+        IReadOnlyList<Image> frames,
+        float framesPerSecond)
+    {
+        public ImageTexture Texture { get; } = texture;
+        public IReadOnlyList<Image> Frames { get; } = frames;
+        public float FramesPerSecond { get; } = framesPerSecond;
+        public double Elapsed { get; set; }
+        public int CurrentFrame { get; set; }
+    }
+
     private static float ResolveNormalScale(
         BaseMaterial3D source, out bool authored)
     {
@@ -1945,7 +2011,7 @@ public sealed partial class KotorModuleBoot
         return scale ?? source.NormalScale;
     }
 
-    private static void ConfigureSourceEnvironmentMaterials(
+    private void ConfigureSourceEnvironmentMaterials(
         Node node,
         IReadOnlyDictionary<string, Cubemap> environmentMaps,
         float reflectionStrength,
